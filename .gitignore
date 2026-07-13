@@ -221,8 +221,12 @@ __marimo__/
 
 bin/
 include/*
+lib/*
+lib64/*
 
-**/__pycache__/
+**/__cache__/
+
+pyvenv.cfg
 
 database.db
 config.toml
