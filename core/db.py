@@ -250,3 +250,181 @@ def listuserspaginated(page=1, perpage=20):
         "has_next": page < math.ceil(total_users / perpage),
         "has_prev": page > 1
     }
+def listvpspaginated(page=1, perpage=20, userid=None):
+    """
+    Lists VPS instances with pagination.
+    Optional: pass a userid to list only VPSs belonging to a specific user.
+    """
+    offset = (page - 1) * perpage
+    
+    with getconnection() as conn:
+        # 1. Build the base queries
+        # We join with users, plans, nodes, and images to get readable names
+        count_query = "SELECT COUNT(*) FROM vps"
+        data_query = """
+            SELECT 
+                v.*, 
+                u.username as owner_name, 
+                p.name as plan_name, 
+                n.name as node_name, 
+                i.name as image_name
+            FROM vps v
+            JOIN users u ON v.userid = u.id
+            JOIN plans p ON v.planid = p.id
+            JOIN nodes n ON v.nodeid = n.id
+            JOIN images i ON v.imageid = i.id
+        """
+        
+        params = []
+        where_clause = ""
+        
+        # 2. Handle optional filtering by User ID (useful for the user dashboard)
+        if userid:
+            where_clause = " WHERE v.userid = ?"
+            params.append(userid)
+        
+        # 3. Get total count for pagination math
+        total_vps = conn.execute(count_query + where_clause, params).fetchone()[0]
+        
+        # 4. Get the actual data
+        final_query = data_query + where_clause + " ORDER BY v.created DESC LIMIT ? OFFSET ?"
+        cursor = conn.execute(final_query, params + [perpage, offset])
+        
+        # Convert rows to dictionaries
+        vps_list = [dict(row) for row in cursor.fetchall()]
+
+    # 5. Attach suspension details if the status is 'suspended'
+    for vps in vps_list:
+        if vps["status"] == "suspended":
+            # You would need a helper function similar to your getbanbyuserid
+            vps["suspension_details"] = getsuspensionbyvpsid(vps["id"])
+        else:
+            vps["suspension_details"] = None
+
+    # Calculate total pages
+    total_pages = math.ceil(total_vps / perpage) if total_vps > 0 else 1
+
+    return {
+        "vps": vps_list,
+        "current_page": page,
+        "total_pages": total_pages,
+        "total_count": total_vps,
+        "has_next": page < total_pages,
+        "has_prev": page > 1
+    }
+def listallusers():
+    """Returns a simple list of all users for dropdown selection."""
+    with getconnection() as conn:
+        rows = conn.execute("SELECT id, username FROM users ORDER BY username ASC").fetchall()
+        return [dict(r) for r in rows]
+
+def listnodestorage():
+    """Returns nodes joined with their storage paths for selection."""
+    with getconnection() as conn:
+        rows = conn.execute("""
+            SELECT 
+                n.id as nodeid, 
+                n.name as nodename, 
+                s.id as storageid, 
+                s.name as storagename 
+            FROM nodes n 
+            JOIN nodestorage s ON n.id = s.nodeid
+            WHERE n.status = 'online'
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def getsuspensionbyvpsid(vpsid):
+    """Used by listvpspaginated to show suspension reasons."""
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM vpssuspensions WHERE vpsid = ? AND lifted IS NULL", (vpsid,)).fetchone()
+        return dict(row) if row else None
+    
+def getplanbyid(planid):
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM plans WHERE id = ?", (planid,)).fetchone()
+        return dict(row) if row else None
+    
+def listallnodes():
+    with getconnection() as conn:
+        # Join with a count of VPS instances currently on that node
+        rows = conn.execute("""
+            SELECT n.*, 
+            (SELECT COUNT(*) FROM vps WHERE nodeid = n.id) as vps_count
+            FROM nodes n
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def updatenode(uuid, **kwargs):
+    with getconnection() as conn:
+        keys = [f"{k} = ?" for k in kwargs.keys()]
+        values = list(kwargs.values()) + [uuid]
+        conn.execute(f"UPDATE nodes SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
+
+def removenode(uuid):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM nodes WHERE uuid = ?", (uuid,))
+
+def addpaymentmethod(uuid, name, slug, active=1):
+    with getconnection() as conn:
+        conn.execute(
+            """INSERT INTO paymentprocessors (uuid, name, slug, active) 
+               VALUES (?, ?, ?, ?)""",
+            (uuid, name, slug, active)
+        )
+
+
+def listallpaymentmethods():
+    with getconnection() as conn:
+        rows = conn.execute(
+            """SELECT p.*,
+                      COUNT(t.id) AS transaction_count,
+                      COALESCE(SUM(CASE WHEN t.status = 'completed' THEN t.amount ELSE 0 END), 0) AS total_amount
+               FROM paymentprocessors p
+               LEFT JOIN transactions t ON t.paymentprocessorid = p.id
+               GROUP BY p.id
+               ORDER BY p.created DESC"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def getpaymentmethods(processor_uuid):
+    with getconnection() as conn:
+        row = conn.execute(
+            "SELECT * FROM paymentprocessors WHERE uuid = ?", (processor_uuid,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def updatepaymentmethods(processor_uuid, **fields):
+    if not fields:
+        return
+    set_clause = ", ".join(f"{key} = ?" for key in fields)
+    values = list(fields.values()) + [processor_uuid]
+    with getconnection() as conn:
+        conn.execute(
+            f"UPDATE paymentprocessors SET {set_clause}, updated = CURRENT_TIMESTAMP WHERE uuid = ?",
+            values
+        )
+
+
+def removepaymentmethods(processor_uuid):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM paymentprocessors WHERE uuid = ?", (processor_uuid,))
+
+
+def countactivepaymentmethods():
+    with getconnection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM paymentprocessors WHERE active = 1"
+        ).fetchone()
+        return row["cnt"] if row else 0
+
+
+def gettransactionstats():
+    with getconnection() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) AS total_transactions,
+                      COALESCE(SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END), 0) AS total_revenue
+               FROM transactions"""
+        ).fetchone()
+        return dict(row) if row else {"total_transactions": 0, "total_revenue": 0}

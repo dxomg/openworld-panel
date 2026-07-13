@@ -29,9 +29,9 @@
             
             <div class="plan-specs">
                 <div class="plan-spec"><span class="k">vCPU</span><span class="v">{{ plan.cpu }} Cores</span></div>
-                <div class="plan-spec"><span class="k">RAM</span><span class="v">{{ plan.ram }} GB</span></div>
-                <div class="plan-spec"><span class="k">Swap</span><span class="v">{{ plan.swap }} GB</span></div>
-                <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} GB</span></div>
+                <div class="plan-spec"><span class="k">RAM</span><span class="v">{{ plan.ram }} MB</span></div>
+                <div class="plan-spec"><span class="k">Swap</span><span class="v">{{ plan.swap }} MB</span></div>
+                <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} MB</span></div>
             </div>
             
             <!-- Pushes the buttons to the bottom of the card -->
@@ -67,12 +67,12 @@
                         
                         <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                             <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" value="{{ plan.cpu }}" required></div>
-                            <div class="field"><label>RAM (GB)</label><input type="number" name="ram" value="{{ plan.ram }}" required></div>
+                            <div class="field"><label>RAM (MB)</label><input type="number" name="ram" value="{{ plan.ram }}" required></div>
                         </div>
                         
                         <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                            <div class="field"><label>Swap (GB)</label><input type="number" name="swap" value="{{ plan.swap }}" required></div>
-                            <div class="field"><label>Disk (GB)</label><input type="number" name="disk" value="{{ plan.disk }}" required></div>
+                            <div class="field"><label>Swap (MB)</label><input type="number" name="swap" value="{{ plan.swap }}" required></div>
+                            <div class="field"><label>Disk (MB)</label><input type="number" name="disk" value="{{ plan.disk }}" required></div>
                         </div>
                         
                         <div class="field">
@@ -123,12 +123,12 @@
 
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                         <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" required></div>
-                        <div class="field"><label>RAM (GB)</label><input type="number" name="ram" required></div>
+                        <div class="field"><label>RAM (MB)</label><input type="number" name="ram" required></div>
                     </div>
                     
                     <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                        <div class="field"><label>Swap (GB)</label><input type="number" name="swap" required></div>
-                        <div class="field"><label>Disk (GB)</label><input type="number" name="disk" required></div>
+                        <div class="field"><label>Swap (MB)</label><input type="number" name="swap" required></div>
+                        <div class="field"><label>Disk (MB)</label><input type="number" name="disk" required></div>
                     </div>
                     
                     <div class="field"><label>Price ($)</label><input type="number" step="0.01" name="price" required></div>

@@ -4,60 +4,217 @@
 
 {% block content %}
 <!-- Admin Hero Section -->
-<section class="hero" style="margin-bottom: 56px; max-width: 800px;">
-  <div class="hero-eyebrow" style="margin-bottom: 16px; display: inline-flex; align-items: center; gap: 8px;">
-    <span class="pulse-dot" style="background: #ff3e3e; box-shadow: 0 0 10px #ff3e3e; width: 10px; height: 10px; border-radius: 50%; display: inline-block;"></span> 
-    <span style="text-transform: uppercase; letter-spacing: 1px; font-size: 0.85rem; font-weight: 600;">Operator Console</span>
+<section class="hero">
+  <div class="hero-eyebrow">
+    <span class="pulse-dot"></span> 
+    <span>Operator Console</span>
   </div>
-  <h1 style="margin-bottom: 16px; font-size: 2.5rem;">Global Deployments</h1>
-  <p style="font-size: 1.1rem; line-height: 1.6; opacity: 0.8;">
+  <h1>Global Deployments</h1>
+  <p>
     Monitor, manage, and troubleshoot user-provisioned virtual instances across the network.
   </p>
 </section>
 
 <!-- ==========================================
-     GLOBAL DEPLOYMENTS
+     GLOBAL DEPLOYMENTS HEAD
      ========================================== -->
-<div class="section-head" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 32px;">
-  <h2 style="margin: 0; font-size: 1.8rem;">All Instances</h2>
-  <div class="admin-actions">
-      <input type="text" placeholder="Filter by Owner or IP..." class="btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); text-align: left; width: 280px; padding: 10px 16px;">
+<div class="section-head">
+  <h2>All Instances ({{ pagination.total_count }})</h2>
+  <div class="admin-actions" style="display: flex; gap: 12px; align-items: center;">
+      <button onclick="toggleModal(true)" class="btn btn-primary btn-small">+ Create VPS</button>
+      <div class="field" style="margin: 0;">
+        <input type="text" placeholder="Filter by Owner or IP..." style="padding: 7px 12px; font-size: 12px; width: 240px;">
+      </div>
   </div>
 </div>
 
 {% if all_vps %}
-<div class="vps-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px;">
+<div class="vps-grid">
   {% for instance in all_vps %}
-  <a href="{{ url_for('admin_vps_edit', uuid=instance.uuid) }}" class="vps-card" style="padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+  <a href="{{ url_for('adminvps', uuid=instance.uuid) }}" class="vps-card">
     
-    <span class="status-pill status-running" style="align-self: flex-start; margin-bottom: 8px;">
-      <span class="dot"></span>{{ instance.status|default('Online') }}
-    </span>
+    {% set status_class = 'status-running' if instance.status == 'running' 
+                     else 'status-unknown' if instance.status in ['suspended', 'error'] 
+                     else 'status-created' %}
+    
+    <div class="status-pill {{ status_class }}">
+      <span class="dot"></span>
+      {{ instance.status }}
+    </div>
 
     <div class="vps-id">
-      <div class="vps-hostname" style="font-size: 1.2rem; margin-bottom: 4px;">
+      <div class="vps-hostname">
         {{ instance.hostname }} 
-        <span style="font-size: 0.8rem; opacity: 0.5; font-family: 'IBM Plex Mono', monospace; margin-left: 6px;">#{{ instance.uuid[:8] }}</span>
+        <span style="opacity: 0.3; font-size: 0.8rem; margin-left: 6px;">#{{ instance.uuid[:8] }}</span>
       </div>
-      <div class="vps-meta" style="line-height: 1.5;">
-        Owner: <strong>{{ instance.owner_username }}</strong><br>
-        {{ instance.ip }}
+      <div class="vps-meta">
+        Owner: <span style="color: var(--text);">{{ instance.owner_name }}</span> | {{ instance.ipv6 or 'No IP Assigned' }}
       </div>
     </div>
 
-    <div class="vps-specs" style="margin-top: auto; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; font-size: 0.85rem;">
-      <span>{{ instance.cpu }} vCPU</span>
-      <span>{{ instance.ram }}MB</span>
-      <span class="spec-val" style="opacity: 0.7;">{{ instance.node_id|default('Node-01') }}</span>
+    <div class="vps-specs">
+      <span><span class="spec-val">{{ instance.cpu }}</span> vCPU</span>
+      <span><span class="spec-val">{{ instance.ram }}</span> MB</span>
+      <span class="spec-val" style="opacity: 0.5;">{{ instance.node_name }}</span>
     </div>
+    
+    <div class="vps-arrow">→</div>
   </a>
   {% endfor %}
 </div>
-{% else %}
-<div class="empty-state" style="padding: 64px 24px; text-align: center; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px;">
-  <div class="glyph" style="font-size: 2.5rem; margin-bottom: 16px; opacity: 0.5;">⚠</div>
-  <h3 style="margin-bottom: 8px;">No Global Instances</h3>
-  <p style="opacity: 0.6;">No users have provisioned servers yet.</p>
+
+<!-- Pagination -->
+{% if pagination.total_pages > 1 %}
+<div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+    {% if pagination.has_prev %}
+    <a href="{{ url_for('adminvps', page=pagination.current_page - 1) }}" class="btn btn-small">← Previous</a>
+    {% endif %}
+    
+    <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+        PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+    </span>
+
+    {% if pagination.has_next %}
+    <a href="{{ url_for('adminvps', page=pagination.current_page + 1) }}" class="btn btn-small">Next →</a>
+    {% endif %}
 </div>
 {% endif %}
+
+{% else %}
+<div class="empty-state">
+  <div class="glyph">!</div>
+  <h3>No Global Instances</h3>
+  <p>No users have provisioned servers yet.</p>
+</div>
+{% endif %}
+
+<!-- ==========================================
+     CREATE VPS MODAL (MODIFIED)
+     ========================================== -->
+<div id="createModal" class="modal-backdrop">
+    <div class="modal-panel" style="max-width: 700px;">
+        
+        <div class="modal-head">
+            <h3>Deploy New Instance</h3>
+            <button onclick="toggleModal(false)" class="modal-close">&times;</button>
+        </div>
+
+        <form action="{{ url_for('admincreatevps') }}" method="POST" class="form-grid">
+            
+            <!-- Left Column: Primary Details -->
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+                <div class="field">
+                    <label>Hostname</label>
+                    <input type="text" name="hostname" required placeholder="server-01">
+                </div>
+                <div class="field">
+                    <label>SSH / Admin Password</label>
+                    <input type="password" name="password" required placeholder="••••••••">
+                </div>
+                <div class="field">
+                    <label>Instance Owner</label>
+                    <select name="userid" required>
+                        <option value="" disabled selected>Select user...</option>
+                        {% for user in users %}
+                        <option value="{{ user.id }}">{{ user.username }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Operating System</label>
+                    <select name="imageid" required>
+                        <option value="" disabled selected>Select image...</option>
+                        {% for image in images %}
+                        <option value="{{ image.id }}">{{ image.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <!-- Right Column: Infrastructure & Plan -->
+            <div style="display: flex; flex-direction: column; gap: 16px;">
+                <div class="field">
+                    <label>Target Node & Storage</label>
+                    <select id="nodeSelect" onchange="updateModalLocation()" required>
+                        <option value="" disabled selected>Select location...</option>
+                        {% for item in nodes_storage %}
+                        <option value="{{ item.nodeid }}" data-storage="{{ item.storageid }}">
+                            {{ item.nodename }} ({{ item.storagename }})
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <!-- Hidden fields to hold Node/Storage IDs from the selection above -->
+                    <input type="hidden" name="nodeid" id="modalNodeId">
+                    <input type="hidden" name="storageid" id="modalStorageId">
+                </div>
+
+                <div class="field">
+                    <label>Resource Plan</label>
+                    <select name="planid" required>
+                        <option value="" disabled selected>Select a plan...</option>
+                        {% for plan in plans %}
+                        <option value="{{ plan.id }}">
+                            {{ plan.name }} 
+                            — {{ plan.cpu }} vCPU / {{ plan.ram }}MB RAM / {{ plan.disk }}MB Disk
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <p style="font-size: 11px; color: var(--text-dim); margin-top: 8px; line-height: 1.4;">
+                        Resources (CPU, RAM, Disk, and Swap) will be allocated automatically based on the selected plan's configuration.
+                    </p>
+                </div>
+
+                <div class="field">
+                    <label>Initial Status</label>
+                    <select name="status">
+                        <option value="creating">Creating (Automatic)</option>
+                        <option value="stopped">Stopped</option>
+                        <option value="running">Running</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Footer Actions -->
+            <div class="modal-actions" style="grid-column: span 2; display: flex; gap: 12px; justify-content: flex-end; margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.05);">
+                <button type="button" onclick="toggleModal(false)" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Provision Instance</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function toggleModal(show) {
+        const modal = document.getElementById('createModal');
+        if (show) {
+            modal.classList.add('is-open');
+            modal.style.display = 'flex';
+        } else {
+            modal.classList.remove('is-open');
+            setTimeout(() => {
+                if (!modal.classList.contains('is-open')) {
+                    modal.style.display = 'none';
+                }
+            }, 150);
+        }
+    }
+
+    /**
+     * Extracts NodeID and StorageID from the combined select option 
+     * and assigns them to hidden inputs for the backend.
+     */
+    function updateModalLocation() {
+        const select = document.getElementById('nodeSelect');
+        const option = select.options[select.selectedIndex];
+        document.getElementById('modalNodeId').value = option.value;
+        document.getElementById('modalStorageId').value = option.getAttribute('data-storage');
+    }
+
+    // Close modal if clicking outside the panel
+    window.onclick = function(event) {
+        let modal = document.getElementById('createModal');
+        if (event.target == modal) toggleModal(false);
+    }
+</script>
+
 {% endblock %}

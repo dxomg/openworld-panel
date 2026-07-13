@@ -1,7 +1,7 @@
 import uuid
 import secrets
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from core import db
 
 # --- AUTH & SESSION SERVICES ---
@@ -13,11 +13,13 @@ def authenticate_user(email, password):
         return user
     return None
 
-def create_session(user_id, ip_address, user_agent, ttl_hours):
-    """Creates a new session token in the database."""
+def create_session(user_id, ip_address, user_agent, ttl_days):
+    """Creates a new session token in the database with a TTL in days."""
     token = secrets.token_urlsafe(64)
     session_uuid = str(uuid.uuid4())
-    expires = (datetime.utcnow() + timedelta(hours=ttl_hours)).isoformat()
+    
+    # Calculate expiration using days instead of hours
+    expires = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
     
     db.addsession(
         uuid=session_uuid,
@@ -30,18 +32,21 @@ def create_session(user_id, ip_address, user_agent, ttl_hours):
     return token
 
 def validate_session(token):
-    """Checks if a token is valid and not expired. Returns user dict."""
     session = db.getsession(token)
     if not session:
         return None
-    
-    # Check expiry
-    expiry = datetime.fromisoformat(session['expires'])
-    if datetime.utcnow() > expiry:
+
+    expiry = datetime.fromisoformat(session["expires"])
+
+    # Handle legacy naive timestamps
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) > expiry:
         db.removesession(token)
         return None
-    
-    return db.getuserbyid(session['userid'])
+
+    return db.getuserbyid(session["userid"])
 
 def logout(token):
     """Deletes the session from the database."""

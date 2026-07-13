@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block title %}Payment Methods - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Payment Methods</h1>
+        <p>Manage available payment processors and their status.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ allpaymentmethods|length }}</div>
+                <div class="label">Total Processors</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ activemethodscount }}</div>
+                <div class="label">Active</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ totaltransactions }}</div>
+                <div class="label">Total Transactions</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">${{ totalrevenue }}</div>
+                <div class="label">Total Revenue</div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Registered Processors</h2>
+        <button onclick="openModal('addProcessorModal')" class="btn btn-primary btn-small">+ Add Payment Method</button>
+    </div>
+
+    {% if allpaymentmethods %}
+    <div class="vps-grid">
+        {% for processor in allpaymentmethods %}
+        <div class="vps-card">
+            <!-- Dynamic Status Color -->
+            {% set s_class = 'status-running' if processor.active else 'status-unknown' %}
+            <span class="status-pill {{ s_class }}">
+                <span class="dot"></span>{{ 'Active' if processor.active else 'Inactive' }}
+            </span>
+
+            <div class="vps-id">
+                <div class="vps-hostname">{{ processor.name }}</div>
+                <div class="vps-meta">slug: {{ processor.slug }}</div>
+            </div>
+
+            <div class="vps-specs">
+                <span><span class="spec-val">{{ processor.transaction_count }}</span> Transactions</span>
+                <span><span class="spec-val">${{ processor.total_amount }}</span> Processed</span>
+            </div>
+
+            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+                <!-- Triggering Edit Modal with JSON data -->
+                <button class="btn btn-small"
+                    onclick="openEditModal('{{ processor|tojson|forceescape }}')">Edit</button>
+
+                <!-- Dedicated Delete Route -->
+                <form action="{{ url_for('adminpaymentmethodsdelete', paymentmethod_uuid=processor.uuid) }}" method="POST" onsubmit="return confirm('Delete this payment method? Existing transactions referencing it will be kept, but no new transactions can use it.');">
+                    <button type="submit" class="btn btn-small btn-danger">Remove</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">💳</div>
+        <h3>No Payment Methods Configured</h3>
+        <p>Add a payment processor to start accepting transactions.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ===== Add Processor Modal ===== -->
+<div id="addProcessorModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Payment Method</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addProcessorModal')">&times;</button>
+        </div>
+        <!-- Pointing to dedicated create route -->
+        <form action="{{ url_for('adminpaymentmethodscreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Display Name</label>
+                <input type="text" name="name" required placeholder="Stripe">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Slug</label>
+                <input type="text" name="slug" required placeholder="stripe" pattern="[a-z0-9\-_]+" title="Lowercase letters, numbers, hyphens, underscores only">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Status</label>
+                <select name="active">
+                    <option value="1">Active</option>
+                    <option value="0">Inactive</option>
+                </select>
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addProcessorModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Payment Method</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== Edit Processor Modal ===== -->
+<div id="editProcessorModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Update Payment Method</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editProcessorModal')">&times;</button>
+        </div>
+        <!-- Form ID used by JS to change the action URL -->
+        <form id="editProcessorForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Display Name</label>
+                <input type="text" name="name" id="edit_name" required>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Slug</label>
+                <input type="text" name="slug" id="edit_slug" required pattern="[a-z0-9\-_]+" title="Lowercase letters, numbers, hyphens, underscores only">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Status</label>
+                <select name="active" id="edit_active">
+                    <option value="1">Active</option>
+                    <option value="0">Inactive</option>
+                </select>
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editProcessorModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) {
+        document.getElementById(id).classList.add('is-open');
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('is-open');
+    }
+
+    function openEditModal(processorData) {
+        const processor = JSON.parse(processorData);
+        const form = document.getElementById('editProcessorForm');
+
+        // Dynamically update the form action to include the processor's UUID
+        // We use a placeholder string to generate the base URL via Jinja, then replace it in JS
+        let baseUrl = "{{ url_for('adminpaymentmethodsupdate', paymentmethod_uuid='UUID_PLACEHOLDER') }}";
+        form.action = baseUrl.replace('UUID_PLACEHOLDER', processor.uuid);
+
+        // Fill the input fields
+        document.getElementById('edit_name').value = processor.name;
+        document.getElementById('edit_slug').value = processor.slug;
+        document.getElementById('edit_active').value = processor.active ? "1" : "0";
+
+        openModal('editProcessorModal');
+    }
+</script>
+{% endblock %}

@@ -4,16 +4,11 @@
 
 {% block content %}
 <div class="page">
-    <!-- ===== Hero Section ===== -->
     <section class="hero">
-        <div class="hero-eyebrow">
-            <span class="pulse-dot"></span> 
-            Operator Console
-        </div>
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Node Infrastructure</h1>
-        <p>Global oversight of node health, aggregate usage, and resource allocation across the {{ projectname }} network.</p>
+        <p>Global oversight of node health and aggregate resource allocation.</p>
         
-        <!-- Network Stats Using Native .hero-stats -->
         <div class="hero-stats">
             <div class="hero-stat">
                 <div class="num accent">{{ globaltotalvps }}</div>
@@ -25,45 +20,49 @@
             </div>
             <div class="hero-stat">
                 <div class="num">{{ totalresourceallocation.cpu }}</div>
-                <div class="label">Allocated CPU Cores</div>
+                <div class="label">Allocated Cores</div>
             </div>
             <div class="hero-stat">
-                <div class="num">{{ totalresourceallocation.ram_gb }}<span style="font-size: 14px; color: var(--text-dim);"> GB</span></div>
+                <div class="num">{{ totalresourceallocation.ram_gb }}<span style="font-size: 14px;"> GB</span></div>
                 <div class="label">Allocated RAM</div>
-            </div>
-            <div class="hero-stat">
-                <div class="num">{{ totalresourceallocation.disk }}<span style="font-size: 14px; color: var(--text-dim);"> GB</span></div>
-                <div class="label">Total Storage</div>
             </div>
         </div>
     </section>
 
-    <!-- ===== Node Management ===== -->
     <div class="section-head" style="margin-top: 48px;">
         <h2>Registered Nodes</h2>
-        <button onclick="openAddNodeModal()" class="btn btn-primary btn-small">+ Add Node</button>
+        <button onclick="openModal('addNodeModal')" class="btn btn-primary btn-small">+ Add Node</button>
     </div>
 
     {% if all_nodes %}
     <div class="vps-grid">
         {% for node in all_nodes %}
         <div class="vps-card">
-            <span class="status-pill status-running">
-                <span class="dot"></span>{{ node.status|default('Online') }}
+            <!-- Dynamic Status Color -->
+            {% set s_class = 'status-running' if node.status == 'online' else 'status-unknown' %}
+            <span class="status-pill {{ s_class }}">
+                <span class="dot"></span>{{ node.status|capitalize }}
             </span>
             
             <div class="vps-id">
-                <div class="vps-hostname">{{ node.name|default('Node-01') }}</div>
-                <div class="vps-meta">IP: {{ node.ip_address }} &middot; Location: {{ node.location|default('US-East') }}</div>
+                <div class="vps-hostname">{{ node.name }}</div>
+                <div class="vps-meta">{{ node.address }} &middot; {{ node.hostname }}</div>
             </div>
             
             <div class="vps-specs">
-                <span><span class="spec-val">{{ node.active_vps_count|default('0') }}</span> Instances</span>
+                <span><span class="spec-val">{{ node.vps_count }}</span> VPS</span>
+                <span><span class="spec-val">{{ node.ram // 1024 }}</span>GB RAM Cap.</span>
             </div>
             
-            <div class="btn-row">
-                <button class="btn btn-small">Config</button>
-                <button class="btn btn-small btn-danger">Disable</button>
+            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+                <!-- Triggering Edit Modal with JSON data -->
+                <button class="btn btn-small" 
+                    onclick="openEditModal('{{ node|tojson|forceescape }}')">Edit</button>
+                
+                <!-- Dedicated Delete Route -->
+                <form action="{{ url_for('adminnodesdelete', node_uuid=node.uuid) }}" method="POST" onsubmit="return confirm('Delete this node? All associated VPS data in the DB may be affected.');">
+                    <button type="submit" class="btn btn-small btn-danger">Remove</button>
+                </form>
             </div>
         </div>
         {% endfor %}
@@ -72,67 +71,140 @@
     <div class="empty-state">
         <div class="glyph">🖥️</div>
         <h3>No Nodes Configured</h3>
-        <p>Add your first physical or virtual server to start provisioning instances.</p>
-        <button onclick="openAddNodeModal()" class="btn btn-primary">Add First Node</button>
+        <p>Register a server to start provisioning instances.</p>
     </div>
     {% endif %}
 </div>
 
-<!-- ===== Add Node Modal (Using Native CSS) ===== -->
+<!-- ===== Add Node Modal ===== -->
 <div id="addNodeModal" class="modal-backdrop">
     <div class="modal-panel">
-        
         <div class="modal-head">
-            <h3>Add New Node</h3>
-            <button type="button" class="modal-close" onclick="closeAddNodeModal()">&times;</button>
+            <h3>Register New Node</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addNodeModal')">&times;</button>
         </div>
-        
-        <form action="{{ url_for('adminnodes') }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
-            <div class="field">
-                <label>Node Name</label>
-                <input type="text" name="name" required placeholder="e.g. Node-US-East-01">
+        <!-- Pointing to dedicated create route -->
+        <form action="{{ url_for('adminnodescreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Display Name</label>
+                <input type="text" name="name" required placeholder="US-East-Primary">
             </div>
-            
+            <div class="field">
+                <label>Hostname / Domain</label>
+                <input type="text" name="hostname" required placeholder="node1.yourdomain.com">
+            </div>
             <div class="field">
                 <label>IP Address</label>
-                <input type="text" name="ip_address" required placeholder="e.g. 192.168.1.100">
+                <input type="text" name="address" required placeholder="1.2.3.4">
             </div>
-            
+            <div class="field" style="grid-column: span 2;">
+                <label>API Key (Daemon Connection)</label>
+                <input type="password" name="apikey" required placeholder="••••••••••••">
+            </div>
             <div class="field">
-                <label>Physical Location</label>
-                <input type="text" name="location" placeholder="e.g. New York, NY">
+                <label>Total CPU (Cores)</label>
+                <input type="number" name="cpu" required value="8">
+            </div>
+            <div class="field">
+                <label>Total RAM (MB)</label>
+                <input type="number" name="ram" required value="16384">
+            </div>
+            <div class="field">
+                <label>Total Disk (MB)</label>
+                <input type="number" name="disk" required value="102400">
+            </div>
+            <div class="field">
+                <label>Status</label>
+                <select name="status">
+                    <option value="online">Online</option>
+                    <option value="maintenance">Maintenance</option>
+                    <option value="offline">Offline</option>
+                </select>
             </div>
 
-            <div class="modal-actions btn-row">
-                <button type="button" onclick="closeAddNodeModal()" class="btn">Cancel</button>
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addNodeModal')" class="btn">Cancel</button>
                 <button type="submit" class="btn btn-primary">Register Node</button>
             </div>
         </form>
+    </div>
+</div>
 
+<!-- ===== Edit Node Modal ===== -->
+<div id="editNodeModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Update Node Config</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editNodeModal')">&times;</button>
+        </div>
+        <!-- Form ID used by JS to change the action URL -->
+        <form id="editNodeForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Display Name</label>
+                <input type="text" name="name" id="edit_name" required>
+            </div>
+            <div class="field">
+                <label>Hostname</label>
+                <input type="text" name="hostname" id="edit_hostname" required>
+            </div>
+            <div class="field">
+                <label>IP Address</label>
+                <input type="text" name="address" id="edit_address" required>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>API Key</label>
+                <input type="password" name="apikey" id="edit_apikey" placeholder="Leave blank to keep current">
+            </div>
+            <div class="field">
+                <label>RAM Cap (MB)</label>
+                <input type="number" name="ram" id="edit_ram" required>
+            </div>
+            <div class="field">
+                <label>Status</label>
+                <select name="status" id="edit_status">
+                    <option value="online">Online</option>
+                    <option value="maintenance">Maintenance</option>
+                    <option value="offline">Offline</option>
+                </select>
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editNodeModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
     </div>
 </div>
 
 <script>
-    function openAddNodeModal() {
-        document.getElementById('addNodeModal').classList.add('is-open');
+    function openModal(id) {
+        document.getElementById(id).classList.add('is-open');
     }
     
-    function closeAddNodeModal() {
-        document.getElementById('addNodeModal').classList.remove('is-open');
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('is-open');
     }
 
-    // Close on escape key
-    document.addEventListener('keydown', function(event) {
-        if (event.key === 'Escape') {
-            closeAddNodeModal();
-        }
-    });
+    function openEditModal(nodeData) {
+        const node = JSON.parse(nodeData);
+        const form = document.getElementById('editNodeForm');
+        
+        // Dynamically update the form action to include the node's UUID
+        // We use a placeholder string to generate the base URL via Jinja, then replace it in JS
+        let baseUrl = "{{ url_for('adminnodesupdate', node_uuid='UUID_PLACEHOLDER') }}";
+        form.action = baseUrl.replace('UUID_PLACEHOLDER', node.uuid);
 
-    // Close on clicking outside the panel
-    document.getElementById('addNodeModal').addEventListener('click', function(event) {
-        if (event.target === this) {
-            closeAddNodeModal();
-        }
-    });
+        // Fill the input fields
+        document.getElementById('edit_name').value = node.name;
+        document.getElementById('edit_hostname').value = node.hostname;
+        document.getElementById('edit_address').value = node.address;
+        document.getElementById('edit_ram').value = node.ram;
+        document.getElementById('edit_status').value = node.status;
+        
+        // Reset the password field (don't show the current key for security)
+        document.getElementById('edit_apikey').value = ""; 
+        
+        openModal('editNodeModal');
+    }
 </script>
 {% endblock %}
