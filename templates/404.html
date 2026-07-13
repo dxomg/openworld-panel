@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}Page Not Found{% endblock %}
+
+{% block content %}
+<div class="empty-state" style="max-width: 500px; margin: 100px auto; text-align: center;">
+    <div style="font-size: 80px; margin-bottom: 20px;">🔍</div>
+    <h1>404</h1>
+    <p style="color: var(--text-dim);">The page you are looking for doesn't exist or has been moved.</p>
+    
+    <div style="margin-top: 30px;">
+        <a href="{{ url_for('index') }}" class="btn">Return Home</a>
+    </div>
+</div>
+{% endblock %}
+
+{# Clear the navigation to keep the error page clean #}
+{% block nav_links %}{% endblock %}

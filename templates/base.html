@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ projectname }}{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="grid-backdrop"></div>
+
+<header class="topbar">
+    <a href="{{ url_for('index') }}" class="brand">
+        <span class="brand-mark">◈</span>
+        <span class="brand-accent">{{ projectname }}</span>
+    </a>
+    
+    <!-- Mobile Hamburger Toggle -->
+    <button class="nav-toggle" onclick="toggleMenu()" aria-label="Toggle navigation">
+        <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+    </button>
+  
+<nav class="topnav">
+    {% if request.endpoint == 'index' %}
+        <a href="{{ url_for('login') }}" class="btn">Login</a>
+
+    {% elif request.endpoint in ['dashboard', 'createvps'] %}
+        <a href="{{ url_for('dashboard') }}" class="btn {{ 'active' if request.endpoint == 'dashboard' else '' }}">Dashboard</a>
+        
+        <!-- NEW: Check g.userinfo dictionary for role == 'admin' -->
+        {% if g.userinfo and g.userinfo.get('role') == 'admin' %}
+            <a href="{{ url_for('admindashboard') }}" class="btn">
+                Admin Console
+            </a>
+        {% endif %}
+        
+        <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
+
+    {% elif request.endpoint and request.endpoint.startswith('admin') %}
+        <a href="{{ url_for('admindashboard') }}" class="btn {{ 'active' if request.endpoint == 'admindashboard' else '' }}">Infrastructure</a>
+        <a href="{{ url_for('adminusers') }}" class="btn {{ 'active' if request.endpoint == 'adminusers' else '' }}">Users</a>
+        <a href="{{ url_for('adminvps') }}" class="btn {{ 'active' if request.endpoint == 'adminvps' else '' }}">Vps</a>
+        <a href="{{ url_for('adminplans') }}" class="btn {{ 'active' if request.endpoint == 'adminplans' else '' }}">Plans</a>
+        <a href="{{ url_for('adminnodes') }}" class="btn {{ 'active' if request.endpoint == 'adminnodes' else '' }}">Nodes</a>
+        <a href="{{ url_for('dashboard') }}" class="btn">Exit Admin</a>
+        <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
+    {% endif %}
+</nav>
+</header>
+
+<main class="page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="flash-stack">
+                {% for category, message in messages %}
+                    <div class="flash flash-{{ category }}"><span class="flash-dot"></span>{{ message }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+</main>
+
+<footer class="footer">
+    <span>{{ projectname }}, made with love by Dxomg</span>
+    <span class="footer-dot">·</span>
+    <span>2026</span>
+</footer>
+
+<script>
+    function toggleMenu() {
+        document.querySelector('.topnav').classList.toggle('is-open');
+    }
+</script>
+</body>
+</html>

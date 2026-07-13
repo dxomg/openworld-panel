@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Global Deployments - {{ projectname }}{% endblock %}
+
+{% block content %}
+<!-- Admin Hero Section -->
+<section class="hero" style="margin-bottom: 56px; max-width: 800px;">
+  <div class="hero-eyebrow" style="margin-bottom: 16px; display: inline-flex; align-items: center; gap: 8px;">
+    <span class="pulse-dot" style="background: #ff3e3e; box-shadow: 0 0 10px #ff3e3e; width: 10px; height: 10px; border-radius: 50%; display: inline-block;"></span> 
+    <span style="text-transform: uppercase; letter-spacing: 1px; font-size: 0.85rem; font-weight: 600;">Operator Console</span>
+  </div>
+  <h1 style="margin-bottom: 16px; font-size: 2.5rem;">Global Deployments</h1>
+  <p style="font-size: 1.1rem; line-height: 1.6; opacity: 0.8;">
+    Monitor, manage, and troubleshoot user-provisioned virtual instances across the network.
+  </p>
+</section>
+
+<!-- ==========================================
+     GLOBAL DEPLOYMENTS
+     ========================================== -->
+<div class="section-head" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 32px;">
+  <h2 style="margin: 0; font-size: 1.8rem;">All Instances</h2>
+  <div class="admin-actions">
+      <input type="text" placeholder="Filter by Owner or IP..." class="btn" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); text-align: left; width: 280px; padding: 10px 16px;">
+  </div>
+</div>
+
+{% if all_vps %}
+<div class="vps-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px;">
+  {% for instance in all_vps %}
+  <a href="{{ url_for('admin_vps_edit', uuid=instance.uuid) }}" class="vps-card" style="padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+    
+    <span class="status-pill status-running" style="align-self: flex-start; margin-bottom: 8px;">
+      <span class="dot"></span>{{ instance.status|default('Online') }}
+    </span>
+
+    <div class="vps-id">
+      <div class="vps-hostname" style="font-size: 1.2rem; margin-bottom: 4px;">
+        {{ instance.hostname }} 
+        <span style="font-size: 0.8rem; opacity: 0.5; font-family: 'IBM Plex Mono', monospace; margin-left: 6px;">#{{ instance.uuid[:8] }}</span>
+      </div>
+      <div class="vps-meta" style="line-height: 1.5;">
+        Owner: <strong>{{ instance.owner_username }}</strong><br>
+        {{ instance.ip }}
+      </div>
+    </div>
+
+    <div class="vps-specs" style="margin-top: auto; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; font-size: 0.85rem;">
+      <span>{{ instance.cpu }} vCPU</span>
+      <span>{{ instance.ram }}MB</span>
+      <span class="spec-val" style="opacity: 0.7;">{{ instance.node_id|default('Node-01') }}</span>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state" style="padding: 64px 24px; text-align: center; border: 1px dashed rgba(255,255,255,0.1); border-radius: 12px;">
+  <div class="glyph" style="font-size: 2.5rem; margin-bottom: 16px; opacity: 0.5;">⚠</div>
+  <h3 style="margin-bottom: 8px;">No Global Instances</h3>
+  <p style="opacity: 0.6;">No users have provisioned servers yet.</p>
+</div>
+{% endif %}
+{% endblock %}

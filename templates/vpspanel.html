@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}{{ instance.hostname }} - route64{% endblock %}
+
+{% block content %}
+
+<a href="{{ url_for('dashboard') }}" class="back-link">← Back to Dashboard</a>
+
+<div class="detail-head">
+  <div class="detail-title">
+    <h1>{{ instance.hostname }}</h1>
+
+    <span class="status-pill status-running">
+      <span class="dot"></span> Running
+    </span>
+  </div>
+
+  <div class="btn-row">
+    <form method="POST" action="/vps/{{ instance.id }}/start" style="display:inline;">
+      <button type="submit" class="btn btn-primary btn-small">► Start</button>
+    </form>
+
+    <form method="POST" action="/vps/{{ instance.id }}/restart" style="display:inline;">
+      <button type="submit" class="btn btn-small">↻ Restart</button>
+    </form>
+
+    <form method="POST" action="/vps/{{ instance.id }}/stop" style="display:inline;">
+      <button type="submit" class="btn btn-danger btn-small">■ Stop</button>
+    </form>
+  </div>
+</div>
+
+
+<div class="detail-grid">
+
+  <!-- Terminal -->
+  <div style="display:flex;flex-direction:column;">
+
+    <div class="terminal" style="flex-grow:1;display:flex;flex-direction:column;margin-bottom:0;min-height:440px;">
+
+      <div class="terminal-bar">
+        <div class="terminal-dots">
+          <span></span><span></span><span></span>
+        </div>
+
+        Web Console - {{ instance.hostname }} (tty1)
+      </div>
+
+
+      <div class="terminal-body" style="flex-grow:1;overflow-y:auto;">
+{{ instance.image }} {{ instance.hostname }} tty1
+
+{{ instance.hostname }} login: root
+Password:
+
+Welcome to {{ instance.image }}
+
+root@{{ instance.hostname }}:~# <span class="cursor"></span>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- Stats -->
+  <div style="display:flex;flex-direction:column;gap:16px;">
+
+
+    <div class="panel">
+
+      <h3>Instance Details</h3>
+
+      <div class="kv-list">
+
+        <div class="kv-row">
+          <span class="k">IPv6 Address</span>
+          <span class="v" style="color:var(--accent);">
+            {{ instance.ip }}
+          </span>
+        </div>
+
+
+        <div class="kv-row">
+          <span class="k">OS Image</span>
+          <span class="v">
+            {{ instance.image }}
+          </span>
+        </div>
+
+
+        <div class="kv-row">
+          <span class="k">Node UUID</span>
+          <span class="v">
+            {{ instance.nodeuuid }}
+          </span>
+        </div>
+
+
+        <div class="kv-row">
+          <span class="k">VPS UUID</span>
+          <span class="v">
+            {{ instance.uuid }}
+          </span>
+        </div>
+
+
+        <div class="kv-row">
+          <span class="k">DNS</span>
+          <span class="v">
+            {{ instance.dns }}
+          </span>
+        </div>
+
+      </div>
+
+    </div>
+
+
+
+    <div class="panel" style="flex-grow:1;">
+
+      <h3 style="margin-bottom:20px;">
+        Resources
+      </h3>
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          <span>CPU ({{ instance.cpu }} vCPU)</span>
+          <span class="metric-val">--</span>
+        </div>
+
+        <div class="metric-track">
+          <div class="metric-fill" style="width:0%;"></div>
+        </div>
+
+      </div>
+
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          <span>RAM ({{ instance.ram }} MB)</span>
+          <span class="metric-val">--</span>
+        </div>
+
+        <div class="metric-track">
+          <div class="metric-fill" style="width:0%;"></div>
+        </div>
+
+      </div>
+
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          <span>Swap ({{ instance.swap }} MB)</span>
+          <span class="metric-val">--</span>
+        </div>
+
+        <div class="metric-track">
+          <div class="metric-fill" style="width:0%;"></div>
+        </div>
+
+      </div>
+
+
+
+      <div class="metric">
+
+        <div class="metric-label">
+          <span>Disk ({{ instance.disk }} MB)</span>
+          <span class="metric-val">--</span>
+        </div>
+
+        <div class="metric-track">
+          <div class="metric-fill" style="width:0%;"></div>
+        </div>
+
+      </div>
+
+
+    </div>
+
+
+  </div>
+
+
+</div>
+
+{% endblock %}

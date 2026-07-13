@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Account Banned{% endblock %}
+
+{% block content %}
+<div class="empty-state" style="max-width: 500px; margin: 100px auto; text-align: center;">
+    <div class="glyph" style="color: var(--danger); font-size: 48px;">⚠</div>
+    <h2 style="color: var(--danger);">Access Restricted</h2>
+    <p>Your account has been suspended from the Open World platform.</p>
+    
+    <div class="card" style="margin: 20px 0; background: var(--bg-card); border: 1px solid var(--danger);">
+        <p style="font-size: 14px; color: var(--text-dim); margin-bottom: 8px;">REASON FOR SUSPENSION:</p>
+        <p style="font-weight: 500;">{{ banreason }}</p>
+    </div>
+
+    <p style="font-size: 14px; margin-top: 20px;">
+        If you believe this is an error, please contact support in our discord
+            <a href="{{ discordserver }}" class="btn btn-active">
+      Discord
+    </a>
+    </p>
+</div>
+{% endblock %}

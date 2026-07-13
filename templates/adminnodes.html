@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}Node Infrastructure - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <!-- ===== Hero Section ===== -->
+    <section class="hero">
+        <div class="hero-eyebrow">
+            <span class="pulse-dot"></span> 
+            Operator Console
+        </div>
+        <h1>Node Infrastructure</h1>
+        <p>Global oversight of node health, aggregate usage, and resource allocation across the {{ projectname }} network.</p>
+        
+        <!-- Network Stats Using Native .hero-stats -->
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ globaltotalvps }}</div>
+                <div class="label">Total Instances</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ totalusers }}</div>
+                <div class="label">Active Users</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ totalresourceallocation.cpu }}</div>
+                <div class="label">Allocated CPU Cores</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ totalresourceallocation.ram_gb }}<span style="font-size: 14px; color: var(--text-dim);"> GB</span></div>
+                <div class="label">Allocated RAM</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ totalresourceallocation.disk }}<span style="font-size: 14px; color: var(--text-dim);"> GB</span></div>
+                <div class="label">Total Storage</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== Node Management ===== -->
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Registered Nodes</h2>
+        <button onclick="openAddNodeModal()" class="btn btn-primary btn-small">+ Add Node</button>
+    </div>
+
+    {% if all_nodes %}
+    <div class="vps-grid">
+        {% for node in all_nodes %}
+        <div class="vps-card">
+            <span class="status-pill status-running">
+                <span class="dot"></span>{{ node.status|default('Online') }}
+            </span>
+            
+            <div class="vps-id">
+                <div class="vps-hostname">{{ node.name|default('Node-01') }}</div>
+                <div class="vps-meta">IP: {{ node.ip_address }} &middot; Location: {{ node.location|default('US-East') }}</div>
+            </div>
+            
+            <div class="vps-specs">
+                <span><span class="spec-val">{{ node.active_vps_count|default('0') }}</span> Instances</span>
+            </div>
+            
+            <div class="btn-row">
+                <button class="btn btn-small">Config</button>
+                <button class="btn btn-small btn-danger">Disable</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">🖥️</div>
+        <h3>No Nodes Configured</h3>
+        <p>Add your first physical or virtual server to start provisioning instances.</p>
+        <button onclick="openAddNodeModal()" class="btn btn-primary">Add First Node</button>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ===== Add Node Modal (Using Native CSS) ===== -->
+<div id="addNodeModal" class="modal-backdrop">
+    <div class="modal-panel">
+        
+        <div class="modal-head">
+            <h3>Add New Node</h3>
+            <button type="button" class="modal-close" onclick="closeAddNodeModal()">&times;</button>
+        </div>
+        
+        <form action="{{ url_for('adminnodes') }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
+            <div class="field">
+                <label>Node Name</label>
+                <input type="text" name="name" required placeholder="e.g. Node-US-East-01">
+            </div>
+            
+            <div class="field">
+                <label>IP Address</label>
+                <input type="text" name="ip_address" required placeholder="e.g. 192.168.1.100">
+            </div>
+            
+            <div class="field">
+                <label>Physical Location</label>
+                <input type="text" name="location" placeholder="e.g. New York, NY">
+            </div>
+
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeAddNodeModal()" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Register Node</button>
+            </div>
+        </form>
+
+    </div>
+</div>
+
+<script>
+    function openAddNodeModal() {
+        document.getElementById('addNodeModal').classList.add('is-open');
+    }
+    
+    function closeAddNodeModal() {
+        document.getElementById('addNodeModal').classList.remove('is-open');
+    }
+
+    // Close on escape key
+    document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape') {
+            closeAddNodeModal();
+        }
+    });
+
+    // Close on clicking outside the panel
+    document.getElementById('addNodeModal').addEventListener('click', function(event) {
+        if (event.target === this) {
+            closeAddNodeModal();
+        }
+    });
+</script>
+{% endblock %}

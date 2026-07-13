@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}User Management - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <!-- ===== Admin Hero Section ===== -->
+    <section class="hero">
+        <div class="hero-eyebrow">
+            <span class="pulse-dot"></span> 
+            Operator Console
+        </div>
+        <h1>User Management</h1>
+        <p>Administer user accounts, manage access levels, and review platform activity.</p>
+    </section>
+
+    <!-- ===== Registered Users Section ===== -->
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Registered Users</h2>
+        <button onclick="openAddUserModal()" class="btn btn-primary btn-small">+ Create User</button>
+    </div>
+
+    <div class="vps-grid">
+        {% for user in allusers %}
+        <div class="vps-card" style="opacity: {{ '0.7' if user.status == 'banned' else '1' }}; border: 1px solid {{ 'red' if user.status == 'banned' else 'var(--border)' }};">
+            <div class="vps-id">
+                <div class="vps-hostname">
+                    {{ user.username }}
+                    {% if user.status == 'banned' %}
+                        <span class="badge" style="color: red; font-size: 12px; margin-left: 8px; padding: 2px 6px; border: 1px solid red; border-radius: 4px;">BANNED</span>
+                    {% endif %}
+                </div>
+                <div class="vps-meta">{{ user.email }} &middot; Joined {{ user.created }}</div>
+                
+                <!-- Display reason if the user is currently banned and has an active record -->
+                {% if user.active_ban and user.status == 'banned' %}
+                    <div style="margin-top: 8px; font-size: 13px; color: #d9534f; background: #fdf0f0; padding: 8px; border-radius: 4px; border-left: 3px solid #d9534f;">
+                        <strong>Ban Reason:</strong> {{ user.active_ban.reason }}
+                    </div>
+                {% endif %}
+            </div>
+            
+            <div class="btn-row" style="margin-top: auto; padding-top: 16px;">
+                <button onclick="openViewUserModal('{{ user.id }}')" class="btn btn-small">View</button>
+                
+                {% if user.status == 'banned' %}
+                    <!-- Unban Form -->
+                    <form action="{{ url_for('adminunbanuser', user_id=user.id) }}" method="POST" style="display: inline;">
+                        <button type="submit" class="btn btn-small" style="background-color: #5cb85c; color: white; border: none;" onclick="return confirm('Unban this user?');">Unban</button>
+                    </form>
+                {% else %}
+                    <!-- Ban Button -->
+                    <button onclick="openBanModal('{{ user.id }}')" class="btn btn-small btn-danger">Ban</button>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- ===== Edit User Modal ===== -->
+        <div id="viewUserModal-{{ user.id }}" class="modal-backdrop">
+            <div class="modal-panel">
+                <div class="modal-head">
+                    <h3>Edit User: {{ user.username }}</h3>
+                    <button type="button" class="modal-close" onclick="closeViewUserModal('{{ user.id }}')">&times;</button>
+                </div>
+                <div class="vps-meta" style="margin-top: -8px; margin-bottom: 4px;">Joined {{ user.created }}</div>
+                <form action="{{ url_for('adminupdateusers', user_uuid=user.id) }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
+                    <div class="field"><label>Username</label><input type="text" name="username" value="{{ user.username }}" required></div>
+                    <div class="field"><label>Email</label><input type="email" name="email" value="{{ user.email }}" required></div>
+                    <div class="field">
+                        <label>Role</label>
+                        <select name="role" class="select-field">
+                            <option value="user" {% if user.role == 'user' %}selected{% endif %}>User</option>
+                            <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+                        </select>
+                    </div>
+                    <div class="modal-actions btn-row">
+                        <button type="button" onclick="closeViewUserModal('{{ user.id }}')" class="btn">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- ===== Ban Reason Modal ===== -->
+        {% if user.status != 'banned' %}
+        <div id="banModal-{{ user.id }}" class="modal-backdrop">
+            <div class="modal-panel">
+                <div class="modal-head">
+                    <h3>Ban User: {{ user.username }}</h3>
+                    <button type="button" class="modal-close" onclick="closeBanModal('{{ user.id }}')">&times;</button>
+                </div>
+                <form action="{{ url_for('adminbanuser', user_id=user.id) }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
+                    <div class="field">
+                        <label>Reason for Ban</label>
+                        <input type="text" name="reason" required placeholder="e.g. Terms of Service violation">
+                    </div>
+                    <div class="modal-actions btn-row">
+                        <button type="button" onclick="closeBanModal('{{ user.id }}')" class="btn">Cancel</button>
+                        <button type="submit" class="btn btn-danger">Confirm Ban</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="empty-state">
+            <h3>No Users Found</h3>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- ===== Pagination Controls ===== -->
+    {% if pagination and pagination.total_pages > 1 %}
+    <div class="btn-row" style="justify-content: center; align-items: center; gap: 8px; margin-top: 32px;">
+        {% if pagination.has_prev %}
+            <a href="{{ url_for('adminusers', page=pagination.current_page - 1) }}" class="btn btn-small">&laquo; Prev</a>
+        {% else %}
+            <span class="btn btn-small" style="opacity: 0.4; pointer-events: none;">&laquo; Prev</span>
+        {% endif %}
+
+        <span style="font-size: 14px; color: var(--muted, #888); padding: 0 8px;">
+            Page {{ pagination.current_page }} of {{ pagination.total_pages }}
+        </span>
+
+        {% if pagination.has_next %}
+            <a href="{{ url_for('adminusers', page=pagination.current_page + 1) }}" class="btn btn-small">Next &raquo;</a>
+        {% else %}
+            <span class="btn btn-small" style="opacity: 0.4; pointer-events: none;">Next &raquo;</span>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- ===== Create User Modal ===== -->
+<div id="addUserModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head"><h3>Create User</h3><button type="button" class="modal-close" onclick="closeAddUserModal()">&times;</button></div>
+        <form action="{{ url_for('adminusers') }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
+            <div class="field"><label>Username</label><input type="text" name="username" required></div>
+            <div class="field"><label>Email</label><input type="email" name="email" required></div>
+            <div class="field"><label>Password</label><input type="password" name="password" required></div>
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeAddUserModal()" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openAddUserModal() { document.getElementById('addUserModal').classList.add('is-open'); }
+    function closeAddUserModal() { document.getElementById('addUserModal').classList.remove('is-open'); }
+    function openViewUserModal(id) { document.getElementById('viewUserModal-' + id).classList.add('is-open'); }
+    function closeViewUserModal(id) { document.getElementById('viewUserModal-' + id).classList.remove('is-open'); }
+    function openBanModal(id) { document.getElementById('banModal-' + id).classList.add('is-open'); }
+    function closeBanModal(id) { document.getElementById('banModal-' + id).classList.remove('is-open'); }
+
+    document.addEventListener('keydown', function(event) {
+        if (event.key === 'Escape') {
+            document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('is-open'));
+        }
+    });
+
+    document.querySelectorAll('.modal-backdrop').forEach(modal => {
+        modal.addEventListener('click', function(event) {
+            if (event.target === this) this.classList.remove('is-open');
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}Plan Management - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Plan Management</h1>
+        <p>Define VPS resource tiers and pricing.</p>
+    </section>
+    
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Active Plans</h2>
+        <button onclick="openAddPlanModal()" class="btn btn-primary btn-small">+ Create Plan</button>
+    </div>
+    
+    <!-- Changed from vps-grid to your native plan-grid -->
+    <div class="plan-grid">
+        {% for plan in allplans %}
+        <div class="plan-card" style="opacity: {{ '1' if plan.active else '0.6' }};">
+            {% if not plan.active %}
+            <div class="plan-badge" style="background: var(--text-dim); color: #fff;">Inactive</div>
+            {% endif %}
+            
+            <div class="plan-card-head">
+                <div class="plan-name">{{ plan.name }}</div>
+                <div class="plan-price">${{ plan.price }}<span>/mo</span></div>
+            </div>
+            
+            <div class="plan-specs">
+                <div class="plan-spec"><span class="k">vCPU</span><span class="v">{{ plan.cpu }} Cores</span></div>
+                <div class="plan-spec"><span class="k">RAM</span><span class="v">{{ plan.ram }} GB</span></div>
+                <div class="plan-spec"><span class="k">Swap</span><span class="v">{{ plan.swap }} GB</span></div>
+                <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} GB</span></div>
+            </div>
+            
+            <!-- Pushes the buttons to the bottom of the card -->
+            <div class="btn-row" style="margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-soft); justify-content: space-between;">
+                <button onclick="openViewPlanModal('{{ plan.uuid }}')" class="btn btn-small">Edit</button>
+                <form action="{{ url_for('admindeleteplans', plan_uuid=plan.uuid) }}" method="POST" style="margin: 0;" onsubmit="return confirm('Delete plan \'{{ plan.name }}\'? This cannot be undone.');">
+                    <button type="submit" class="btn btn-small btn-danger" style="background: transparent;">Delete</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Edit Modal -->
+        <div id="viewPlanModal-{{ plan.uuid }}" class="modal-backdrop">
+            <div class="modal-panel">
+                <div class="modal-head">
+                    <h3>Edit Plan</h3>
+                    <button type="button" class="modal-close" onclick="closeViewPlanModal('{{ plan.uuid }}')">&times;</button>
+                </div>
+                <form action="{{ url_for('adminupdateplans', plan_uuid=plan.uuid) }}" method="POST">
+                    <!-- Increased gap from 12px to 20px for breathing room -->
+                    <div class="form-grid" style="grid-template-columns: 1fr; gap: 20px;">
+                        
+                        <div class="field">
+                            <label>Plan Name</label>
+                            <input type="text" name="name" value="{{ plan.name }}" required>
+                        </div>
+                        
+                        <div class="field">
+                            <label>Description</label>
+                            <!-- Added inline styles so the textarea matches your standard inputs -->
+                            <textarea name="description" rows="2" style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none; resize: vertical;">{{ plan.description }}</textarea>
+                        </div>
+                        
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                            <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" value="{{ plan.cpu }}" required></div>
+                            <div class="field"><label>RAM (GB)</label><input type="number" name="ram" value="{{ plan.ram }}" required></div>
+                        </div>
+                        
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                            <div class="field"><label>Swap (GB)</label><input type="number" name="swap" value="{{ plan.swap }}" required></div>
+                            <div class="field"><label>Disk (GB)</label><input type="number" name="disk" value="{{ plan.disk }}" required></div>
+                        </div>
+                        
+                        <div class="field">
+                            <label>Price ($)</label>
+                            <input type="number" step="0.01" name="price" value="{{ plan.price }}" required>
+                        </div>
+                        
+                        <!-- Checkboxes wrapped in a subtle panel for visual grouping -->
+                        <div style="display:flex; justify-content: space-between; background: var(--bg-raise); padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border-soft);">
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
+                                <input type="checkbox" name="ipv4" value="1" {% if plan.ipv4 %}checked{% endif %}> IPv4
+                            </label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
+                                <input type="checkbox" name="ipv6" value="1" {% if plan.ipv6 %}checked{% endif %}> IPv6
+                            </label>
+                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
+                                <input type="checkbox" name="active" value="1" {% if plan.active %}checked{% endif %}> Active
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-actions btn-row" style="margin-top: 28px;">
+                        <button type="button" onclick="closeViewPlanModal('{{ plan.uuid }}')" class="btn" style="background:transparent;">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Add Plan Modal -->
+    <div id="addPlanModal" class="modal-backdrop">
+        <div class="modal-panel">
+            <div class="modal-head">
+                <h3>Create Plan</h3>
+                <button type="button" class="modal-close" onclick="closeAddPlanModal()">&times;</button>
+            </div>
+            <form action="{{ url_for('adminplans') }}" method="POST">
+                <!-- Matched layout to Edit modal -->
+                <div class="form-grid" style="grid-template-columns: 1fr; gap: 20px;">
+                    <div class="field"><label>Plan Name</label><input type="text" name="name" required></div>
+                    
+                    <div class="field">
+                        <label>Description</label>
+                        <textarea name="description" rows="2" style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none; resize: vertical;"></textarea>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" required></div>
+                        <div class="field"><label>RAM (GB)</label><input type="number" name="ram" required></div>
+                    </div>
+                    
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div class="field"><label>Swap (GB)</label><input type="number" name="swap" required></div>
+                        <div class="field"><label>Disk (GB)</label><input type="number" name="disk" required></div>
+                    </div>
+                    
+                    <div class="field"><label>Price ($)</label><input type="number" step="0.01" name="price" required></div>
+
+                    <div style="display:flex; justify-content: space-between; background: var(--bg-raise); padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border-soft);">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
+                            <input type="checkbox" name="ipv4" value="1" checked> IPv4
+                        </label>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
+                            <input type="checkbox" name="ipv6" value="1" checked> IPv6
+                        </label>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
+                            <input type="checkbox" name="active" value="1" checked> Active
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-actions btn-row" style="margin-top: 28px;">
+                    <button type="button" onclick="closeAddPlanModal()" class="btn" style="background:transparent;">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Plan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    function openViewPlanModal(uuid) {
+        document.getElementById('viewPlanModal-' + uuid).classList.add('is-open');
+    }
+    function closeViewPlanModal(uuid) {
+        document.getElementById('viewPlanModal-' + uuid).classList.remove('is-open');
+    }
+    function openAddPlanModal() {
+        document.getElementById('addPlanModal').classList.add('is-open');
+    }
+    function closeAddPlanModal() {
+        document.getElementById('addPlanModal').classList.remove('is-open');
+    }
+    
+    // Close when clicking the backdrop
+    window.onclick = function(event) {
+        if (event.target.classList.contains('modal-backdrop')) {
+            event.target.classList.remove('is-open');
+        }
+    }
+</script>
+{% endblock %}

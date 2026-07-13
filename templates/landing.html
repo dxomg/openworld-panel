@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Open World · Free VPS{% endblock %}
+
+{% block content %}
+<!-- Centered Hero Section -->
+<section class="hero" style="text-align: center; margin: 40px 0 60px;">
+  <div class="hero-eyebrow" style="justify-content: center;">
+    <span class="pulse-dot"></span> Providing Free IPv6 VPS
+  </div>
+  
+  <h1 style="font-size: 42px; margin-bottom: 16px;">Free IPv6 VPS</h1>
+  <p style="margin: 0 auto 32px; font-size: 16px; max-width: 600px; line-height: 1.6;">
+    Open World provides an IPv6 VPS environment for free for developers.
+  </p>
+
+  <div class="btn-row" style="justify-content: center;">
+    <a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
+    <a href="#perks" class="btn">View Infrastructure</a>
+  </div>
+</section>
+
+<!-- Terminal Showcase (Signature Element) -->
+<div class="terminal" style="max-width: 760px; margin: 0 auto 80px; box-shadow: 0 16px 40px rgba(0,0,0,0.4);">
+  <div class="terminal-bar">
+    <div class="terminal-dots"><span></span><span></span><span></span></div>
+    operator@openworld:~
+  </div>
+  <div class="terminal-body">
+<span class="prompt">$</span> create --image ubuntu-22.04 --cpu 4 --ram 8G
+<span class="flag">✔</span> Provisioning container payload...
+<span class="flag">✔</span> Establishing sysbox namespaces...
+<span class="flag">✔</span> Booting systemd init...
+
+<span class="val">Instance openworld-1 created successfully.</span>
+Boot time: 412ms
+IPv6: 2001:4860:4801:45::24
+
+<span class="prompt">$</span> ssh root@2001:4860:4801:45::24
+root@openworld-1:~# <span class="cursor"></span>
+  </div>
+</div>
+
+<!-- Features Grid -->
+<div class="section-head" id="perks">
+  <h2>Perks</h2>
+</div>
+
+<div class="form-grid" style="margin-bottom: 60px;">
+  <div class="panel" style="transition: transform 0.2s; cursor: default;">
+    <span style="font-size: 24px; color: var(--accent); margin-bottom: 12px; display: block;">◈</span>
+    <h3 style="font-size: 15px; font-family: var(--font-sans); color: var(--text); font-weight: 600;">Free IPv6 Routing</h3>
+    <p style="color: var(--text-dim); font-size: 13.5px; margin: 0;">
+      While IPv4 is expensive and scarce, IPv6 allows us to provide massive scale at zero cost to you. Perfect for modern web apps, APIs, and microservices. Send your kudos to the Route64.org team!
+    </p>
+  </div>
+
+  <div class="panel">
+    <span style="font-size: 24px; color: var(--warn); margin-bottom: 12px; display: block;">◒</span>
+    <h3 style="font-size: 15px; font-family: var(--font-sans); color: var(--text); font-weight: 600;">System Containers</h3>
+    <p style="color: var(--text-dim); font-size: 13.5px; margin: 0;">
+      We use highly modified Docker/Sysbox runtimes instead of heavy KVM hypervisors. This drastically reduces hardware overhead while still giving you full systemd access.
+    </p>
+  </div>
+
+  <div class="panel">
+    <span style="font-size: 24px; color: var(--accent-dim); margin-bottom: 12px; display: block;">◩</span>
+    <h3 style="font-size: 15px; font-family: var(--font-sans); color: var(--text); font-weight: 600;">Free Storage</h3>
+    <p style="color: var(--text-dim); font-size: 13.5px; margin: 0;">
+      Some nodes have HDD some have SSD, but we provide 5Gb of storage for everyone.
+    </p>
+  </div>
+
+  <div class="panel">
+    <span style="font-size: 24px; color: var(--text-dim); margin-bottom: 12px; display: block;">▧</span>
+    <h3 style="font-size: 15px; font-family: var(--font-sans); color: var(--text); font-weight: 600;">Community Scaled</h3>
+    <p style="color: var(--text-dim); font-size: 13.5px; margin: 0;">
+      Built for developers, by developers. We rely on strict cgroup v2 limits to ensure fair-use across all tenants so a single abuser cannot crash a host node.
+    </p>
+  </div>
+</div>
+
+<!-- Infrastructure Stats -->
+<div class="detail-grid">
+  <!-- Progress Bars -->
+  <div class="panel">
+    <h3 style="margin-bottom: 24px;">Nodes</h3>
+    
+    <div class="metric">
+      <div class="metric-label"><span>Node1</span> <span class="metric-val">~42% utilized</span></div>
+      <div class="metric-track"><div class="metric-fill" style="width: 42%;"></div></div>
+    </div>
+    
+    <div class="metric" style="margin-top: 24px;">
+      <div class="metric-label"><span>Node2</span> <span class="metric-val">~85% utilized</span></div>
+      <!-- Uses the 'warn' class from your CSS for high usage -->
+      <div class="metric-track"><div class="metric-fill warn" style="width: 85%;"></div></div>
+    </div>
+  </div>
+  
+  <!-- Key-Value Data -->
+  <div class="panel">
+    <h3 style="margin-bottom: 24px;">Free VPS Specs</h3>
+    <div class="kv-list">
+      <div class="kv-row"><span class="k">vCores</span> <span class="v" style="color: var(--accent);">1</span></div>
+      <div class="kv-row"><span class="k">Memory</span> <span class="v" style="color: var(--accent);">512MB</span></div>
+      <div class="kv-row"><span class="k">Disk</span> <span class="v" style="color: var(--accent);">5GB</span></div>
+      <div class="kv-row"><span class="k">Network</span> <span class="v" style="color: var(--accent);">10Mibps</span></div>
+    </div>
+  </div>
+</div>
+{% endblock %}

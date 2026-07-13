@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - {{ projectname }}{% endblock %}
+
+{% block content %}
+<!-- Dashboard Overview Hero -->
+<section class="hero" style="margin-bottom: 48px;">
+  <div class="hero-eyebrow">
+    <span class="pulse-dot"></span> {{ projectname }} Dashboard
+  </div>
+  
+  <!-- Use a session variable for the user's name if you have it -->
+  <h1>Welcome back, {{ username }}.</h1>
+  <p>Manage your {{ projectname }} IPv6 instances and monitor resource utilization.</p>
+</section>
+
+<!-- Instances Section Header -->
+<div class="section-head">
+  <h2>Active Deployments</h2>
+  <a href="{{ url_for('createvps') }}" class="btn btn-primary">+ Provision VPS</a>
+</div>
+
+<!-- Instance List or Empty State -->
+{% if vps %}
+<div class="vps-grid">
+
+  {% for instance in vps %}
+  <a href="{{ url_for('vpspanel', uuid=instance.uuid) }}" class="vps-card">
+
+    <!-- You can replace this later with real VPS status -->
+    <span class="status-pill status-running">
+      <span class="dot"></span>Running
+    </span>
+
+    <div class="vps-id">
+      <div class="vps-hostname">
+        {{ instance.hostname }}
+      </div>
+
+      <div class="vps-meta">
+        {{ instance.ip }} · {{ instance.network }}
+      </div>
+    </div>
+
+    <div class="vps-specs">
+      <span>
+        {{ instance.cpu }}
+        <span class="spec-val">vCPU</span>
+      </span>
+
+      <span class="spec-val">
+        {{ instance.ram }}MB RAM
+      </span>
+
+      <span class="spec-val">
+        {{ instance.image }}
+      </span>
+    </div>
+
+    <span class="vps-arrow">→</span>
+
+  </a>
+  {% endfor %}
+
+</div>
+
+{% else %}
+
+<div class="empty-state">
+  <div class="glyph">◈</div>
+  <h3>No instances yet</h3>
+  <p>Provision your first free IPv6 VPS to get started.</p>
+  <a href="{{ url_for('createvps') }}" class="btn btn-primary">
+    + Provision VPS
+  </a>
+</div>
+
+{% endif %}
+
+{% endblock %}

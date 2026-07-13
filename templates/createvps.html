@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Create VPS · route64{% endblock %}
+
+{% block content %}
+
+<a href="{{ url_for('dashboard') }}" class="back-link">← Back to dashboard</a>
+
+<div class="hero">
+  <div class="hero-eyebrow">
+    <span class="pulse-dot"></span> New instance
+  </div>
+
+  <h1>Deploy a VPS</h1>
+  <p>Select a VPS plan to deploy your instance.</p>
+</div>
+
+<div class="section-head">
+  <h2>Available Plans</h2>
+</div>
+
+<div class="plan-grid">
+
+{% for plan in vpsplans %}
+
+<form method="POST" action="{{ url_for('createvps') }}">
+
+  <input type="hidden" name="plan_id" value="{{ plan.id }}">
+
+  <button type="submit"
+          class="plan-card"
+          style="border:none;text-align:left;width:100%;cursor:pointer;">
+
+    <div class="plan-card-head">
+      <div class="plan-name">
+        {{ plan.name }}
+      </div>
+      <div class="plan-price">
+        ${{ plan.price }}/month
+      </div>
+    </div>
+
+    <div class="plan-specs">
+
+      <div class="plan-spec">
+        <span class="k">vCPU</span>
+        <span class="v">
+          {{ plan.cpu }} vCore
+        </span>
+      </div>
+
+      <div class="plan-spec">
+        <span class="k">Memory</span>
+        <span class="v">
+          {{ plan.ram }} GB
+        </span>
+      </div>
+
+      <div class="plan-spec">
+        <span class="k">Disk</span>
+        <span class="v">
+          {{ plan.disk }} GB
+        </span>
+      </div>
+
+      <div class="plan-spec">
+        <span class="k">Swap</span>
+        <span class="v">
+          {{ plan.swap }} GB
+        </span>
+      </div>
+
+      <div class="plan-spec">
+        <span class="k">IP Type</span>
+        <span class="v">
+          {% if plan.ipv4|int == 1 and plan.ipv6|int == 1 %}
+            IPv4, IPv6
+          {% elif plan.ipv6|int == 1 %}
+            IPv6
+          {% elif plan.ipv4|int == 1 %}
+            IPv4
+          {% else %}
+            None
+          {% endif %}
+        </span>
+      </div>
+
+    </div>
+
+    {% if plan.description %}
+    <div class="plan-description">
+      {{ plan.description }}
+    </div>
+    {% endif %}
+
+    <div class="plan-cta">
+      Deploy VPS →
+    </div>
+
+  </button>
+
+</form>
+
+{% endfor %}
+
+</div>
+
+{% endblock %}
