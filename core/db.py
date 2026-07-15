@@ -1,5 +1,6 @@
 import sqlite3
 import math
+import uuid
 
 def getconnection():
     conn = sqlite3.connect("database.db")
@@ -367,7 +368,7 @@ def removenode(uuid):
 def addpaymentmethod(uuid, name, slug, active=1):
     with getconnection() as conn:
         conn.execute(
-            """INSERT INTO paymentprocessors (uuid, name, slug, active) 
+            """INSERT INTO paymentmethods (uuid, name, slug, active) 
                VALUES (?, ?, ?, ?)""",
             (uuid, name, slug, active)
         )
@@ -379,7 +380,7 @@ def listallpaymentmethods():
             """SELECT p.*,
                       COUNT(t.id) AS transaction_count,
                       COALESCE(SUM(CASE WHEN t.status = 'completed' THEN t.amount ELSE 0 END), 0) AS total_amount
-               FROM paymentprocessors p
+               FROM paymentmethods p
                LEFT JOIN transactions t ON t.paymentprocessorid = p.id
                GROUP BY p.id
                ORDER BY p.created DESC"""
@@ -390,7 +391,7 @@ def listallpaymentmethods():
 def getpaymentmethods(processor_uuid):
     with getconnection() as conn:
         row = conn.execute(
-            "SELECT * FROM paymentprocessors WHERE uuid = ?", (processor_uuid,)
+            "SELECT * FROM paymentmethods WHERE uuid = ?", (processor_uuid,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -402,20 +403,20 @@ def updatepaymentmethods(processor_uuid, **fields):
     values = list(fields.values()) + [processor_uuid]
     with getconnection() as conn:
         conn.execute(
-            f"UPDATE paymentprocessors SET {set_clause}, updated = CURRENT_TIMESTAMP WHERE uuid = ?",
+            f"UPDATE paymentmethods SET {set_clause}, updated = CURRENT_TIMESTAMP WHERE uuid = ?",
             values
         )
 
 
 def removepaymentmethods(processor_uuid):
     with getconnection() as conn:
-        conn.execute("DELETE FROM paymentprocessors WHERE uuid = ?", (processor_uuid,))
+        conn.execute("DELETE FROM paymentmethods WHERE uuid = ?", (processor_uuid,))
 
 
 def countactivepaymentmethods():
     with getconnection() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM paymentprocessors WHERE active = 1"
+            "SELECT COUNT(*) AS cnt FROM paymentmethods WHERE active = 1"
         ).fetchone()
         return row["cnt"] if row else 0
 
@@ -428,3 +429,62 @@ def gettransactionstats():
                FROM transactions"""
         ).fetchone()
         return dict(row) if row else {"total_transactions": 0, "total_revenue": 0}
+    
+def getallreceipts():
+    with getconnection() as conn:
+        return conn.execute("""
+            SELECT receipts.*, users.username, transactions.transactionid AS txn_public_id
+            FROM receipts
+            JOIN users ON users.id = receipts.userid
+            LEFT JOIN transactions ON transactions.id = receipts.transactionid
+            ORDER BY receipts.created DESC
+        """).fetchall()
+
+def geteligibletransactions():
+    with getconnection() as conn:
+        return conn.execute("""
+            SELECT transactions.id, transactions.uuid, transactions.transactionid, 
+                   transactions.amount, transactions.currency, users.username
+            FROM transactions
+            JOIN users ON users.id = transactions.userid
+            LEFT JOIN receipts ON receipts.transactionid = transactions.id
+            WHERE transactions.status = 'completed' AND receipts.id IS NULL
+            ORDER BY transactions.created DESC
+        """).fetchall()
+
+def gettransaction(tid):
+    with getconnection() as conn:
+        row = conn.execute("SELECT id, userid, status FROM transactions WHERE id = ?", (tid,)).fetchone()
+        return dict(row) if row else None
+
+def getreceiptbytransaction(tid):
+    with getconnection() as conn:
+        return conn.execute("SELECT id FROM receipts WHERE transactionid = ?", (tid,)).fetchone()
+
+def getreceipt(uuid):
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM receipts WHERE uuid = ?", (uuid,)).fetchone()
+        return dict(row) if row else None
+
+def addreceipt(data):
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO receipts (uuid, receiptnumber, transactionid, userid, amount, currency, 
+                                taxamount, billingname, billingemail, billingaddress, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (str(uuid.uuid4()), data['receiptnumber'], data['transactionid'], data['userid'],
+              data['amount'], data['currency'], data['taxamount'], data['billingname'], 
+              data['billingemail'], data['billingaddress'], data['notes']))
+
+def updatereceipt(uuid, data):
+    with getconnection() as conn:
+        conn.execute("""
+            UPDATE receipts SET receiptnumber=?, amount=?, currency=?, taxamount=?, billingname=?,
+                               billingemail=?, billingaddress=?, notes=?, updated=CURRENT_TIMESTAMP
+            WHERE uuid = ?
+        """, (data['receiptnumber'], data['amount'], data['currency'], data['taxamount'], 
+              data['billingname'], data['billingemail'], data['billingaddress'], data['notes'], uuid))
+
+def deletereceipt(uuid):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM receipts WHERE uuid = ?", (uuid,))

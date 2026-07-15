@@ -226,7 +226,34 @@ CREATE TABLE IF NOT EXISTS transactions (
     FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE SET NULL,
     FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE SET NULL,
-    FOREIGN KEY(paymentprocessorid) REFERENCES paymentprocessors(id) ON DELETE RESTRICT
+    FOREIGN KEY(paymentprocessorid) REFERENCES paymentmethods(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    receiptnumber TEXT UNIQUE NOT NULL,
+
+    transactionid INTEGER NOT NULL UNIQUE,
+    userid INTEGER NOT NULL,
+
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'USD',
+
+    taxamount REAL NOT NULL DEFAULT 0,
+
+    billingname TEXT,
+    billingemail TEXT,
+    billingaddress TEXT,
+
+    notes TEXT,
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(transactionid) REFERENCES transactions(id) ON DELETE CASCADE,
+    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -288,8 +315,8 @@ CREATE INDEX IF NOT EXISTS idxvpsstorage ON vps(storageid);
 
 CREATE INDEX IF NOT EXISTS idxsuspensionvps ON vpssuspensions(vpsid);
 
-CREATE INDEX IF NOT EXISTS idxpaymentprocessorsuuid ON paymentprocessors(uuid);
-CREATE INDEX IF NOT EXISTS idxpaymentprocessorsslug ON paymentprocessors(slug);
+CREATE INDEX IF NOT EXISTS idxpaymentmethodsuuid ON paymentmethods(uuid);
+CREATE INDEX IF NOT EXISTS idxpaymentmethodsslug ON paymentmethods(slug);
 
 CREATE INDEX IF NOT EXISTS idxtransactionsuuid ON transactions(uuid);
 CREATE INDEX IF NOT EXISTS idxtransactionsid ON transactions(transactionid);
@@ -297,6 +324,11 @@ CREATE INDEX IF NOT EXISTS idxtransactionsuser ON transactions(userid);
 CREATE INDEX IF NOT EXISTS idxtransactionsvps ON transactions(vpsid);
 CREATE INDEX IF NOT EXISTS idxtransactionsplan ON transactions(planid);
 CREATE INDEX IF NOT EXISTS idxtransactionsprocessor ON transactions(paymentprocessorid);
+
+CREATE INDEX IF NOT EXISTS idxreceiptsuuid ON receipts(uuid);
+CREATE INDEX IF NOT EXISTS idxreceiptsnumber ON receipts(receiptnumber);
+CREATE INDEX IF NOT EXISTS idxreceiptstransaction ON receipts(transactionid);
+CREATE INDEX IF NOT EXISTS idxreceiptsuser ON receipts(userid);
 
 CREATE INDEX IF NOT EXISTS idxsessionuser ON sessions(userid);
 CREATE INDEX IF NOT EXISTS idxsessiontoken ON sessions(token);

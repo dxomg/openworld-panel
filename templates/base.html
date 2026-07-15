@@ -46,6 +46,7 @@
         <a href="{{ url_for('adminnodes') }}" class="btn {{ 'active' if request.endpoint == 'adminnodes' else '' }}">Nodes</a>
         <a href="{{ url_for('adminnodesstorage') }}" class="btn {{ 'active' if request.endpoint == 'adminnodesstorage' else '' }}">Nodes Storage</a>
         <a href="{{ url_for('adminpaymentmethods') }}" class="btn {{ 'active' if request.endpoint == 'adminpaymentmethods' else '' }}">Payment Methods</a>
+        <a href="{{ url_for('adminreceipts') }}" class="btn {{ 'active' if request.endpoint == 'adminreceipts' else '' }}">Admin Receipts</a>
         <a href="{{ url_for('dashboard') }}" class="btn">Exit Admin</a>
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
     {% endif %}

@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block title %}Receipts - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Receipts</h1>
+        <p>Manage billing receipts issued for completed transactions.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ allreceipts|length }}</div>
+                <div class="label">Total Receipts</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">${{ totalrevenue }}</div>
+                <div class="label">Total Revenue</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">${{ totaltax }}</div>
+                <div class="label">Total Tax Collected</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ receiptsthismonth }}</div>
+                <div class="label">Issued This Month</div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Issued Receipts</h2>
+        <button onclick="openModal('addReceiptModal')" class="btn btn-primary btn-small">+ Add Receipt</button>
+    </div>
+
+    {% if allreceipts %}
+    <div class="vps-grid">
+        {% for receipt in allreceipts %}
+        <div class="vps-card">
+            <span class="status-pill status-running">
+                <span class="dot"></span>{{ receipt.currency }}
+            </span>
+
+            <div class="vps-id">
+                <div class="vps-hostname">{{ receipt.receiptnumber }}</div>
+                <div class="vps-meta">{{ receipt.billingname or receipt.username or 'Unknown billing name' }}</div>
+            </div>
+
+            <div class="vps-specs">
+                <span><span class="spec-val">${{ receipt.amount }}</span> Total</span>
+                <span><span class="spec-val">${{ receipt.taxamount }}</span> Tax</span>
+                <span><span class="spec-val">{{ receipt.transactionid_display }}</span> Txn</span>
+            </div>
+
+            <div class="vps-meta" style="margin-top: 8px;">{{ receipt.billingemail or 'No billing email' }}</div>
+            <div class="vps-meta">Issued {{ receipt.created }}</div>
+
+            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+                <!-- Triggering Edit Modal with JSON data -->
+                <button class="btn btn-small"
+                    onclick="openEditModal('{{ receipt|tojson|forceescape }}')">Edit</button>
+
+                <!-- Dedicated Delete Route -->
+                <form action="{{ url_for('adminreceiptsdelete', receipt_uuid=receipt.uuid) }}" method="POST" onsubmit="return confirm('Delete this receipt? This cannot be undone.');">
+                    <button type="submit" class="btn btn-small btn-danger">Remove</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">🧾</div>
+        <h3>No Receipts Issued Yet</h3>
+        <p>Add a receipt against a completed transaction to get started.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ===== Add Receipt Modal ===== -->
+<div id="addReceiptModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Receipt</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addReceiptModal')">&times;</button>
+        </div>
+        <!-- Pointing to dedicated create route -->
+        <form action="{{ url_for('adminreceiptscreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Transaction</label>
+                <select name="transactionid" required>
+                    <option value="" disabled selected>Select a transaction</option>
+                    {% for txn in alltransactions %}
+                    <option value="{{ txn.id }}">{{ txn.transactionid }} &mdash; {{ txn.username }} &mdash; ${{ txn.amount }} {{ txn.currency }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="field">
+                <label>Amount</label>
+                <input type="number" step="0.01" min="0" name="amount" required placeholder="49.99">
+            </div>
+            <div class="field">
+                <label>Currency</label>
+                <input type="text" name="currency" value="USD" maxlength="8" required>
+            </div>
+
+            <div class="field">
+                <label>Tax Amount</label>
+                <input type="number" step="0.01" min="0" name="taxamount" value="0">
+            </div>
+            <div class="field">
+                <label>Receipt Number (optional)</label>
+                <input type="text" name="receiptnumber" placeholder="Auto-generated if left blank">
+            </div>
+
+            <div class="field" style="grid-column: span 2;">
+                <label>Billing Name</label>
+                <input type="text" name="billingname" placeholder="John Doe">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Billing Email</label>
+                <input type="email" name="billingemail" placeholder="john@example.com">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Billing Address</label>
+                <textarea name="billingaddress" rows="2" placeholder="123 Example St, City, Country"></textarea>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Notes</label>
+                <textarea name="notes" rows="2" placeholder="Internal notes about this receipt"></textarea>
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addReceiptModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Receipt</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== Edit Receipt Modal ===== -->
+<div id="editReceiptModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Update Receipt</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editReceiptModal')">&times;</button>
+        </div>
+        <!-- Form ID used by JS to change the action URL -->
+        <form id="editReceiptForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field">
+                <label>Amount</label>
+                <input type="number" step="0.01" min="0" name="amount" id="edit_amount" required>
+            </div>
+            <div class="field">
+                <label>Currency</label>
+                <input type="text" name="currency" id="edit_currency" maxlength="8" required>
+            </div>
+
+            <div class="field">
+                <label>Tax Amount</label>
+                <input type="number" step="0.01" min="0" name="taxamount" id="edit_taxamount">
+            </div>
+            <div class="field">
+                <label>Receipt Number</label>
+                <input type="text" name="receiptnumber" id="edit_receiptnumber" required>
+            </div>
+
+            <div class="field" style="grid-column: span 2;">
+                <label>Billing Name</label>
+                <input type="text" name="billingname" id="edit_billingname">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Billing Email</label>
+                <input type="email" name="billingemail" id="edit_billingemail">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Billing Address</label>
+                <textarea name="billingaddress" id="edit_billingaddress" rows="2"></textarea>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Notes</label>
+                <textarea name="notes" id="edit_notes" rows="2"></textarea>
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editReceiptModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) {
+        document.getElementById(id).classList.add('is-open');
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('is-open');
+    }
+
+    function openEditModal(receiptData) {
+        const receipt = JSON.parse(receiptData);
+        const form = document.getElementById('editReceiptForm');
+
+        // Dynamically update the form action to include the receipt's UUID
+        let baseUrl = "{{ url_for('adminreceiptsupdate', receipt_uuid='UUID_PLACEHOLDER') }}";
+        form.action = baseUrl.replace('UUID_PLACEHOLDER', receipt.uuid);
+
+        // Fill the input fields
+        document.getElementById('edit_amount').value = receipt.amount;
+        document.getElementById('edit_currency').value = receipt.currency;
+        document.getElementById('edit_taxamount').value = receipt.taxamount;
+        document.getElementById('edit_receiptnumber').value = receipt.receiptnumber;
+        document.getElementById('edit_billingname').value = receipt.billingname || '';
+        document.getElementById('edit_billingemail').value = receipt.billingemail || '';
+        document.getElementById('edit_billingaddress').value = receipt.billingaddress || '';
+        document.getElementById('edit_notes').value = receipt.notes || '';
+
+        openModal('editReceiptModal');
+    }
+</script>
+{% endblock %}

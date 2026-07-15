@@ -4,6 +4,7 @@ import secrets
 import requests
 import toml
 import uuid
+from datetime import datetime
 from functools import wraps
 
 from core import db
@@ -414,7 +415,8 @@ def adminplans():
 
     return render_template(
         "adminplans.html", 
-        allplans=db.listplans(), 
+        allplans=db.listplans(),
+        **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo)
     )
 
@@ -592,6 +594,84 @@ def adminpaymentmethodsdelete(paymentmethod_uuid):
     except Exception as e:
         flash(f"Error deleting payment method: {e}", "danger")
     return redirect(url_for('adminpaymentmethods'))
+
+@app.route("/dashboard/admin/receipts")
+@login_required
+@admin_required
+def adminreceipts():
+    rows = db.getallreceipts()
+    allreceipts = []
+    totalrevenue = totaltax = receiptsthismonth = 0
+    currentmonth = datetime.utcnow().strftime("%Y-%m")
+
+    for row in rows:
+        receipt = dict(row)
+        receipt["transactionid_display"] = row["txn_public_id"] or "N/A"
+        allreceipts.append(receipt)
+        totalrevenue += row["amount"] or 0
+        totaltax += row["taxamount"] or 0
+        if (row["created"] or "").startswith(currentmonth): receiptsthismonth += 1
+
+    return render_template("adminreceipts.html", allreceipts=allreceipts, 
+        alltransactions=db.geteligibletransactions(), totalrevenue=f"{totalrevenue:.2f}", 
+        totaltax=f"{totaltax:.2f}", receiptsthismonth=receiptsthismonth,
+        **paneluserinfo(g.userinfo), **paneladmininfo(g.userinfo))
+
+@app.route("/dashboard/admin/receipts/create", methods=["POST"])
+@login_required
+@admin_required
+def adminreceiptscreate():
+    tid = request.form.get("transactionid", type=int)
+    txn = db.gettransaction(tid)
+    
+    if not txn:
+        flash("Transaction not found.", "error")
+    elif db.getreceiptbytransaction(tid):
+        flash("Receipt already exists.", "error")
+    else:
+        data = {
+            "transactionid": tid, "userid": txn["userid"],
+            "amount": request.form.get("amount", type=float),
+            "currency": (request.form.get("currency") or "USD").strip().upper(),
+            "taxamount": request.form.get("taxamount", type=float) or 0,
+            "receiptnumber": request.form.get("receiptnumber") or db.generate_receipt_number(),
+            "billingname": request.form.get("billingname"),
+            "billingemail": request.form.get("billingemail"),
+            "billingaddress": request.form.get("billingaddress"),
+            "notes": request.form.get("notes")
+        }
+        db.addreceipt(data)
+        flash("Receipt created.", "success")
+    return redirect(url_for("adminreceipts"))
+
+@app.route("/dashboard/admin/receipts/<receipt_uuid>/update", methods=["POST"])
+@login_required
+@admin_required
+def adminreceiptsupdate(receipt_uuid):
+    if not db.getreceipt(receipt_uuid):
+        flash("Receipt not found.", "error")
+    else:
+        data = {
+            "amount": request.form.get("amount", type=float),
+            "currency": (request.form.get("currency") or "USD").strip().upper(),
+            "taxamount": request.form.get("taxamount", type=float) or 0,
+            "receiptnumber": request.form.get("receiptnumber"),
+            "billingname": request.form.get("billingname"),
+            "billingemail": request.form.get("billingemail"),
+            "billingaddress": request.form.get("billingaddress"),
+            "notes": request.form.get("notes")
+        }
+        db.updatereceipt(receipt_uuid, data)
+        flash("Receipt updated.", "success")
+    return redirect(url_for("adminreceipts"))
+
+@app.route("/dashboard/admin/receipts/<receipt_uuid>/delete", methods=["POST"])
+@login_required
+@admin_required
+def adminreceiptsdelete(receipt_uuid):
+    db.deletereceipt(receipt_uuid)
+    flash("Receipt deleted.", "success")
+    return redirect(url_for("adminreceipts"))
 
 ###############
 #
