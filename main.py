@@ -718,7 +718,7 @@ def login():
         else:
             flash("Invalid email or password", "error")
 
-    return render_template("login.html")
+    return render_template("login.html", **guestuserinfo())
 
 
 @app.route("/discord-login")
