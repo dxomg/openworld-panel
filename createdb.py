@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS nodes (
     status TEXT NOT NULL DEFAULT 'online'
         CHECK(status IN ('online','offline','maintenance')),
 
+    -- NEW COLUMN ADDED HERE
+    tier TEXT NOT NULL DEFAULT 'free'
+        CHECK(tier IN ('free', 'paid')),
+
     cpu INTEGER NOT NULL,
     ram INTEGER NOT NULL,
     disk INTEGER NOT NULL,
@@ -245,7 +249,6 @@ CREATE TABLE IF NOT EXISTS receipts (
 
     billingname TEXT,
     billingemail TEXT,
-    billingaddress TEXT,
 
     notes TEXT,
 
@@ -302,6 +305,7 @@ CREATE INDEX IF NOT EXISTS idxplansuuid ON plans(uuid);
 CREATE INDEX IF NOT EXISTS idximagesuuid ON images(uuid);
 
 CREATE INDEX IF NOT EXISTS idxnodesuuid ON nodes(uuid);
+CREATE INDEX IF NOT EXISTS idxnodestier ON nodes(tier); -- NEW INDEX
 
 CREATE INDEX IF NOT EXISTS idxstorageuuid ON nodestorage(uuid);
 CREATE INDEX IF NOT EXISTS idxstoragenode ON nodestorage(nodeid);
@@ -341,4 +345,4 @@ CREATE INDEX IF NOT EXISTS idxlogstarget ON logs(target);
 conn.commit()
 conn.close()
 
-print("database.db created successfully.")
+print("database.db created successfully with node tiers.")

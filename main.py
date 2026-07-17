@@ -482,7 +482,8 @@ def adminnodescreate():
             cpu=int(request.form.get("cpu", 0)),
             ram=int(request.form.get("ram", 0)),
             disk=int(request.form.get("disk", 0)),
-            status=request.form.get("status", "online")
+            status=request.form.get("status", "online"),
+            tier=request.form.get("tier", "free") # New field
         )
         flash(f"Node '{request.form.get('name')}' registered successfully.", "success")
     except Exception as e:
@@ -500,10 +501,10 @@ def adminnodesupdate(node_uuid):
             "hostname": request.form.get("hostname"),
             "address": request.form.get("address"),
             "ram": int(request.form.get("ram", 0)),
-            "status": request.form.get("status")
+            "status": request.form.get("status"),
+            "tier": request.form.get("tier") # New field
         }
         
-        # Only update API Key if a value was actually typed in
         new_key = request.form.get("apikey")
         if new_key and new_key.strip() != "":
             update_data["apikey"] = new_key

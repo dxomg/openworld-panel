@@ -138,13 +138,12 @@ def listimages(active=None):
 
 # --- NODE FUNCTIONS ---
 
-def addnode(uuid, name, hostname, address, apikey, cpu, ram, disk, status='online'):
+def addnode(uuid, name, hostname, address, apikey, cpu, ram, disk, status, tier):
     with getconnection() as conn:
-        conn.execute(
-            """INSERT INTO nodes (uuid, name, hostname, address, apikey, cpu, ram, disk, status) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
-            (uuid, name, hostname, address, apikey, cpu, ram, disk, status)
-        )
+        conn.execute("""
+            INSERT INTO nodes (uuid, name, hostname, address, apikey, cpu, ram, disk, status, tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (uuid, name, hostname, address, apikey, cpu, ram, disk, status, tier))
 
 def getnode(uuid):
     with getconnection() as conn:
