@@ -254,6 +254,15 @@
                     </select>
                 </div>
                 <div class="field">
+                    <label>Network</label>
+                    <select name="networkid" required>
+                        <option value="" disabled selected>Select a network...</option>
+                        {% for net in networks %}
+                        <option value="{{ net.id }}">{{ net.name }} ({{ net.node_name }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
                     <label>Initial Status</label>
                     <select name="status">
                         <option value="creating">Creating (Automatic)</option>

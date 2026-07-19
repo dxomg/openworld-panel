@@ -205,11 +205,18 @@ def createvps():
             flash("No nodes or Storage available for this tier.", "error")
             return redirect(url_for('createvps'))
 
+        # Auto-assign network from the node
+        nodeNetworks = db.listnetworks(nodeid=nodeId)
+        if not nodeNetworks:
+            flash("No network configured for this node. Contact an admin.", "error")
+            return redirect(url_for('createvps'))
+        networkId = nodeNetworks[0]['id']
+
         vpsUuid = str(uuid.uuid4())
-        # STANDARDIZED: Use 'pendingpayment' (no underscore)
         initialStatus = 'pendingpayment' if isPaid else 'creating'
 
         try:
+            hostname = services.generaterandomhostname()
             db.addvps(
                 uuid=vpsUuid,
                 userid=int(g.userinfo["id"]),
@@ -217,7 +224,8 @@ def createvps():
                 imageid=imageId,
                 nodeid=nodeId,
                 storageid=storageId,
-                hostname=services.generaterandomhostname(),
+                networkid=networkId,
+                hostname=hostname,
                 password=services.generaterandompassword(),
                 cpu=plan['cpu'], ram=plan['ram'],
                 swap=plan['swap'], disk=plan['disk'],
@@ -229,7 +237,13 @@ def createvps():
             if isPaid:
                 return redirect(url_for('checkout', vpsUuid=vpsUuid))
             
-            flash("Free VPS is being created!", "success")
+            # Free VPS: provision on node immediately
+            try:
+                services.provisiononnode(vpsUuid)
+                flash("Free VPS is being created!", "success")
+            except ValueError as e:
+                flash(f"VPS created but node provisioning failed: {e}", "error")
+            
             return redirect(url_for('dashboard'))
         except Exception as e:
             flash("An error occurred while creating the VPS.", "error")
@@ -314,7 +328,13 @@ def processpayment():
         vpsid=vps['id'],
         planid=vps['planid']
     )
-    flash("Payment confirmed. Provisioning started.", "success")
+
+    try:
+        services.provisiononnode(vpsUuid)
+        flash("Payment confirmed. VPS is being created!", "success")
+    except ValueError as e:
+        flash(f"Payment confirmed but provisioning failed: {e}", "error")
+
     return redirect(url_for('dashboard'))
 
 @app.route("/paypal/ipn", methods=["POST"])
@@ -365,6 +385,11 @@ def paypalipn():
             vpsid=vps['id'],
             planid=vps['planid']
         )
+
+        try:
+            services.provisiononnode(vpsUuid)
+        except ValueError:
+            pass
 
     return "OK", 200
 
@@ -548,6 +573,7 @@ def adminvps():
     plans = db.listplans(active=1)
     images = db.listimages(active=1)
     nodesStorage = db.listnodestorage()
+    networks = db.listnetworks()
     
     return render_template(
         "adminvps.html", 
@@ -557,6 +583,7 @@ def adminvps():
         plans=plans,
         images=images,
         nodesStorage=nodesStorage,
+        networks=networks,
         search=q or '',
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo)
@@ -600,6 +627,7 @@ def admincreatevps():
         imageid = request.form.get('imageid', type=int)
         nodeid = request.form.get('nodeid', type=int)
         storageid = request.form.get('storageid', type=int)
+        networkid = request.form.get('networkid', type=int)
         hostname = request.form.get('hostname')
         password = request.form.get('password')
 
@@ -622,6 +650,19 @@ def admincreatevps():
             flash("Invalid image selected.", "danger")
             return redirect(url_for('adminvps'))
 
+        if not networkid:
+            flash("You must select a network.", "danger")
+            return redirect(url_for('adminvps'))
+
+        network = db.getnetworkbyid(networkid)
+        if not network:
+            flash("Selected network not found.", "danger")
+            return redirect(url_for('adminvps'))
+
+        if network['nodeid'] != nodeid:
+            flash("Selected network is not on the assigned node.", "danger")
+            return redirect(url_for('adminvps'))
+
         try:
             db.addvps(
                 uuid=vpsUuid,
@@ -630,6 +671,7 @@ def admincreatevps():
                 imageid=imageid,
                 nodeid=nodeid,
                 storageid=storageid,
+                networkid=networkid,
                 hostname=hostname,
                 password=password,
                 cpu=plan['cpu'],

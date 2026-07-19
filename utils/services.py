@@ -179,28 +179,10 @@ def provisionvps(userId, planId, imageId, hostname):
         status='creating'
     )
 
-    node = dict(node)
-    payload = {
-        "uuid": vpsUuid,
-        "hostname": hostname,
-        "cpu": plan['cpu'],
-        "ram": f"{plan['ram']}m",
-        "swap": f"{plan['swap']}m",
-        "network": "bridge",
-        "ip": "::1",
-        "dns": ["1.1.1.1", "8.8.8.8"],
-        "image": image['image'],
-        "rootPassword": rootPassword,
-        "readBps": plan.get('readbps', 0) or 0,
-        "writeBps": plan.get('writebps', 0) or 0,
-        "diskMb": plan.get('disk', 0) or 0,
-    }
-
-    result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
-    if result and result.get("containerId"):
-        db.updatevps(vpsUuid, status='running', container=result["containerId"])
-    else:
-        db.updatevps(vpsUuid, status='error')
+    try:
+        provisiononnode(vpsUuid)
+    except ValueError:
+        pass
 
     vpsData = db.getvps(vpsUuid)
     res = dict(vpsData)
@@ -211,7 +193,9 @@ def getvpsdetails(vpsId):
     """Gets full VPS info including node and plan details."""
     with db.getconnection() as conn:
         query = """
-            SELECT v.*, p.name as plan_name, n.address as node_ip, i.image as image_path
+            SELECT v.*, p.name as plan_name, p.readbps, p.writebps,
+                   n.address as node_ip, n.url as node_url, n.apikey as node_apikey,
+                   i.image as image_path
             FROM vps v
             JOIN plans p ON v.planid = p.id
             JOIN nodes n ON v.nodeid = n.id
@@ -220,6 +204,63 @@ def getvpsdetails(vpsId):
         """
         row = conn.execute(query, (vpsId,)).fetchone()
         return dict(row) if row else None
+
+def provisiononnode(vpsUuid):
+    """Provision a VPS container on the node. Call after VPS record exists in DB."""
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        raise ValueError("VPS not found")
+
+    vpsDetails = getvpsdetails(vps['id'])
+    if not vpsDetails:
+        raise ValueError("VPS details not found")
+
+    node = {
+        'address': vpsDetails.get('node_ip', ''),
+        'url': vpsDetails.get('node_url', ''),
+        'apikey': vpsDetails.get('node_apikey', ''),
+    }
+
+    # Get network info
+    networkName = "bridge"
+    networkIp = None
+    if vps.get('networkid'):
+        with db.getconnection() as conn:
+            net = conn.execute("SELECT * FROM networks WHERE id = ?", (vps['networkid'],)).fetchone()
+        if net:
+            net = dict(net)
+            networkName = net['name']
+
+    payload = {
+        "uuid": vpsUuid,
+        "hostname": vps['hostname'],
+        "cpu": vps['cpu'],
+        "ram": f"{vps['ram']}m",
+        "swap": f"{vps['swap']}m",
+        "network": networkName,
+        "dns": ["1.1.1.1", "8.8.8.8"],
+        "image": vpsDetails['image_path'],
+        "rootPassword": vps['password'],
+        "readBps": vpsDetails.get('readbps', 0) or 0,
+        "writeBps": vpsDetails.get('writebps', 0) or 0,
+        "diskMb": vps.get('disk', 0) or 0,
+    }
+
+    result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
+    if not result:
+        db.updatevps(vpsUuid, status='error')
+        raise ValueError("Node unreachable or failed to respond")
+
+    if result.get("error"):
+        db.updatevps(vpsUuid, status='error')
+        raise ValueError(f"Node error: {result['error']}")
+
+    if not result.get("containerId"):
+        db.updatevps(vpsUuid, status='error')
+        raise ValueError("Node did not return a container ID")
+
+    db.updatevps(vpsUuid, status='running', container=result["containerId"])
+    return result
 
 def nodeapi(node, path, method="GET", data=None, timeout=10):
     """Call a node agent API endpoint."""
@@ -241,7 +282,14 @@ def nodeapi(node, path, method="GET", data=None, timeout=10):
             r = requests.delete(f"{base}{path}", headers=headers, timeout=timeout)
         else:
             return None
-        return r.json() if r.status_code < 500 else None
+        try:
+            return r.json()
+        except ValueError:
+            return {"error": f"node returned status {r.status_code}"}
+    except requests.ConnectionError:
+        return None
+    except requests.Timeout:
+        return None
     except requests.RequestException:
         return None
 

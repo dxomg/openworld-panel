@@ -186,6 +186,16 @@ def getnetwork(uuid):
         """, (uuid,)).fetchone()
         return dict(row) if row else None
 
+def getnetworkbyid(networkid):
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT n.*, nd.name as node_name, nd.address as node_address
+            FROM networks n
+            JOIN nodes nd ON n.nodeid = nd.id
+            WHERE n.id = ?
+        """, (networkid,)).fetchone()
+        return dict(row) if row else None
+
 def removenetwork(uuid):
     with getconnection() as conn:
         conn.execute("DELETE FROM networks WHERE uuid = ?", (uuid,))
@@ -253,12 +263,12 @@ def countvpsbynetwork(networkid):
 
 # --- VPS FUNCTIONS ---
 
-def addvps(uuid, userid, planid, imageid, nodeid, storageid, hostname, password, cpu, ram, swap, disk, status='creating'):
+def addvps(uuid, userid, planid, imageid, nodeid, storageid, hostname, password, cpu, ram, swap, disk, status='creating', networkid=None):
     with getconnection() as conn:
         conn.execute(
-            """INSERT INTO vps (uuid, userid, planid, imageid, nodeid, storageid, hostname, password, cpu, ram, swap, disk, status) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
-            (uuid, userid, planid, imageid, nodeid, storageid, hostname, password, cpu, ram, swap, disk, status)
+            """INSERT INTO vps (uuid, userid, planid, imageid, nodeid, storageid, networkid, hostname, password, cpu, ram, swap, disk, status) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
+            (uuid, userid, planid, imageid, nodeid, storageid, networkid, hostname, password, cpu, ram, swap, disk, status)
         )
 
 def getvps(uuid):
