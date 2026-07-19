@@ -676,7 +676,9 @@ def adminplans():
             swap=request.form.get("swap"),
             disk=request.form.get("disk"),
             price=request.form.get("price"),
-            stock=int(request.form.get("stock", -1))
+            stock=int(request.form.get("stock", -1)),
+            readbps=int(request.form.get("readbps", 0)),
+            writebps=int(request.form.get("writebps", 0))
         )
         return redirect(url_for('adminplans'))
 
@@ -713,7 +715,9 @@ def adminupdateplans(planUuid):
         ipv6=int(request.form.get("ipv6", 1)),
         price=float(request.form.get("price")),
         active=int(request.form.get("active", 1)),
-        stock=int(request.form.get("stock", -1))
+        stock=int(request.form.get("stock", -1)),
+        readbps=int(request.form.get("readbps", 0)),
+        writebps=int(request.form.get("writebps", 0))
     )
     
     return redirect(url_for('adminplans'))

@@ -191,6 +191,9 @@ def provisionvps(userId, planId, imageId, hostname):
         "dns": ["1.1.1.1", "8.8.8.8"],
         "image": image['image'],
         "rootPassword": rootPassword,
+        "readBps": plan.get('readbps', 0) or 0,
+        "writeBps": plan.get('writebps', 0) or 0,
+        "diskMb": plan.get('disk', 0) or 0,
     }
 
     result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)

@@ -37,6 +37,12 @@
                 <div class="plan-spec"><span class="k">RAM</span><span class="v">{{ plan.ram }} MB</span></div>
                 <div class="plan-spec"><span class="k">Swap</span><span class="v">{{ plan.swap }} MB</span></div>
                 <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} MB</span></div>
+                {% if plan.readbps or plan.writebps %}
+                <div class="plan-spec">
+                    <span class="k">Disk I/O</span>
+                    <span class="v">{% if plan.readbps %}R {{ plan.readbps }} Mbps{% endif %}{% if plan.readbps and plan.writebps %} / {% endif %}{% if plan.writebps %}W {{ plan.writebps }} Mbps{% endif %}</span>
+                </div>
+                {% endif %}
                 <div class="plan-spec">
                     <span class="k">Stock</span>
                     <span class="v" style="{% if plan.stock == 0 %}color: var(--danger);{% elif plan.stock > 0 and plan.stock <= 5 %}color: var(--warn);{% endif %}">
@@ -94,6 +100,17 @@
                         <div class="field">
                             <label>Stock (-1 = unlimited)</label>
                             <input type="number" name="stock" value="{{ plan.stock }}" min="-1">
+                        </div>
+
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                            <div class="field">
+                            <label>Read Mbps (0 = unlimited)</label>
+                                <input type="number" name="readbps" value="{{ plan.readbps }}" min="0">
+                            </div>
+                            <div class="field">
+                            <label>Write Mbps (0 = unlimited)</label>
+                                <input type="number" name="writebps" value="{{ plan.writebps }}" min="0">
+                            </div>
                         </div>
                         
                         <!-- Checkboxes wrapped in a subtle panel for visual grouping -->
@@ -168,6 +185,17 @@
                     <div class="field">
                         <label>Stock (-1 = unlimited)</label>
                         <input type="number" name="stock" value="-1" min="-1">
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                        <div class="field">
+                            <label>Read Mbps (0 = unlimited)</label>
+                            <input type="number" name="readbps" value="0" min="0">
+                        </div>
+                        <div class="field">
+                            <label>Write Mbps (0 = unlimited)</label>
+                            <input type="number" name="writebps" value="0" min="0">
+                        </div>
                     </div>
 
                     <div style="display:flex; justify-content: space-between; background: var(--bg-raise); padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border-soft);">

@@ -77,6 +77,12 @@
                     <div class="plan-spec"><span class="k">vCPU</span><span class="v">{{ plan.cpu }} vCore</span></div>
                     <div class="plan-spec"><span class="k">Memory</span><span class="v">{{ plan.ram }} MB</span></div>
                     <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} MB</span></div>
+                    {% if plan.readbps or plan.writebps %}
+                    <div class="plan-spec">
+                        <span class="k">Disk I/O</span>
+                        <span class="v">{% if plan.readbps %}R {{ plan.readbps }} Mbps{% endif %}{% if plan.readbps and plan.writebps %} / {% endif %}{% if plan.writebps %}W {{ plan.writebps }} Mbps{% endif %}</span>
+                    </div>
+                    {% endif %}
                     <div class="plan-spec">
                         <span class="k">Network</span>
                         <span class="v">{% if plan.ipv4 %}IPv4 + {% endif %}IPv6</span>

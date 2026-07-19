@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS plans (
     swap INTEGER NOT NULL,
     disk INTEGER NOT NULL,
 
+    readbps INTEGER NOT NULL DEFAULT 0,
+    writebps INTEGER NOT NULL DEFAULT 0,
+
     ipv4 INTEGER NOT NULL DEFAULT 0,
     ipv6 INTEGER NOT NULL DEFAULT 1,
 
@@ -368,7 +371,17 @@ CREATE INDEX IF NOT EXISTS idxlogstarget ON logs(target);
 
 # Migrations: add columns to existing tables if missing
 try:
-    cursor.execute("ALTER TABLE plans ADD COLUMN stock INTEGER NOT NULL DEFAULT -1")
+    cursor.execute("ALTER TABLE vps ADD COLUMN networkid INTEGER")
+except sqlite3.OperationalError:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE plans ADD COLUMN readbps INTEGER NOT NULL DEFAULT 0")
+except sqlite3.OperationalError:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE plans ADD COLUMN writebps INTEGER NOT NULL DEFAULT 0")
 except sqlite3.OperationalError:
     pass
 

@@ -79,23 +79,24 @@ def removeban(uuid):
 
 # --- PLAN FUNCTIONS ---
 
-def addplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1):
+def addplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1, readbps=0, writebps=0):
     with getconnection() as conn:
         conn.execute(
-            """INSERT INTO plans (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
-            (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock)
+            """INSERT INTO plans (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock, readbps, writebps) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
+            (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock, readbps, writebps)
         )
         
-def updateplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1):
+def updateplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1, readbps=0, writebps=0):
     with getconnection() as conn:
         conn.execute(
             """UPDATE plans 
                SET name = ?, cpu = ?, ram = ?, swap = ?, disk = ?, 
                    description = ?, ipv4 = ?, ipv6 = ?, price = ?, 
-                   active = ?, stock = ?, updated = CURRENT_TIMESTAMP 
+                   active = ?, stock = ?, readbps = ?, writebps = ?,
+                   updated = CURRENT_TIMESTAMP 
                WHERE uuid = ?""",
-            (name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock, uuid)
+            (name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock, readbps, writebps, uuid)
         )
 def getplan(uuid):
     with getconnection() as conn:
