@@ -4,6 +4,7 @@ import secrets
 import requests
 import toml
 import uuid
+import math
 from urllib.parse import urlencode
 from datetime import datetime
 from functools import wraps
@@ -211,6 +212,12 @@ def createvps():
             flash("No network configured for this node. Contact an admin.", "error")
             return redirect(url_for('createvps'))
         networkId = nodeNetworks[0]['id']
+
+        # Check IP availability
+        availIp = db.getavailableip(networkId)
+        if not availIp:
+            flash("No IPs available for this network. Contact an admin.", "error")
+            return redirect(url_for('createvps'))
 
         vpsUuid = str(uuid.uuid4())
         initialStatus = 'pendingpayment' if isPaid else 'creating'
@@ -423,20 +430,36 @@ def vpspanel(vpsUuid):
 @loginrequired
 def vpsaction(vpsUuid, action):
     if action not in ("start", "stop", "restart"):
-        return jsonify({"error": "Invalid action"}), 400
+        flash("Invalid action.", "error")
+        return redirect(url_for('adminvps'))
 
     vps = db.getvps(vpsUuid)
-    if not vps or vps["userid"] != g.userinfo["id"]:
-        return jsonify({"error": "VPS not found"}), 404
+    if not vps:
+        flash("VPS not found.", "error")
+        return redirect(url_for('adminvps'))
+
+    isAdmin = g.userinfo.get('role') == 'admin'
+    if not isAdmin and vps["userid"] != g.userinfo["id"]:
+        flash("VPS not found.", "error")
+        return redirect(url_for('dashboard'))
     
     if vps["status"] == "suspended":
-        return jsonify({"error": "This VPS is suspended and cannot be modified."}), 403
+        flash("This VPS is suspended.", "error")
+        referer = request.headers.get('Referer', '')
+        if 'admin' in referer and isAdmin:
+            return redirect(url_for('adminvpspanel', vpsUuid=vpsUuid))
+        return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
 
     try:
-        updated = services.performvpsaction(vps["id"], action, actorUserId=g.userinfo["id"])
-        return jsonify({"status": updated["status"]})
+        services.performvpsaction(vps["id"], action, actorUserId=g.userinfo["id"])
+        flash(f"VPS {action} successful.", "success")
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        flash(f"Action failed: {e}", "error")
+
+    referer = request.headers.get('Referer', '')
+    if 'admin' in referer and isAdmin:
+        return redirect(url_for('adminvpspanel', vpsUuid=vpsUuid))
+    return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
 
 
 @app.route("/vps/<vpsUuid>/status")
@@ -613,6 +636,50 @@ def adminvpspanel(vpsUuid):
         owner=owner,
     )
 
+@app.route("/dashboard/admin/vps/<string:vpsUuid>/delete", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminvpsdelete(vpsUuid):
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        flash("VPS not found.", "error")
+        return redirect(url_for('adminvps'))
+
+    force = request.form.get("force") == "1"
+    nodeError = None
+
+    # Try to delete on node
+    node = db.getnodebyid(vps['nodeid'])
+    if node:
+        result = services.nodeapi(node, f"/vps/{vps['hostname']}?uuid={vpsUuid}", method="DELETE")
+        if not result:
+            nodeError = "Node unreachable"
+        elif result.get("error"):
+            nodeError = result['error']
+
+    if nodeError and not force:
+        flash(f"Node error: {nodeError}. Use Force Delete to remove from DB anyway.", "error")
+        return redirect(url_for('adminvpspanel', vpsUuid=vpsUuid))
+
+    # Release assigned IP
+    db.unassignipbyvpsid(vps['id'])
+
+    # Restore plan stock
+    if vps.get('planid'):
+        with db.getconnection() as conn:
+            conn.execute("UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock >= 0", (vps['planid'],))
+
+    # Remove from DB
+    with db.getconnection() as conn:
+        conn.execute("DELETE FROM vps WHERE id = ?", (vps['id'],))
+
+    if nodeError:
+        flash(f"VPS removed from DB (node delete failed: {nodeError}).", "warning")
+    else:
+        flash("VPS deleted.", "success")
+
+    return redirect(url_for('adminvps'))
+
 @app.route("/dashboard/admin/vps/create", methods=["GET", "POST"])
 @loginrequired
 @adminrequired
@@ -661,6 +728,11 @@ def admincreatevps():
 
         if network['nodeid'] != nodeid:
             flash("Selected network is not on the assigned node.", "danger")
+            return redirect(url_for('adminvps'))
+
+        availIp = db.getavailableip(networkid)
+        if not availIp:
+            flash("No IPs available for this network. Generate more IPs first.", "danger")
             return redirect(url_for('adminvps'))
 
         try:
@@ -1088,6 +1160,153 @@ def adminnetworksdelete(netUuid):
     db.removenetwork(netUuid)
     flash("Network removed.", "warning")
     return redirect(url_for('adminnetworks'))
+
+# --- Network IP Management ---
+
+@app.route("/dashboard/admin/ips")
+@loginrequired
+@adminrequired
+def adminips():
+    page = request.args.get('page', 1, type=int)
+    q = request.args.get('q', '').strip() or None
+    allNetworks = db.listnetworks()
+
+    with db.getconnection() as conn:
+        offset = (page - 1) * 50
+        where = ""
+        params = []
+        if q:
+            where = "WHERE ni.ip LIKE ? OR nd.name LIKE ?"
+            params = [f"%{q}%", f"%{q}%"]
+        total = conn.execute(f"""
+            SELECT COUNT(*) FROM networkips ni
+            JOIN networks n ON ni.networkid = n.id
+            JOIN nodes nd ON n.nodeid = nd.id
+            {where}
+        """, params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT ni.*, n.name as network_name, nd.name as node_name, v.hostname as vps_hostname
+            FROM networkips ni
+            JOIN networks n ON ni.networkid = n.id
+            JOIN nodes nd ON n.nodeid = nd.id
+            LEFT JOIN vps v ON ni.vpsid = v.id
+            {where}
+            ORDER BY nd.name, n.name, ni.ip ASC
+            LIMIT ? OFFSET ?
+        """, params + [50, offset]).fetchall()
+        ipsList = [dict(r) for r in rows]
+
+    ipsData = {
+        "ips": ipsList,
+        "totalCount": total,
+        "currentPage": page,
+        "perPage": 50,
+        "totalPages": math.ceil(total / 50) if total else 1,
+        "hasPrev": page > 1,
+        "hasNext": (page * 50) < total,
+    }
+
+    return render_template(
+        "adminips.html",
+        ipsList=ipsList,
+        pagination=ipsData,
+        allNetworks=allNetworks,
+        search=q or '',
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
+
+@app.route("/dashboard/admin/ips/generate", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminipsgenerate():
+    networkid = request.form.get("networkid", type=int)
+    baseip = request.form.get("baseip")
+    count = request.form.get("count", type=int)
+
+    if not networkid or not baseip or not count or count < 1:
+        flash("Network, base IP, and count required.", "error")
+        return redirect(url_for('adminips'))
+
+    network = db.getnetworkbyid(networkid)
+    if not network:
+        flash("Network not found.", "error")
+        return redirect(url_for('adminips'))
+
+    isipv6 = ":" in baseip
+    generated = db.generateipsfornetwork(networkid, baseip, count, isipv6=isipv6)
+    flash(f"Generated {len(generated)} IP(s) on {network['name']}.", "success")
+    return redirect(url_for('adminips'))
+
+@app.route("/dashboard/admin/ips/delete/<string:ipUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminipdelete(ipUuid):
+    ip = db.getnetworkip(ipUuid)
+    if ip and ip['assigned']:
+        flash("Cannot delete an assigned IP. Unassign it first.", "error")
+    else:
+        db.removenetworkip(ipUuid)
+        flash("IP removed.", "warning")
+    return redirect(url_for('adminips'))
+
+@app.route("/dashboard/admin/networks/<string:netUuid>/ips")
+@loginrequired
+@adminrequired
+def adminnetworkips(netUuid):
+    network = db.getnetwork(netUuid)
+    if not network:
+        flash("Network not found.", "error")
+        return redirect(url_for('adminnetworks'))
+
+    page = request.args.get('page', 1, type=int)
+    q = request.args.get('q', '').strip() or None
+    ipsData = db.listnetworkips(network['id'], page=page, perpage=50, search=q)
+    ipStats = db.countips(network['id'])
+
+    return render_template(
+        "adminnetworkips.html",
+        network=network,
+        ipsList=ipsData['ips'],
+        pagination=ipsData,
+        ipStats=ipStats,
+        search=q or '',
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
+
+@app.route("/dashboard/admin/networks/<string:netUuid>/ips/generate", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnetworkipsgenerate(netUuid):
+    network = db.getnetwork(netUuid)
+    if not network:
+        flash("Network not found.", "error")
+        return redirect(url_for('adminnetworks'))
+
+    baseip = request.form.get("baseip")
+    count = request.form.get("count", type=int)
+
+    if not baseip or not count or count < 1:
+        flash("Base IP and count required.", "error")
+        return redirect(url_for('adminnetworkips', netUuid=netUuid))
+
+    isipv6 = ":" in baseip
+    generated = db.generateipsfornetwork(network['id'], baseip, count, isipv6=isipv6)
+    flash(f"Generated {len(generated)} IP(s).", "success")
+    return redirect(url_for('adminnetworkips', netUuid=netUuid))
+
+@app.route("/dashboard/admin/networks/<string:netUuid>/ips/delete/<string:ipUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnetworkipdelete(netUuid, ipUuid):
+    ip = db.getnetworkip(ipUuid)
+    if ip and ip['assigned']:
+        flash("Cannot delete an assigned IP. Unassign it first.", "error")
+    else:
+        db.removenetworkip(ipUuid)
+        flash("IP removed.", "warning")
+    return redirect(url_for('adminnetworkips', netUuid=netUuid))
 
 @app.route("/dashboard/admin/paymentmethods")
 @loginrequired

@@ -261,6 +261,115 @@ def countvpsbynetwork(networkid):
         row = conn.execute("SELECT COUNT(*) FROM vps WHERE networkid = ?", (networkid,)).fetchone()
         return row[0] if row else 0
 
+# --- NETWORK IP FUNCTIONS ---
+
+def addnetworkip(uuid, networkid, ip):
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO networkips (uuid, networkid, ip)
+            VALUES (?, ?, ?)
+        """, (uuid, networkid, ip))
+
+def getnetworkip(uuid):
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM networkips WHERE uuid = ?", (uuid,)).fetchone()
+        return dict(row) if row else None
+
+def removenetworkip(uuid):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM networkips WHERE uuid = ?", (uuid,))
+
+def listnetworkips(networkid, page=1, perpage=50, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = "WHERE networkid = ?"
+        params = [networkid]
+        if search:
+            where += " AND ip LIKE ?"
+            params.append(f"%{search}%")
+        total = conn.execute(f"SELECT COUNT(*) FROM networkips {where}", params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT ni.*, v.hostname as vps_hostname
+            FROM networkips ni
+            LEFT JOIN vps v ON ni.vpsid = v.id
+            {where}
+            ORDER BY ni.ip ASC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "ips": [dict(r) for r in rows],
+            "totalCount": total,
+            "currentPage": page,
+            "perPage": perpage,
+            "totalPages": math.ceil(total / perpage) if perpage else 1,
+            "hasPrev": page > 1,
+            "hasNext": (page * perpage) < total,
+        }
+
+def getavailableip(networkid):
+    """Get the first available (unassigned) IP for a network."""
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT * FROM networkips
+            WHERE networkid = ? AND assigned = 0
+            ORDER BY ip ASC
+            LIMIT 1
+        """, (networkid,)).fetchone()
+        return dict(row) if row else None
+
+def assignip(ipid, vpsid):
+    """Mark an IP as assigned to a VPS."""
+    with getconnection() as conn:
+        conn.execute("""
+            UPDATE networkips SET assigned = 1, vpsid = ? WHERE id = ?
+        """, (vpsid, ipid))
+
+def unassignip(ipid):
+    """Mark an IP as available again."""
+    with getconnection() as conn:
+        conn.execute("""
+            UPDATE networkips SET assigned = 0, vpsid = NULL WHERE id = ?
+        """, (ipid,))
+
+def unassignipbyvpsid(vpsid):
+    """Release IP when a VPS is deleted."""
+    with getconnection() as conn:
+        conn.execute("""
+            UPDATE networkips SET assigned = 0, vpsid = NULL WHERE vpsid = ?
+        """, (vpsid,))
+
+def countips(networkid):
+    with getconnection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM networkips WHERE networkid = ?", (networkid,)).fetchone()[0]
+        assigned = conn.execute("SELECT COUNT(*) FROM networkips WHERE networkid = ? AND assigned = 1", (networkid,)).fetchone()[0]
+        return {"total": total, "assigned": assigned, "available": total - assigned}
+
+def generateipsfornetwork(networkid, baseip, count, isipv6=False):
+    """Generate a range of IPs for a network."""
+    import ipaddress
+    generated = []
+    try:
+        if isipv6:
+            base = ipaddress.IPv6Address(baseip)
+        else:
+            base = ipaddress.IPv4Address(baseip)
+    except ValueError:
+        return generated
+
+    with getconnection() as conn:
+        for i in range(count):
+            ip = str(base + i)
+            ipuuid = str(uuid.uuid4())
+            try:
+                conn.execute("""
+                    INSERT INTO networkips (uuid, networkid, ip)
+                    VALUES (?, ?, ?)
+                """, (ipuuid, networkid, ip))
+                generated.append(ip)
+            except Exception:
+                continue  # Skip duplicates
+    return generated
+
 # --- VPS FUNCTIONS ---
 
 def addvps(uuid, userid, planid, imageid, nodeid, storageid, hostname, password, cpu, ram, swap, disk, status='creating', networkid=None):

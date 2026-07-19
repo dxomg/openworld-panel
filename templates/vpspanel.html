@@ -21,15 +21,15 @@
   </div>
 
   <div class="btn-row">
-    <form method="POST" action="/vps/{{ instance.id }}/start" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/action/start" style="display:inline;">
       <button type="submit" class="btn btn-primary btn-small">► Start</button>
     </form>
 
-    <form method="POST" action="/vps/{{ instance.id }}/restart" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/action/restart" style="display:inline;">
       <button type="submit" class="btn btn-small">↻ Restart</button>
     </form>
 
-    <form method="POST" action="/vps/{{ instance.id }}/stop" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/action/stop" style="display:inline;">
       <button type="submit" class="btn btn-danger btn-small">■ Stop</button>
     </form>
   </div>

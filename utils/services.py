@@ -221,15 +221,23 @@ def provisiononnode(vpsUuid):
         'apikey': vpsDetails.get('node_apikey', ''),
     }
 
-    # Get network info
+    # Get network info and assign IP from pool
     networkName = "bridge"
-    networkIp = None
+    assignedIp = None
+    assignedIpId = None
     if vps.get('networkid'):
         with db.getconnection() as conn:
             net = conn.execute("SELECT * FROM networks WHERE id = ?", (vps['networkid'],)).fetchone()
         if net:
             net = dict(net)
             networkName = net['name']
+
+        # Get an available IP from the pool
+        availIp = db.getavailableip(vps['networkid'])
+        if availIp:
+            assignedIp = availIp['ip']
+            assignedIpId = availIp['id']
+            db.assignip(availIp['id'], vps['id'])
 
     payload = {
         "uuid": vpsUuid,
@@ -238,7 +246,8 @@ def provisiononnode(vpsUuid):
         "ram": f"{vps['ram']}m",
         "swap": f"{vps['swap']}m",
         "network": networkName,
-        "dns": ["1.1.1.1", "8.8.8.8"],
+        "ip": assignedIp,
+        "dns": ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111", "2001:4860:4860::8888"],
         "image": vpsDetails['image_path'],
         "rootPassword": vps['password'],
         "readBps": vpsDetails.get('readbps', 0) or 0,
@@ -248,14 +257,20 @@ def provisiononnode(vpsUuid):
 
     result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
     if not result:
+        if assignedIpId:
+            db.unassignip(assignedIpId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Node unreachable or failed to respond")
 
     if result.get("error"):
+        if assignedIpId:
+            db.unassignip(assignedIpId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError(f"Node error: {result['error']}")
 
     if not result.get("containerId"):
+        if assignedIpId:
+            db.unassignip(assignedIpId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Node did not return a container ID")
 

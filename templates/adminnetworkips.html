@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}IP Pool - {{ network.name }} - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <a href="{{ url_for('adminnetworks') }}" class="back-link">&larr; Back to Networks</a>
+
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> {{ network.name }}</div>
+        <h1>IP Pool</h1>
+        <p>Manage IP addresses for this network. IPs are assigned to VPS instances automatically during creation.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ ipStats.total }}</div>
+                <div class="label">Total IPs</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num" style="color: var(--warn);">{{ ipStats.assigned }}</div>
+                <div class="label">Assigned</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num" style="color: var(--accent);">{{ ipStats.available }}</div>
+                <div class="label">Available</div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Addresses</h2>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminnetworkips', netUuid=network.uuid) }}" style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search IPs...">
+            </form>
+            <button onclick="openModal('generateModal')" class="btn btn-primary btn-small">+ Generate IPs</button>
+        </div>
+    </div>
+
+    {% if ipsList %}
+    <div class="vps-grid" style="grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));">
+        {% for ip in ipsList %}
+        <div class="vps-card" style="opacity: {{ '1' if ip.assigned else '0.8' }};">
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                <div>
+                    <div class="vps-hostname" style="font-family: var(--font-mono);">{{ ip.ip }}</div>
+                    <div class="vps-meta">
+                        {% if ip.assigned %}
+                            Assigned to: {{ ip.vps_hostname or 'Unknown' }}
+                        {% else %}
+                            Available
+                        {% endif %}
+                    </div>
+                </div>
+                <span class="status-pill {{ 'status-running' if not ip.assigned else 'status-creating' }}">
+                    <span class="dot"></span>{{ 'Free' if not ip.assigned else 'Used' }}
+                </span>
+            </div>
+
+            {% if not ip.assigned %}
+            <form action="{{ url_for('adminnetworkipdelete', netUuid=network.uuid, ipUuid=ip.uuid) }}" method="POST" style="margin-top: 10px;" onsubmit="return confirm('Delete this IP?');">
+                <button type="submit" class="btn btn-small btn-danger">Delete</button>
+            </form>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if pagination.totalPages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminnetworkips', netUuid=network.uuid, page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&larr; Previous</a>
+        {% endif %}
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
+        </span>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminnetworkips', netUuid=network.uuid, page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &rarr;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">&#x25CE;</div>
+        <h3>No IPs in Pool</h3>
+        <p>Generate IPs for this network to enable VPS creation.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Generate IPs Modal -->
+<div id="generateModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Generate IPs</h3>
+            <button type="button" class="modal-close" onclick="closeModal('generateModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminnetworkipsgenerate', netUuid=network.uuid) }}" method="POST">
+            <div class="field">
+                <label>Starting IP</label>
+                <input type="text" name="baseip" required placeholder="{{ network.gateway or '2a11:6c7:2200:b101::10' }}">
+                <span class="hint">First IP in the range. IPs will be generated sequentially from this address.</span>
+            </div>
+            <div class="field">
+                <label>Count</label>
+                <input type="number" name="count" required value="100" min="1" max="10000">
+                <span class="hint">Number of IPs to generate (max 10000).</span>
+            </div>
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeModal('generateModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Generate</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+</script>
+{% endblock %}

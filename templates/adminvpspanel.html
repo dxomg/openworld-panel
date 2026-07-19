@@ -21,16 +21,25 @@
   </div>
 
   <div class="btn-row">
-    <form method="POST" action="/vps/{{ instance.uuid }}/start" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/action/start" style="display:inline;">
       <button type="submit" class="btn btn-primary btn-small">► Start</button>
     </form>
 
-    <form method="POST" action="/vps/{{ instance.uuid }}/restart" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/action/restart" style="display:inline;">
       <button type="submit" class="btn btn-small">↻ Restart</button>
     </form>
 
-    <form method="POST" action="/vps/{{ instance.uuid }}/stop" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/action/stop" style="display:inline;">
       <button type="submit" class="btn btn-danger btn-small">■ Stop</button>
+    </form>
+
+    <form method="POST" action="{{ url_for('adminvpsdelete', vpsUuid=instance.uuid) }}" style="display:inline;" onsubmit="return confirm('DELETE this VPS? This will destroy the container and remove it from the database.');">
+      <button type="submit" class="btn btn-danger btn-small">Delete</button>
+    </form>
+
+    <form method="POST" action="{{ url_for('adminvpsdelete', vpsUuid=instance.uuid) }}" style="display:inline;">
+      <input type="hidden" name="force" value="1">
+      <button type="submit" class="btn btn-danger btn-small" onclick="return confirm('FORCE DELETE? This will remove the VPS from the database even if the node fails to delete the container.');" style="background: transparent; border-color: var(--danger);">Force Delete</button>
     </form>
   </div>
 </div>

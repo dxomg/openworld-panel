@@ -133,6 +133,25 @@ CREATE TABLE IF NOT EXISTS networks (
     FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS networkips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    networkid INTEGER NOT NULL,
+    ip TEXT NOT NULL,
+
+    assigned INTEGER NOT NULL DEFAULT 0
+        CHECK(assigned IN (0,1)),
+
+    vpsid INTEGER,
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(networkid) REFERENCES networks(id) ON DELETE CASCADE,
+    FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE SET NULL,
+    UNIQUE(networkid, ip)
+);
+
 CREATE TABLE IF NOT EXISTS nodestorage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL,
@@ -382,6 +401,24 @@ except sqlite3.OperationalError:
 
 try:
     cursor.execute("ALTER TABLE plans ADD COLUMN writebps INTEGER NOT NULL DEFAULT 0")
+except sqlite3.OperationalError:
+    pass
+
+try:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS networkips (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT UNIQUE NOT NULL,
+            networkid INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            assigned INTEGER NOT NULL DEFAULT 0,
+            vpsid INTEGER,
+            created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(networkid) REFERENCES networks(id) ON DELETE CASCADE,
+            FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE SET NULL,
+            UNIQUE(networkid, ip)
+        )
+    """)
 except sqlite3.OperationalError:
     pass
 
