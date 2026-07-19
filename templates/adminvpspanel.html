@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}{{ instance.hostname }} - route64{% endblock %}
+{% block title %}{{ instance.hostname }} - Admin - {{ projectname }}{% endblock %}
 
 {% block content %}
 
-<a href="{{ url_for('dashboard') }}" class="back-link">← Back to Dashboard</a>
+<a href="{{ url_for('adminvps') }}" class="back-link">← Back to All Instances</a>
 
 <div class="detail-head">
   <div class="detail-title">
@@ -21,15 +21,15 @@
   </div>
 
   <div class="btn-row">
-    <form method="POST" action="/vps/{{ instance.id }}/start" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/start" style="display:inline;">
       <button type="submit" class="btn btn-primary btn-small">► Start</button>
     </form>
 
-    <form method="POST" action="/vps/{{ instance.id }}/restart" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/restart" style="display:inline;">
       <button type="submit" class="btn btn-small">↻ Restart</button>
     </form>
 
-    <form method="POST" action="/vps/{{ instance.id }}/stop" style="display:inline;">
+    <form method="POST" action="/vps/{{ instance.uuid }}/stop" style="display:inline;">
       <button type="submit" class="btn btn-danger btn-small">■ Stop</button>
     </form>
   </div>
@@ -78,6 +78,13 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
       <h3>Instance Details</h3>
 
       <div class="kv-list">
+
+        <div class="kv-row">
+          <span class="k">Owner</span>
+          <span class="v" style="color:var(--accent);">
+            {{ owner.username if owner else 'Unknown' }} (ID: {{ owner.id if owner else '?' }})
+          </span>
+        </div>
 
         <div class="kv-row">
           <span class="k">IPv6 Address</span>
@@ -135,11 +142,11 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
 
         <div class="metric-label">
           <span>CPU ({{ instance.cpu }} vCPU)</span>
-          <span class="metric-val">--</span>
+          <span class="metric-val">{{ metric.cpu if metric else '--' }}</span>
         </div>
 
         <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
+          <div class="metric-fill" style="width:{{ metric.cpu if metric else 0 }}%;"></div>
         </div>
 
       </div>
@@ -150,11 +157,11 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
 
         <div class="metric-label">
           <span>RAM ({{ instance.ram }} MB)</span>
-          <span class="metric-val">--</span>
+          <span class="metric-val">{{ metric.ram if metric else '--' }}</span>
         </div>
 
         <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
+          <div class="metric-fill" style="width:{{ metric.ram if metric else 0 }}%;"></div>
         </div>
 
       </div>
@@ -165,11 +172,11 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
 
         <div class="metric-label">
           <span>Swap ({{ instance.swap }} MB)</span>
-          <span class="metric-val">--</span>
+          <span class="metric-val">{{ metric.swap if metric else '--' }}</span>
         </div>
 
         <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
+          <div class="metric-fill" style="width:{{ metric.swap if metric else 0 }}%;"></div>
         </div>
 
       </div>
@@ -180,11 +187,11 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
 
         <div class="metric-label">
           <span>Disk ({{ instance.disk }} MB)</span>
-          <span class="metric-val">--</span>
+          <span class="metric-val">{{ metric.disk if metric else '--' }}</span>
         </div>
 
         <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
+          <div class="metric-fill" style="width:{{ metric.disk if metric else 0 }}%;"></div>
         </div>
 
       </div>

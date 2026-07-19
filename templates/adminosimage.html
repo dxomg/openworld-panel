@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}OS Images - {{ projectname }}{% endblock %}
+
+{% block content %}
+<style>
+    .vps-grid .vps-card {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+</style>
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>OS Images</h1>
+        <p>Manage operating system templates and container images available for deployment.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ all_images|length }}</div>
+                <div class="label">Total Images</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ active_images_count }}</div>
+                <div class="label">Active</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">
+                    {% set total_usage = namespace(value=0) %}
+                    {% for img in all_images %}{% set total_usage.value = total_usage.value + img.vps_count %}{% endfor %}
+                    {{ total_usage.value }}
+                </div>
+                <div class="label">Total Deployments</div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Available OS Templates</h2>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminosimage') }}" style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search images...">
+            </form>
+            <button onclick="openModal('addImageModal')" class="btn btn-primary btn-small">+ Add Image</button>
+        </div>
+    </div>
+
+    {% if all_images %}
+    <div class="vps-grid">
+        {% for img in all_images %}
+        <div class="vps-card">
+            {% set s_class = 'status-running' if img.active else 'status-unknown' %}
+            <span class="status-pill {{ s_class }}">
+                <span class="dot"></span>{{ 'Public' if img.active else 'Hidden' }}
+            </span>
+
+            <div class="vps-id">
+                <div class="vps-hostname">{{ img.name }}</div>
+                <div class="vps-meta">Tag: {{ img.image }}</div>
+            </div>
+
+            <p style="font-size: 0.85rem; color: #888; margin: 8px 0;">{{ img.description or 'No description provided.' }}</p>
+
+            <div class="vps-specs">
+                <span><span class="spec-val">{{ img.vps_count }}</span> active instances</span>
+            </div>
+
+            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+                <button class="btn btn-small"
+                    onclick="openEditModal('{{ img|tojson|forceescape }}')">Edit</button>
+
+                <form action="{{ url_for('adminosimagedelete', image_uuid=img.uuid) }}" method="POST" onsubmit="return confirm('Delete this image? Existing VPS instances using this image will remain in the database but may face issues if reinstalled.');">
+                    <button type="submit" class="btn btn-small btn-danger">Remove</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if pagination.total_pages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if pagination.has_prev %}
+        <a href="{{ url_for('adminosimage', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% endif %}
+        
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+        </span>
+
+        {% if pagination.has_next %}
+        <a href="{{ url_for('adminosimage', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">💿</div>
+        <h3>No OS Images Found</h3>
+        <p>Add your first OS image (e.g., Ubuntu, Debian) to allow users to deploy instances.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- ===== Add Image Modal ===== -->
+<div id="addImageModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add OS Image</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addImageModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminosimagecreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Friendly Name</label>
+                <input type="text" name="name" required placeholder="Ubuntu 22.04 LTS">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Image Tag / Path</label>
+                <input type="text" name="image" required placeholder="ubuntu-22.04">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Description</label>
+                <textarea name="description" placeholder="Standard Ubuntu Jammy Jellyfish image..."></textarea>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Status</label>
+                <select name="active">
+                    <option value="1">Active (Available for users)</option>
+                    <option value="0">Hidden</option>
+                </select>
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addImageModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add OS Image</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== Edit Image Modal ===== -->
+<div id="editImageModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Update OS Image</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editImageModal')">&times;</button>
+        </div>
+        <form id="editImageForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Friendly Name</label>
+                <input type="text" name="name" id="edit_name" required>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Image Tag / Path</label>
+                <input type="text" name="image" id="edit_image" required>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Description</label>
+                <textarea name="description" id="edit_description"></textarea>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Status</label>
+                <select name="active" id="edit_active">
+                    <option value="1">Active</option>
+                    <option value="0">Hidden</option>
+                </select>
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editImageModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+
+    function openEditModal(imgData) {
+        const img = JSON.parse(imgData);
+        const form = document.getElementById('editImageForm');
+
+        let baseUrl = "{{ url_for('adminosimageupdate', image_uuid='UUID_PLACEHOLDER') }}";
+        form.action = baseUrl.replace('UUID_PLACEHOLDER', img.uuid);
+
+        document.getElementById('edit_name').value = img.name;
+        document.getElementById('edit_image').value = img.image;
+        document.getElementById('edit_description').value = img.description || "";
+        document.getElementById('edit_active').value = img.active ? "1" : "0";
+
+        openModal('editImageModal');
+    }
+</script>
+{% endblock %}

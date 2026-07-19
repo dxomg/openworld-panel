@@ -3,6 +3,12 @@
 {% block title %}Payment Methods - {{ projectname }}{% endblock %}
 
 {% block content %}
+<style>
+    .vps-grid .vps-card {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+</style>
 <div class="page">
     <section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
@@ -31,7 +37,12 @@
 
     <div class="section-head" style="margin-top: 48px;">
         <h2>Registered Processors</h2>
-        <button onclick="openModal('addProcessorModal')" class="btn btn-primary btn-small">+ Add Payment Method</button>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminpaymentmethods') }}" style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search methods...">
+            </form>
+            <button onclick="openModal('addProcessorModal')" class="btn btn-primary btn-small">+ Add Payment Method</button>
+        </div>
     </div>
 
     {% if allpaymentmethods %}
@@ -67,6 +78,23 @@
         </div>
         {% endfor %}
     </div>
+
+    {% if pagination.total_pages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if pagination.has_prev %}
+        <a href="{{ url_for('adminpaymentmethods', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% endif %}
+        
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+        </span>
+
+        {% if pagination.has_next %}
+        <a href="{{ url_for('adminpaymentmethods', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
     {% else %}
     <div class="empty-state">
         <div class="glyph">💳</div>

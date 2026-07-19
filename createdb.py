@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS plans (
 
     price REAL NOT NULL DEFAULT 0,
 
+    stock INTEGER NOT NULL DEFAULT -1,
+
     active INTEGER NOT NULL DEFAULT 1
         CHECK(active IN (0,1)),
 
@@ -152,6 +154,7 @@ CREATE TABLE IF NOT EXISTS vps (
             'stopped',
             'restarting',
             'suspended',
+            'pendingpayment',
             'deleted',
             'error'
         )),
@@ -249,6 +252,7 @@ CREATE TABLE IF NOT EXISTS receipts (
 
     billingname TEXT,
     billingemail TEXT,
+    billingaddress TEXT,
 
     notes TEXT,
 
@@ -341,6 +345,12 @@ CREATE INDEX IF NOT EXISTS idxlogsuser ON logs(userid);
 CREATE INDEX IF NOT EXISTS idxlogstarget ON logs(target);
 
 """)
+
+# Migrations: add columns to existing tables if missing
+try:
+    cursor.execute("ALTER TABLE plans ADD COLUMN stock INTEGER NOT NULL DEFAULT -1")
+except sqlite3.OperationalError:
+    pass  # column already exists
 
 conn.commit()
 conn.close()

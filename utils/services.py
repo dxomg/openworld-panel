@@ -1,6 +1,9 @@
 import uuid
 import secrets
 import requests
+import random
+import string
+import math
 from datetime import datetime, timedelta, timezone
 from core import db
 
@@ -112,20 +115,40 @@ def find_or_create_discord_user(discord_id, email, username, profile_pic):
 
 # --- VPS & RESOURCE SERVICES ---
 
-def list_vps_for_user_panel(user_id, per_page=100):
-    """Returns a list of VPSs owned by the user with plan details."""
+def list_vps_for_user_panel(user_id, page=1, per_page=10, search=None):
+    """Returns a paginated list of VPSs owned by the user with plan details."""
     with db.getconnection() as conn:
-        # We perform a join here because the panel needs Plan Names/Resources
-        query = """
+        offset = (page - 1) * per_page
+        where = "WHERE v.userid = ?"
+        params = [user_id]
+
+        if search:
+            where += " AND (v.hostname LIKE ? OR v.ipv6 LIKE ? OR v.status LIKE ?)"
+            s = f"%{search}%"
+            params.extend([s, s, s])
+
+        total_row = conn.execute(f"SELECT COUNT(*) AS cnt FROM vps v {where}", params).fetchone()
+        total = total_row["cnt"] if total_row else 0
+
+        query = f"""
             SELECT v.*, p.name as plan_name, i.name as image_name 
             FROM vps v
             JOIN plans p ON v.planid = p.id
             JOIN images i ON v.imageid = i.id
-            WHERE v.userid = ?
-            LIMIT ?
+            {where}
+            ORDER BY v.created DESC
+            LIMIT ? OFFSET ?
         """
-        rows = conn.execute(query, (user_id, per_page)).fetchall()
-        return [dict(r) for r in rows]
+        rows = conn.execute(query, params + [per_page, offset]).fetchall()
+        return {
+            "vps": [dict(r) for r in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": per_page,
+            "total_pages": math.ceil(total / per_page) if per_page else 1,
+            "has_prev": page > 1,
+            "has_next": (page * per_page) < total,
+        }
 
 def provision_vps(user_id, plan_id, image_id, hostname):
     """
@@ -221,3 +244,12 @@ def get_latest_vps_metric(vps_id):
 def list_firewall_rules_for_vps(vps_id):
     """Placeholder for firewall logic."""
     return []
+
+def generate_random_hostname():
+    suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+    return f"vps-{suffix}"
+
+def generate_random_password():
+    # Generates a 12-character secure password
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choices(chars, k=12))

@@ -1,6 +1,7 @@
 import sqlite3
 import math
 import uuid
+import random
 
 def getconnection():
     conn = sqlite3.connect("database.db")
@@ -78,26 +79,23 @@ def removeban(uuid):
 
 # --- PLAN FUNCTIONS ---
 
-def addplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1):
+def addplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1):
     with getconnection() as conn:
         conn.execute(
-            """INSERT INTO plans (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
-            (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active)
+            """INSERT INTO plans (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
+            (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock)
         )
         
-def updateplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1):
-    """
-    Updates an existing plan by its UUID.
-    """
+def updateplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1):
     with getconnection() as conn:
         conn.execute(
             """UPDATE plans 
                SET name = ?, cpu = ?, ram = ?, swap = ?, disk = ?, 
                    description = ?, ipv4 = ?, ipv6 = ?, price = ?, 
-                   active = ?, updated = CURRENT_TIMESTAMP 
+                   active = ?, stock = ?, updated = CURRENT_TIMESTAMP 
                WHERE uuid = ?""",
-            (name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, uuid)
+            (name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock, uuid)
         )
 def getplan(uuid):
     with getconnection() as conn:
@@ -115,6 +113,19 @@ def listplans(active=None):
 def removeplan(uuid):
     with getconnection() as conn:
         conn.execute("DELETE FROM plans WHERE uuid = ?", (uuid,))
+
+def decrementplanstock(planid):
+    """Decrements stock by 1. Returns True if stock was available, False if out of stock."""
+    with getconnection() as conn:
+        row = conn.execute("SELECT stock FROM plans WHERE id = ?", (planid,)).fetchone()
+        if not row:
+            return False
+        stock = row['stock']
+        if stock == 0:
+            return False
+        if stock > 0:
+            conn.execute("UPDATE plans SET stock = stock - 1, updated = CURRENT_TIMESTAMP WHERE id = ?", (planid,))
+        return True  # stock == -1 means unlimited
 
 # --- IMAGE FUNCTIONS ---
 
@@ -218,49 +229,47 @@ def getvpsbyid(vpsid):
     
 #Web shit
 
-def listuserspaginated(page=1, perpage=20):
+def listuserspaginated(page=1, perpage=20, search=None):
     offset = (page - 1) * perpage
+    where = ""
+    params = []
+    if search:
+        where = "WHERE username LIKE ? OR email LIKE ? OR role LIKE ? OR status LIKE ?"
+        s = f"%{search}%"
+        params = [s, s, s, s]
+
     with getconnection() as conn:
-        # Get the total count of users first
-        total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        # Get the users for the current page
+        total_users = conn.execute(f"SELECT COUNT(*) FROM users {where}", params).fetchone()[0]
         cursor = conn.execute(
-            """
+            f"""
             SELECT id, uuid, discordid, username, email, role, status, verified, created
             FROM users 
+            {where}
             ORDER BY created DESC
             LIMIT ? OFFSET ?
             """, 
-            (perpage, offset)
+            params + [perpage, offset]
         )
         users = [dict(row) for row in cursor.fetchall()]
 
-    # Attach the most recent ban record for banned users
     for user in users:
         if user["status"] == "banned":
             user["active_ban"] = getbanbyuserid(user["id"])
         else:
             user["active_ban"] = None
 
-    # Return everything the template needs
     return {
         "users": users,
         "current_page": page,
-        "total_pages": math.ceil(total_users / perpage),
+        "total_pages": math.ceil(total_users / perpage) if total_users else 1,
         "has_next": page < math.ceil(total_users / perpage),
         "has_prev": page > 1
     }
-def listvpspaginated(page=1, perpage=20, userid=None):
-    """
-    Lists VPS instances with pagination.
-    Optional: pass a userid to list only VPSs belonging to a specific user.
-    """
+def listvpspaginated(page=1, perpage=20, userid=None, search=None):
     offset = (page - 1) * perpage
     
     with getconnection() as conn:
-        # 1. Build the base queries
-        # We join with users, plans, nodes, and images to get readable names
-        count_query = "SELECT COUNT(*) FROM vps"
+        base_count = "SELECT COUNT(*) FROM vps v"
         data_query = """
             SELECT 
                 v.*, 
@@ -276,27 +285,30 @@ def listvpspaginated(page=1, perpage=20, userid=None):
         """
         
         params = []
-        where_clause = ""
+        conditions = []
+        joins = ""
         
-        # 2. Handle optional filtering by User ID (useful for the user dashboard)
         if userid:
-            where_clause = " WHERE v.userid = ?"
+            conditions.append("v.userid = ?")
             params.append(userid)
         
-        # 3. Get total count for pagination math
-        total_vps = conn.execute(count_query + where_clause, params).fetchone()[0]
+        if search:
+            joins = " JOIN users u ON v.userid = u.id JOIN nodes n ON v.nodeid = n.id"
+            conditions.append("(v.hostname LIKE ? OR v.ipv6 LIKE ? OR u.username LIKE ? OR v.status LIKE ? OR n.name LIKE ?)")
+            s = f"%{search}%"
+            params.extend([s, s, s, s, s])
+
+        where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         
-        # 4. Get the actual data
+        total_vps = conn.execute(base_count + joins + where_clause, params).fetchone()[0]
+        
         final_query = data_query + where_clause + " ORDER BY v.created DESC LIMIT ? OFFSET ?"
         cursor = conn.execute(final_query, params + [perpage, offset])
         
-        # Convert rows to dictionaries
         vps_list = [dict(row) for row in cursor.fetchall()]
 
-    # 5. Attach suspension details if the status is 'suspended'
     for vps in vps_list:
         if vps["status"] == "suspended":
-            # You would need a helper function similar to your getbanbyuserid
             vps["suspension_details"] = getsuspensionbyvpsid(vps["id"])
         else:
             vps["suspension_details"] = None
@@ -451,9 +463,71 @@ def geteligibletransactions():
             ORDER BY transactions.created DESC
         """).fetchall()
 
+def listtransactionspaginated(page=1, perpage=12, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE t.transactionid LIKE ? OR u.username LIKE ? OR t.status LIKE ? OR t.amount LIKE ? OR pm.name LIKE ?"
+            s = f"%{search}%"
+            params = [s, s, s, s, s]
+        total_row = conn.execute(f"SELECT COUNT(*) AS cnt FROM transactions t JOIN users u ON u.id = t.userid LEFT JOIN paymentmethods pm ON pm.id = t.paymentprocessorid {where}", params).fetchone()
+        total = total_row["cnt"] if total_row else 0
+        rows = conn.execute(f"""
+            SELECT t.*, u.username AS owner_name,
+                   pm.name AS payment_method_name
+            FROM transactions t
+            JOIN users u ON u.id = t.userid
+            LEFT JOIN paymentmethods pm ON pm.id = t.paymentprocessorid
+            {where}
+            ORDER BY t.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "transactions": [dict(row) for row in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": perpage,
+            "total_pages": math.ceil(total / perpage) if perpage else 1,
+            "has_prev": page > 1,
+            "has_next": (page * perpage) < total,
+        }
+
 def gettransaction(tid):
     with getconnection() as conn:
         row = conn.execute("SELECT id, userid, status FROM transactions WHERE id = ?", (tid,)).fetchone()
+        return dict(row) if row else None
+
+def gettransactionbyuuid(uuid):
+    with getconnection() as conn:
+        row = conn.execute("SELECT id, userid, status FROM transactions WHERE uuid = ?", (uuid,)).fetchone()
+        return dict(row) if row else None
+
+def addtransaction(uuid, userid, transactionid, amount, currency, status, paymentprocessorid, vpsid=None, planid=None):
+    with getconnection() as conn:
+        cur = conn.execute("""
+            INSERT INTO transactions (uuid, userid, transactionid, amount, currency, status, paymentprocessorid, vpsid, planid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (uuid, userid, transactionid, amount, currency, status, paymentprocessorid, vpsid, planid))
+        txn_id = cur.lastrowid
+
+        # Auto-generate receipt for completed transactions
+        if status == "completed" and txn_id:
+            user = conn.execute("SELECT username, email FROM users WHERE id = ?", (userid,)).fetchone()
+            receipt_count = conn.execute("SELECT COUNT(*) FROM receipts").fetchone()[0]
+            receipt_number = f"RCP-{(receipt_count + 1):06d}"
+            conn.execute("""
+                INSERT INTO receipts (uuid, receiptnumber, transactionid, userid, amount, currency,
+                                    taxamount, billingname, billingemail, billingaddress, notes)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)
+            """, (str(uuid.uuid4()), receipt_number, txn_id, userid, float(amount), currency,
+                  user['username'] if user else None, user['email'] if user else None,
+                  f"Auto-generated for transaction {transactionid}"))
+
+def getpaymentmethodbyslug(slug):
+    with getconnection() as conn:
+        row = conn.execute("SELECT id FROM paymentmethods WHERE slug = ?", (slug,)).fetchone()
         return dict(row) if row else None
 
 def getreceiptbytransaction(tid):
@@ -487,3 +561,272 @@ def updatereceipt(uuid, data):
 def deletereceipt(uuid):
     with getconnection() as conn:
         conn.execute("DELETE FROM receipts WHERE uuid = ?", (uuid,))
+
+def generate_receipt_number():
+    with getconnection() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM receipts").fetchone()
+        count = (row[0] if row else 0) + 1
+        return f"RCP-{count:06d}"
+
+def gettransactionfull(tid):
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT t.*, u.username, pm.name as payment_method_name
+            FROM transactions t
+            JOIN users u ON u.id = t.userid
+            LEFT JOIN paymentmethods pm ON pm.id = t.paymentprocessorid
+            WHERE t.id = ?
+        """, (tid,)).fetchone()
+        return dict(row) if row else None
+
+
+def addnodesstorage(uuid, nodeid, name, path, type, size):
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO nodestorage (uuid, nodeid, name, path, type, size)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (uuid, nodeid, name, path, type, size))
+
+def listallnodesstorage():
+    with getconnection() as conn:
+        rows = conn.execute("""
+            SELECT s.*, n.name as node_name 
+            FROM nodestorage s
+            JOIN nodes n ON s.nodeid = n.id
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def updatenodesstorage(uuid, **kwargs):
+    with getconnection() as conn:
+        keys = [f"{k} = ?" for k in kwargs.keys()]
+        values = list(kwargs.values()) + [uuid]
+        conn.execute(f"UPDATE nodestorage SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
+
+def removenodesstorage(uuid):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM nodestorage WHERE uuid = ?", (uuid,))
+
+def get_suitable_node_and_storage(plan_price):
+    # Determine tier based on price
+    required_tier = 'paid' if plan_price > 0 else 'free'
+    
+    with getconnection() as conn:
+        # Find nodes of the correct tier that are 'online'
+        nodes = conn.execute(
+            "SELECT id FROM nodes WHERE tier = ? AND status = 'online'", 
+            (required_tier,)
+        ).fetchall()
+        
+        if not nodes:
+            return None, None
+            
+        # Pick a random node from the available ones
+        node = random.choice(nodes)
+        
+        # Find a storage unit on that node
+        storage = conn.execute(
+            "SELECT id FROM nodestorage WHERE nodeid = ?", 
+            (node['id'],)
+        ).fetchone()
+        
+        return node['id'], (storage['id'] if storage else None)
+    
+def listallimages():
+    with getconnection() as conn:
+        # Join with a count of VPS instances currently using that image
+        rows = conn.execute("""
+            SELECT i.*, 
+            (SELECT COUNT(*) FROM vps WHERE imageid = i.id) as vps_count
+            FROM images i
+            ORDER BY i.created DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def addimage(uuid, name, image, description, active):
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO images (uuid, name, image, description, active)
+            VALUES (?, ?, ?, ?, ?)
+        """, (uuid, name, image, description, active))
+
+def updateimage(uuid, **kwargs):
+    with getconnection() as conn:
+        keys = [f"{k} = ?" for k in kwargs.keys()]
+        values = list(kwargs.values()) + [uuid]
+        conn.execute(f"UPDATE images SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
+
+def removeimage(uuid):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM images WHERE uuid = ?", (uuid,))
+
+
+# --- PAGINATED LIST FUNCTIONS ---
+
+def listplanspaginated(page=1, perpage=12, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE name LIKE ? OR description LIKE ?"
+            s = f"%{search}%"
+            params = [s, s]
+        total = conn.execute(f"SELECT COUNT(*) FROM plans {where}", params).fetchone()[0]
+        rows = conn.execute(f"SELECT * FROM plans {where} ORDER BY created DESC LIMIT ? OFFSET ?", params + [perpage, offset]).fetchall()
+        return {
+            "plans": [dict(r) for r in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": perpage,
+            "total_pages": math.ceil(total / perpage) if perpage else 1,
+            "has_prev": page > 1,
+            "has_next": (page * perpage) < total,
+        }
+
+def listimagespaginated(page=1, perpage=12, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE i.name LIKE ? OR i.image LIKE ? OR i.description LIKE ?"
+            s = f"%{search}%"
+            params = [s, s, s]
+        total = conn.execute(f"SELECT COUNT(*) FROM images i {where}", params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT i.*, 
+            (SELECT COUNT(*) FROM vps WHERE imageid = i.id) as vps_count
+            FROM images i
+            {where}
+            ORDER BY i.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "images": [dict(r) for r in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": perpage,
+            "total_pages": math.ceil(total / perpage) if perpage else 1,
+            "has_prev": page > 1,
+            "has_next": (page * perpage) < total,
+        }
+
+def listnodespaginated(page=1, perpage=12, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE n.name LIKE ? OR n.hostname LIKE ? OR n.address LIKE ? OR n.status LIKE ? OR n.tier LIKE ?"
+            s = f"%{search}%"
+            params = [s, s, s, s, s]
+        total = conn.execute(f"SELECT COUNT(*) FROM nodes n {where}", params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT n.*, 
+            (SELECT COUNT(*) FROM vps WHERE nodeid = n.id) as vps_count
+            FROM nodes n
+            {where}
+            ORDER BY n.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "nodes": [dict(r) for r in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": perpage,
+            "total_pages": math.ceil(total / perpage) if perpage else 1,
+            "has_prev": page > 1,
+            "has_next": (page * perpage) < total,
+        }
+
+def listpaymentmethodspaginated(page=1, perpage=12, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE p.name LIKE ? OR p.slug LIKE ?"
+            s = f"%{search}%"
+            params = [s, s]
+        total = conn.execute(f"SELECT COUNT(*) FROM paymentmethods p {where}", params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT p.*,
+                   COUNT(t.id) AS transaction_count,
+                   COALESCE(SUM(CASE WHEN t.status = 'completed' THEN t.amount ELSE 0 END), 0) AS total_amount
+            FROM paymentmethods p
+            LEFT JOIN transactions t ON t.paymentprocessorid = p.id
+            {where}
+            GROUP BY p.id
+            ORDER BY p.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "methods": [dict(r) for r in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": perpage,
+            "total_pages": math.ceil(total / perpage) if perpage else 1,
+            "has_prev": page > 1,
+            "has_next": (page * perpage) < total,
+        }
+
+def listnodesstoragepaginated(page=1, perpage=12, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE s.name LIKE ? OR s.path LIKE ? OR s.type LIKE ? OR n.name LIKE ?"
+            s = f"%{search}%"
+            params = [s, s, s, s]
+        total = conn.execute(f"SELECT COUNT(*) FROM nodestorage s JOIN nodes n ON s.nodeid = n.id {where}", params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT s.*, n.name as node_name 
+            FROM nodestorage s
+            JOIN nodes n ON s.nodeid = n.id
+            {where}
+            ORDER BY s.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "storage": [dict(r) for r in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": perpage,
+            "total_pages": math.ceil(total / perpage) if perpage else 1,
+            "has_prev": page > 1,
+            "has_next": (page * perpage) < total,
+        }
+
+def listreceiptspaginated(page=1, perpage=12, search=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE receipts.receiptnumber LIKE ? OR receipts.billingname LIKE ? OR receipts.billingemail LIKE ? OR users.username LIKE ? OR receipts.currency LIKE ?"
+            s = f"%{search}%"
+            params = [s, s, s, s, s]
+        total = conn.execute(f"""
+            SELECT COUNT(*) FROM receipts
+            JOIN users ON users.id = receipts.userid
+            {where}
+        """, params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT receipts.*, users.username, transactions.transactionid AS txn_public_id
+            FROM receipts
+            JOIN users ON users.id = receipts.userid
+            LEFT JOIN transactions ON transactions.id = receipts.transactionid
+            {where}
+            ORDER BY receipts.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "receipts": [dict(r) for r in rows],
+            "total_count": total,
+            "current_page": page,
+            "per_page": perpage,
+            "total_pages": math.ceil(total / perpage) if perpage else 1,
+            "has_prev": page > 1,
+            "has_next": (page * perpage) < total,
+        }

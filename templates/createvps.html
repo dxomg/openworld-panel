@@ -2,106 +2,175 @@
 {% block title %}Create VPS · route64{% endblock %}
 
 {% block content %}
+<style>
+    /* Badge styling for Free/Paid tiers */
+    .tier-badge {
+        font-size: 10px;
+        text-transform: uppercase;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: bold;
+        margin-left: 8px;
+    }
+    .tier-free { background: rgba(255,255,255,0.1); color: #888; border: 1px solid #444; }
+    .tier-paid { background: rgba(255,215,0,0.1); color: #ffd700; border: 1px solid #ffd700; }
+    
+    /* Plan card button resets */
+    .plan-card-btn {
+        background: none;
+        border: none;
+        padding: 0;
+        width: 100%;
+        display: block;
+        text-align: left;
+        cursor: pointer;
+        color: inherit;
+        transition: transform 0.2s;
+    }
+    .plan-card-btn:hover { transform: translateY(-3px); }
 
-<a href="{{ url_for('dashboard') }}" class="back-link">← Back to dashboard</a>
+    /* Modal field styling */
+    .field label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: bold;
+        font-size: 0.9rem;
+        color: #888;
+    }
+</style>
 
-<div class="hero">
-  <div class="hero-eyebrow">
-    <span class="pulse-dot"></span> New instance
-  </div>
+<div class="page">
+    <a href="{{ url_for('dashboard') }}" class="back-link">← Back to dashboard</a>
 
-  <h1>Deploy a VPS</h1>
-  <p>Select a VPS plan to deploy your instance.</p>
+    <div class="hero">
+        <div class="hero-eyebrow">
+            <span class="pulse-dot"></span> New instance
+        </div>
+        <h1>Deploy a VPS</h1>
+        <p>Select a VPS plan. Instances are automatically balanced across our available nodes based on tier availability.</p>
+    </div>
+
+    <div class="section-head">
+        <h2>Available Plans</h2>
+    </div>
+
+    <div class="plan-grid">
+        {% for plan in plans_list %} 
+        <button type="button" class="plan-card-btn" onclick="openDeployModal('{{ plan|tojson|forceescape }}')" {% if plan.stock == 0 %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}>
+            <div class="plan-card">
+                <div class="plan-card-head">
+                    <div class="plan-name">
+                        {{ plan.name }}
+                        {% if plan.price == 0 %}
+                            <span class="tier-badge tier-free">Free Tier</span>
+                        {% else %}
+                            <span class="tier-badge tier-paid">Premium</span>
+                        {% endif %}
+                    </div>
+                    <div class="plan-price">
+                        {% if plan.price == 0 %}Free{% else %}${{ "%.2f"|format(plan.price) }}/mo{% endif %}
+                    </div>
+                </div>
+
+                <div class="plan-specs">
+                    <div class="plan-spec"><span class="k">vCPU</span><span class="v">{{ plan.cpu }} vCore</span></div>
+                    <div class="plan-spec"><span class="k">Memory</span><span class="v">{{ plan.ram }} MB</span></div>
+                    <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} MB</span></div>
+                    <div class="plan-spec">
+                        <span class="k">Network</span>
+                        <span class="v">{% if plan.ipv4 %}IPv4 + {% endif %}IPv6</span>
+                    </div>
+                    <div class="plan-spec">
+                        <span class="k">Stock</span>
+                        <span class="v" style="{% if plan.stock == 0 %}color: var(--danger);{% elif plan.stock > 0 and plan.stock <= 5 %}color: var(--warn);{% endif %}">
+                            {% if plan.stock == -1 %}Unlimited{% elif plan.stock == 0 %}Out of stock{% else %}{{ plan.stock }} left{% endif %}
+                        </span>
+                    </div>
+                </div>
+
+                <div class="plan-cta">
+                    {% if plan.price > 0 %}Continue to Checkout →{% else %}Deploy Free VPS →{% endif %}
+                </div>
+            </div>
+        </button>
+        {% endfor %}
+    </div>
 </div>
 
-<div class="section-head">
-  <h2>Available Plans</h2>
+<!-- Deployment Modal -->
+<div id="deployModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Finalize Deployment</h3>
+            <button type="button" class="modal-close" onclick="closeModal('deployModal')">&times;</button>
+        </div>
+        
+        <form action="{{ url_for('createvps') }}" method="POST">
+            <!-- Hidden Plan ID -->
+            <input type="hidden" name="plan_id" id="modal_plan_id">
+
+            <div class="field" style="margin-bottom: 20px;">
+                <label>Selected Configuration</label>
+                <div id="modal_plan_display" style="font-size: 1.2rem; font-weight: bold; color: var(--accent);"></div>
+            </div>
+
+            <div class="field">
+                <label>Operating System (Image)</label>
+                <select name="image_id" required style="width: 100%; padding: 12px; border-radius: 8px; background: #222; border: 1px solid #444; color: white;">
+                    <option value="" disabled selected>Select an OS image...</option>
+                    {% for img in images %}
+                        <option value="{{ img.id }}">{{ img.name }}</option>
+                    {% endfor %}
+                </select>
+                <p style="margin-top: 10px; font-size: 0.8rem; color: #666;">
+                    Hostname and password will be generated automatically and shown after deployment.
+                </p>
+            </div>
+
+            <div class="modal-actions" style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" class="btn" onclick="closeModal('deployModal')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submit-btn">Launch Instance</button>
+            </div>
+        </form>
+    </div>
 </div>
 
-<div class="plan-grid">
+<script>
+    function openModal(id) { 
+        document.getElementById(id).classList.add('is-open'); 
+    }
+    
+    function closeModal(id) { 
+        document.getElementById(id).classList.remove('is-open'); 
+    }
 
-{% for plan in vpsplans %}
+    /**
+     * Handles the opening of the modal and dynamically updates UI
+     * based on the plan price (Paid vs Free).
+     */
+    function openDeployModal(planJson) {
+        const plan = JSON.parse(planJson);
+        
+        // Populate Hidden Field and Display Name
+        document.getElementById('modal_plan_id').value = plan.id;
+        document.getElementById('modal_plan_display').innerText = `${plan.name} ($${plan.price.toFixed(2)}/mo)`;
+        
+        // Dynamically change button text based on price
+        const btn = document.getElementById('submit-btn');
+        if (plan.price > 0) {
+            btn.innerText = "Proceed to Checkout →";
+        } else {
+            btn.innerText = "Launch Free Instance →";
+        }
+        
+        openModal('deployModal');
+    }
 
-<form method="POST" action="{{ url_for('createvps') }}">
-
-  <input type="hidden" name="plan_id" value="{{ plan.id }}">
-
-  <button type="submit"
-          class="plan-card"
-          style="border:none;text-align:left;width:100%;cursor:pointer;">
-
-    <div class="plan-card-head">
-      <div class="plan-name">
-        {{ plan.name }}
-      </div>
-      <div class="plan-price">
-        ${{ plan.price }}/month
-      </div>
-    </div>
-
-    <div class="plan-specs">
-
-      <div class="plan-spec">
-        <span class="k">vCPU</span>
-        <span class="v">
-          {{ plan.cpu }} vCore
-        </span>
-      </div>
-
-      <div class="plan-spec">
-        <span class="k">Memory</span>
-        <span class="v">
-          {{ plan.ram }} MB
-        </span>
-      </div>
-
-      <div class="plan-spec">
-        <span class="k">Disk</span>
-        <span class="v">
-          {{ plan.disk }} MB
-        </span>
-      </div>
-
-      <div class="plan-spec">
-        <span class="k">Swap</span>
-        <span class="v">
-          {{ plan.swap }} MB
-        </span>
-      </div>
-
-      <div class="plan-spec">
-        <span class="k">IP Type</span>
-        <span class="v">
-          {% if plan.ipv4|int == 1 and plan.ipv6|int == 1 %}
-            IPv4, IPv6
-          {% elif plan.ipv6|int == 1 %}
-            IPv6
-          {% elif plan.ipv4|int == 1 %}
-            IPv4
-          {% else %}
-            None
-          {% endif %}
-        </span>
-      </div>
-
-    </div>
-
-    {% if plan.description %}
-    <div class="plan-description">
-      {{ plan.description }}
-    </div>
-    {% endif %}
-
-    <div class="plan-cta">
-      Deploy VPS →
-    </div>
-
-  </button>
-
-</form>
-
-{% endfor %}
-
-</div>
-
+    // Close modal if user clicks backdrop
+    window.onclick = function(event) {
+        if (event.target.classList.contains('modal-backdrop')) {
+            event.target.classList.remove('is-open');
+        }
+    }
+</script>
 {% endblock %}

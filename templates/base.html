@@ -45,8 +45,10 @@
         <a href="{{ url_for('adminplans') }}" class="btn {{ 'active' if request.endpoint == 'adminplans' else '' }}">Plans</a>
         <a href="{{ url_for('adminnodes') }}" class="btn {{ 'active' if request.endpoint == 'adminnodes' else '' }}">Nodes</a>
         <a href="{{ url_for('adminnodesstorage') }}" class="btn {{ 'active' if request.endpoint == 'adminnodesstorage' else '' }}">Nodes Storage</a>
+        <a href="{{ url_for('adminosimage') }}" class="btn {{ 'active' if request.endpoint == 'adminosimage' else '' }}">OS Images</a>
         <a href="{{ url_for('adminpaymentmethods') }}" class="btn {{ 'active' if request.endpoint == 'adminpaymentmethods' else '' }}">Payment Methods</a>
         <a href="{{ url_for('adminreceipts') }}" class="btn {{ 'active' if request.endpoint == 'adminreceipts' else '' }}">Admin Receipts</a>
+        <a href="{{ url_for('admintransactions') }}" class="btn {{ 'active' if request.endpoint == 'admintransactions' else '' }}">Transactions</a>
         <a href="{{ url_for('dashboard') }}" class="btn">Exit Admin</a>
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
     {% endif %}
@@ -77,6 +79,55 @@
     function toggleMenu() {
         document.querySelector('.topnav').classList.toggle('is-open');
     }
+
+    // === Foolproof UI Utilities ===
+
+    // Close any open modal on Escape
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-backdrop.is-open').forEach(function(m) {
+                m.classList.remove('is-open');
+            });
+        }
+    });
+
+    // Close modal on backdrop click
+    document.addEventListener('click', function(e) {
+        if (e.target.classList.contains('modal-backdrop')) {
+            e.target.classList.remove('is-open');
+        }
+    });
+
+    // Loading state: disable submit button, show spinner text
+    document.addEventListener('submit', function(e) {
+        var form = e.target;
+        var btn = form.querySelector('button[type="submit"]');
+        if (btn && !btn.disabled) {
+            btn.disabled = true;
+            btn.setAttribute('data-original-text', btn.innerHTML);
+            btn.innerHTML = '<span class="spinner"></span> Please wait...';
+            setTimeout(function() {
+                btn.disabled = false;
+                btn.innerHTML = btn.getAttribute('data-original-text') || btn.innerHTML;
+            }, 10000);
+        }
+    });
+
+    // Copy-to-clipboard: add data-copy to any element, copies its textContent
+    document.addEventListener('click', function(e) {
+        var el = e.target.closest('[data-copy]');
+        if (!el) return;
+        var text = el.getAttribute('data-copy') || el.textContent;
+        navigator.clipboard.writeText(text.trim()).then(function() {
+            var original = el.textContent;
+            el.textContent = 'Copied!';
+            el.style.color = 'var(--accent)';
+            setTimeout(function() {
+                el.textContent = original;
+                el.style.color = '';
+            }, 1500);
+        });
+    });
 </script>
 </body>
 </html>

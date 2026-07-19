@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+
+{% block title %}Transactions - {{ projectname }}{% endblock %}
+
+{% block content %}
+<style>
+    .vps-grid .vps-card {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .status-completed { border-color: var(--accent-dim); color: var(--accent); }
+    .status-completed .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .status-pending { border-color: #6b4a20; color: var(--warn); }
+    .status-pending .dot { background: var(--warn); }
+    .status-failed { border-color: #7a3530; color: var(--danger); }
+    .status-failed .dot { background: var(--danger); }
+</style>
+
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Transactions</h1>
+        <p>View all payment transactions across the platform.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ totaltransactions }}</div>
+                <div class="label">Total Transactions</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">${{ totalrevenue }}</div>
+                <div class="label">Total Revenue</div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>All Transactions</h2>
+        <form method="GET" action="{{ url_for('admintransactions') }}" style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search transactions...">
+        </form>
+    </div>
+
+    {% if alltransactions %}
+    <div class="vps-grid">
+        {% for txn in alltransactions %}
+        <div class="vps-card">
+            {% set s_class = 'status-completed' if txn.status == 'completed' 
+                         else 'status-pending' if txn.status == 'pending' 
+                         else 'status-failed' %}
+            <span class="status-pill {{ s_class }}">
+                <span class="dot"></span>{{ txn.status|capitalize }}
+            </span>
+
+            <div class="vps-id">
+                <div class="vps-hostname">{{ txn.transactionid or 'N/A' }}</div>
+                <div class="vps-meta">{{ txn.owner_name }} &middot; {{ txn.uuid[:8] }}</div>
+            </div>
+
+            <div class="vps-specs">
+                <span><span class="spec-val">${{ txn.amount }}</span> {{ txn.currency }}</span>
+                <span><span class="spec-val">{{ txn.payment_method_name or 'N/A' }}</span> Method</span>
+            </div>
+
+            <div class="vps-meta" style="margin-top: 8px;">{{ txn.created }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if pagination.total_pages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if pagination.has_prev %}
+        <a href="{{ url_for('admintransactions', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% endif %}
+        
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+        </span>
+
+        {% if pagination.has_next %}
+        <a href="{{ url_for('admintransactions', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">💰</div>
+        <h3>No Transactions</h3>
+        <p>No payment transactions have been recorded yet.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,178 +1,162 @@
 {% extends "base.html" %}
 
-{% block title %}Node Infrastructure - {{ projectname }}{% endblock %}
+{% block title %}Node Storage - {{ projectname }}{% endblock %}
 
 {% block content %}
+<style>
+    .vps-grid .vps-card {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+</style>
 <div class="page">
     <section class="hero">
-        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
-        <h1>Node Infrastructure</h1>
-        <p>Global oversight of node health and aggregate resource allocation.</p>
-        
-        <div class="hero-stats">
-            <div class="hero-stat">
-                <div class="num accent">{{ globaltotalvps }}</div>
-                <div class="label">Total Instances</div>
-            </div>
-            <div class="hero-stat">
-                <div class="num">{{ totalusers }}</div>
-                <div class="label">Active Users</div>
-            </div>
-            <div class="hero-stat">
-                <div class="num">{{ totalresourceallocation.cpu }}</div>
-                <div class="label">Allocated Cores</div>
-            </div>
-            <div class="hero-stat">
-                <div class="num">{{ totalresourceallocation.ram_gb }}<span style="font-size: 14px;"> GB</span></div>
-                <div class="label">Allocated RAM</div>
-            </div>
-        </div>
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Storage Management</div>
+        <h1>Node Storage</h1>
+        <p>Manage physical disk paths and storage types across your infrastructure.</p>
     </section>
 
     <div class="section-head" style="margin-top: 48px;">
-        <h2>Registered Nodes</h2>
-        <button onclick="openModal('addNodeModal')" class="btn btn-primary btn-small">+ Add Node</button>
+        <h2>Storage Volumes</h2>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminnodesstorage') }}" style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search storage...">
+            </form>
+            <button onclick="openModal('addStorageModal')" class="btn btn-primary btn-small">+ Add Storage</button>
+        </div>
     </div>
 
-    {% if all_nodes %}
+    {% if all_storage %}
     <div class="vps-grid">
-        {% for node in all_nodes %}
+        {% for storage in all_storage %}
         <div class="vps-card">
-            <!-- Dynamic Status Color -->
-            {% set s_class = 'status-running' if node.status == 'online' else 'status-unknown' %}
-            <span class="status-pill {{ s_class }}">
-                <span class="dot"></span>{{ node.status|capitalize }}
+            <span class="status-pill status-running">
+                <span class="dot"></span>{{ storage.type|upper }}
             </span>
             
             <div class="vps-id">
-                <div class="vps-hostname">{{ node.name }}</div>
-                <div class="vps-meta">{{ node.address }} &middot; {{ node.hostname }}</div>
+                <div class="vps-hostname">{{ storage.name }}</div>
+                <div class="vps-meta">Node: {{ storage.node_name }} &middot; {{ storage.path }}</div>
             </div>
             
             <div class="vps-specs">
-                <span><span class="spec-val">{{ node.vps_count }}</span> VPS</span>
-                <span><span class="spec-val">{{ node.ram // 1024 }}</span>GB RAM Cap.</span>
+                <span><span class="spec-val">{{ storage.size // 1024 }}</span> GB Total</span>
+                <span><span class="spec-val">{{ storage.used // 1024 }}</span> GB Used</span>
             </div>
             
             <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
                 <button class="btn btn-small" 
-                    onclick="openEditModal('{{ node|tojson|forceescape }}')">Edit</button>
+                    onclick="openEditModal('{{ storage|tojson|forceescape }}')">Edit</button>
                 
-                <form action="{{ url_for('adminnodes') }}" method="POST" onsubmit="return confirm('Delete this node?');">
-                    <input type="hidden" name="action" value="delete">
-                    <input type="hidden" name="uuid" value="{{ node.uuid }}">
+                <form action="{{ url_for('adminnodesstoragedelete', s_uuid=storage.uuid) }}" method="POST" onsubmit="return confirm('Remove this storage path?');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
         </div>
         {% endfor %}
     </div>
+
+    {% if pagination.total_pages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if pagination.has_prev %}
+        <a href="{{ url_for('adminnodesstorage', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% endif %}
+        
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+        </span>
+
+        {% if pagination.has_next %}
+        <a href="{{ url_for('adminnodesstorage', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
     {% else %}
     <div class="empty-state">
-        <div class="glyph">🖥️</div>
-        <h3>No Nodes Configured</h3>
-        <p>Register a server to start provisioning instances.</p>
+        <div class="glyph">💾</div>
+        <h3>No Storage Defined</h3>
+        <p>Assign storage paths to nodes to allow VPS creation.</p>
     </div>
     {% endif %}
 </div>
 
-<!-- ===== Add Node Modal ===== -->
-<div id="addNodeModal" class="modal-backdrop">
+<!-- Add Storage Modal -->
+<div id="addStorageModal" class="modal-backdrop">
     <div class="modal-panel">
         <div class="modal-head">
-            <h3>Register New Node</h3>
-            <button type="button" class="modal-close" onclick="closeModal('addNodeModal')">&times;</button>
+            <h3>Add Storage Path</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addStorageModal')">&times;</button>
         </div>
-        <form action="{{ url_for('adminnodes') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <input type="hidden" name="action" value="add">
-            
+        <form action="{{ url_for('adminnodesstoragecreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
             <div class="field" style="grid-column: span 2;">
-                <label>Display Name</label>
-                <input type="text" name="name" required placeholder="US-East-Primary">
-            </div>
-            <div class="field">
-                <label>Hostname / Domain</label>
-                <input type="text" name="hostname" required placeholder="node1.yourdomain.com">
-            </div>
-            <div class="field">
-                <label>IP Address</label>
-                <input type="text" name="address" required placeholder="1.2.3.4">
-            </div>
-            <div class="field" style="grid-column: span 2;">
-                <label>API Key (Daemon Connection)</label>
-                <input type="password" name="apikey" required placeholder="••••••••••••">
-            </div>
-            <div class="field">
-                <label>Total CPU (Cores)</label>
-                <input type="number" name="cpu" required value="8">
-            </div>
-            <div class="field">
-                <label>Total RAM (MB)</label>
-                <input type="number" name="ram" required value="16384">
-            </div>
-            <div class="field">
-                <label>Total Disk (MB)</label>
-                <input type="number" name="disk" required value="102400">
-            </div>
-            <div class="field">
-                <label>Status</label>
-                <select name="status">
-                    <option value="online">Online</option>
-                    <option value="maintenance">Maintenance</option>
-                    <option value="offline">Offline</option>
+                <label>Target Node</label>
+                <select name="nodeid" required>
+                    {% for node in all_nodes %}
+                    <option value="{{ node.id }}">{{ node.name }} ({{ node.hostname }})</option>
+                    {% endfor %}
                 </select>
+            </div>
+            <div class="field">
+                <label>Storage Name</label>
+                <input type="text" name="name" required placeholder="Fast NVMe Store">
+            </div>
+            <div class="field">
+                <label>Mount Path</label>
+                <input type="text" name="path" required placeholder="/var/lib/vz">
+            </div>
+            <div class="field">
+                <label>Disk Type</label>
+                <select name="type">
+                    <option value="nvme">NVMe</option>
+                    <option value="ssd">SSD</option>
+                    <option value="hdd">HDD</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Total Size (MB)</label>
+                <input type="number" name="size" required value="102400">
             </div>
 
             <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
-                <button type="button" onclick="closeModal('addNodeModal')" class="btn">Cancel</button>
-                <button type="submit" class="btn btn-primary">Register Node</button>
+                <button type="button" onclick="closeModal('addStorageModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Storage</button>
             </div>
         </form>
     </div>
 </div>
 
-<!-- ===== Edit Node Modal ===== -->
-<div id="editNodeModal" class="modal-backdrop">
+<!-- Edit Storage Modal -->
+<div id="editStorageModal" class="modal-backdrop">
     <div class="modal-panel">
         <div class="modal-head">
-            <h3>Update Node Config</h3>
-            <button type="button" class="modal-close" onclick="closeModal('editNodeModal')">&times;</button>
+            <h3>Update Storage</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editStorageModal')">&times;</button>
         </div>
-        <form action="{{ url_for('adminnodes') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <input type="hidden" name="action" value="edit">
-            <input type="hidden" name="uuid" id="edit_uuid">
-            
+        <form id="editStorageForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
             <div class="field" style="grid-column: span 2;">
-                <label>Display Name</label>
+                <label>Storage Name</label>
                 <input type="text" name="name" id="edit_name" required>
             </div>
             <div class="field">
-                <label>Hostname</label>
-                <input type="text" name="hostname" id="edit_hostname" required>
+                <label>Mount Path</label>
+                <input type="text" name="path" id="edit_path" required>
             </div>
             <div class="field">
-                <label>IP Address</label>
-                <input type="text" name="address" id="edit_address" required>
+                <label>Disk Type</label>
+                <select name="type" id="edit_type">
+                    <option value="nvme">NVMe</option>
+                    <option value="ssd">SSD</option>
+                    <option value="hdd">HDD</option>
+                </select>
             </div>
             <div class="field" style="grid-column: span 2;">
-                <label>API Key</label>
-                <input type="password" name="apikey" id="edit_apikey" required placeholder="Leave blank to keep current">
-            </div>
-            <div class="field">
-                <label>RAM Cap (MB)</label>
-                <input type="number" name="ram" id="edit_ram" required>
-            </div>
-            <div class="field">
-                <label>Status</label>
-                <select name="status" id="edit_status">
-                    <option value="online">Online</option>
-                    <option value="maintenance">Maintenance</option>
-                    <option value="offline">Offline</option>
-                </select>
+                <label>Total Size (MB)</label>
+                <input type="number" name="size" id="edit_size" required>
             </div>
 
             <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
-                <button type="button" onclick="closeModal('editNodeModal')" class="btn">Cancel</button>
+                <button type="button" onclick="closeModal('editStorageModal')" class="btn">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </div>
         </form>
@@ -180,24 +164,22 @@
 </div>
 
 <script>
-    function openModal(id) {
-        document.getElementById(id).classList.add('is-open');
-    }
-    
-    function closeModal(id) {
-        document.getElementById(id).classList.remove('is-open');
-    }
+    function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
 
-    function openEditModal(nodeData) {
-        const node = JSON.parse(nodeData);
-        document.getElementById('edit_uuid').value = node.uuid;
-        document.getElementById('edit_name').value = node.name;
-        document.getElementById('edit_hostname').value = node.hostname;
-        document.getElementById('edit_address').value = node.address;
-        document.getElementById('edit_ram').value = node.ram;
-        document.getElementById('edit_status').value = node.status;
-        document.getElementById('edit_apikey').value = node.apikey;
-        openModal('editNodeModal');
+    function openEditModal(data) {
+        const storage = JSON.parse(data);
+        const form = document.getElementById('editStorageForm');
+        
+        let baseUrl = "{{ url_for('adminnodesstorageupdate', s_uuid='UUID_PLACEHOLDER') }}";
+        form.action = baseUrl.replace('UUID_PLACEHOLDER', storage.uuid);
+
+        document.getElementById('edit_name').value = storage.name;
+        document.getElementById('edit_path').value = storage.path;
+        document.getElementById('edit_type').value = storage.type;
+        document.getElementById('edit_size').value = storage.size;
+        
+        openModal('editStorageModal');
     }
 </script>
 {% endblock %}

@@ -17,7 +17,12 @@
     <!-- ===== Registered Users Section ===== -->
     <div class="section-head" style="margin-top: 48px;">
         <h2>Registered Users</h2>
-        <button onclick="openAddUserModal()" class="btn btn-primary btn-small">+ Create User</button>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminusers') }}" style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search users...">
+            </form>
+            <button onclick="openAddUserModal()" class="btn btn-primary btn-small">+ Create User</button>
+        </div>
     </div>
 
     <div class="vps-grid">
@@ -113,7 +118,7 @@
     {% if pagination and pagination.total_pages > 1 %}
     <div class="btn-row" style="justify-content: center; align-items: center; gap: 8px; margin-top: 32px;">
         {% if pagination.has_prev %}
-            <a href="{{ url_for('adminusers', page=pagination.current_page - 1) }}" class="btn btn-small">&laquo; Prev</a>
+            <a href="{{ url_for('adminusers', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">&laquo; Prev</a>
         {% else %}
             <span class="btn btn-small" style="opacity: 0.4; pointer-events: none;">&laquo; Prev</span>
         {% endif %}
@@ -123,7 +128,7 @@
         </span>
 
         {% if pagination.has_next %}
-            <a href="{{ url_for('adminusers', page=pagination.current_page + 1) }}" class="btn btn-small">Next &raquo;</a>
+            <a href="{{ url_for('adminusers', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next &raquo;</a>
         {% else %}
             <span class="btn btn-small" style="opacity: 0.4; pointer-events: none;">Next &raquo;</span>
         {% endif %}

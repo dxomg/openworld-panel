@@ -3,75 +3,198 @@
 {% block title %}Dashboard - {{ projectname }}{% endblock %}
 
 {% block content %}
+<style>
+    /* Improved Grid for less crowding */
+    .vps-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); /* Larger cards */
+        gap: 24px; /* More space between cards */
+        margin-top: 10px;
+    }
+
+    .vps-card {
+        display: flex;
+        flex-direction: column; /* Stacked layout feels more premium/less crowded */
+        align-items: flex-start;
+        gap: 16px;
+        padding: 24px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        position: relative;
+        transition: all 0.2s ease;
+    }
+
+    .vps-card:hover {
+        border-color: var(--accent);
+        transform: translateY(-2px);
+        background: var(--panel-hover);
+    }
+
+    .vps-card-header {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+    }
+
+    .vps-info-block {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .vps-hostname {
+        font-family: var(--font-mono);
+        font-size: 16px;
+        font-weight: 600;
+        color: var(--text);
+    }
+
+    .vps-meta {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-faint);
+    }
+
+    /* Specs styling */
+    .vps-specs-row {
+        display: flex;
+        gap: 15px;
+        width: 100%;
+        padding-top: 16px;
+        border-top: 1px solid var(--border-soft);
+    }
+
+    .spec-group {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .spec-label {
+        font-size: 10px;
+        color: var(--text-faint);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .spec-value {
+        font-family: var(--font-mono);
+        font-size: 13px;
+        color: var(--text-dim);
+    }
+
+    .vps-arrow {
+        position: absolute;
+        bottom: 24px;
+        right: 24px;
+        opacity: 0.3;
+    }
+</style>
+
 <!-- Dashboard Overview Hero -->
-<section class="hero" style="margin-bottom: 48px;">
+<section class="hero">
   <div class="hero-eyebrow">
     <span class="pulse-dot"></span> {{ projectname }} Dashboard
   </div>
   
-  <!-- Use a session variable for the user's name if you have it -->
-  <h1>Welcome back, {{ username }}.</h1>
-  <p>Manage your {{ projectname }} IPv6 instances and monitor resource utilization.</p>
+  <h1>Welcome, {{ username }}</h1>
+  <p>Overview of your provisioned nodes and active compute resources.</p>
 </section>
 
 <!-- Instances Section Header -->
 <div class="section-head">
-  <h2>Active Deployments</h2>
-  <a href="{{ url_for('createvps') }}" class="btn btn-primary">+ Provision VPS</a>
+  <h2>Active Instances ({{ vps_data.total_count }})</h2>
+  <div class="actions" style="display: flex; gap: 10px; align-items: center;">
+      <form method="GET" action="{{ url_for('dashboard') }}" style="display: flex; gap: 8px; align-items: center;">
+          <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search instances...">
+      </form>
+      <a href="{{ url_for('createvps') }}" class="btn btn-primary btn-small">+ Provision VPS</a>
+  </div>
 </div>
 
 <!-- Instance List or Empty State -->
-{% if vps %}
+{% if vps_data.vps %}
 <div class="vps-grid">
 
-  {% for instance in vps %}
-  <a href="{{ url_for('vpspanel', uuid=instance.uuid) }}" class="vps-card">
+  {% for instance in vps_data.vps %}
+  {# Logic to determine status class #}
+  {% if instance.status == 'running' %}
+    {% set status_class = 'status-running' %}
+  {% elif instance.status == 'creating' %}
+    {% set status_class = 'status-creating' %}
+  {% elif instance.status == 'pendingpayment' %}
+    {% set status_class = 'status-pendingpayment' %}
+  {% elif instance.status == 'suspended' %}
+    {% set status_class = 'status-suspended' %}
+  {% else %}
+    {% set status_class = 'status-stopped' %}
+  {% endif %}
 
-    <!-- You can replace this later with real VPS status -->
-    <span class="status-pill status-running">
-      <span class="dot"></span>Running
+  <a href="{{ url_for('checkout', vps_uuid=instance.uuid) if instance.status == 'pendingpayment' else url_for('vpspanel', vps_uuid=instance.uuid) }}" class="vps-card">
+    
+    <div class="vps-card-header">
+        <div class="vps-info-block">
+            <span class="vps-hostname">{{ instance.hostname }}</span>
+            <span class="vps-meta" data-copy="{{ instance.ipv6 }}" title="Click to copy">{{ instance.ipv6 if instance.ipv6 else '0.0.0.0' }}</span>
+        </div>
+        
+        <span class="status-pill {{ status_class }}">
+          <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}
+        </span>
+    </div>
+
+    <div class="vps-specs-row">
+      <div class="spec-group">
+          <span class="spec-label">CPU</span>
+          <span class="spec-value">{{ instance.cpu }} Core</span>
+      </div>
+      <div class="spec-group">
+          <span class="spec-label">Memory</span>
+          <span class="spec-value">{{ instance.ram }} MB</span>
+      </div>
+      <div class="spec-group">
+          <span class="spec-label">Storage</span>
+          <span class="spec-value">{{ (instance.disk // 1024)|string + ' GB' if instance.disk >= 1024 else instance.disk|string + ' MB' }}</span>
+      </div>
+    </div>
+
+    {% if instance.status == 'pendingpayment' %}
+    <span class="btn btn-primary btn-small" style="width: 100%; text-align: center; margin-top: 4px; pointer-events: none;">
+      Complete Payment →
     </span>
-
-    <div class="vps-id">
-      <div class="vps-hostname">
-        {{ instance.hostname }}
-      </div>
-
-      <div class="vps-meta">
-        {{ instance.ip }} · {{ instance.network }}
-      </div>
-    </div>
-
-    <div class="vps-specs">
-      <span>
-        {{ instance.cpu }}
-        <span class="spec-val">vCPU</span>
-      </span>
-
-      <span class="spec-val">
-        {{ instance.ram }}MB RAM
-      </span>
-
-      <span class="spec-val">
-        {{ instance.image }}
-      </span>
-    </div>
-
+    {% else %}
     <span class="vps-arrow">→</span>
-
+    {% endif %}
   </a>
   {% endfor %}
 
 </div>
 
+{% if vps_data.total_pages > 1 %}
+<div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+    {% if vps_data.has_prev %}
+    <a href="{{ url_for('dashboard', page=vps_data.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+    {% endif %}
+    
+    <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+        PAGE {{ vps_data.current_page }} / {{ vps_data.total_pages }}
+    </span>
+
+    {% if vps_data.has_next %}
+    <a href="{{ url_for('dashboard', page=vps_data.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+    {% endif %}
+</div>
+{% endif %}
+
 {% else %}
 
 <div class="empty-state">
   <div class="glyph">◈</div>
-  <h3>No instances yet</h3>
-  <p>Provision your first free IPv6 VPS to get started.</p>
+  <h3>No VPS deployed</h3>
+  <p>You haven't provisioned any instances yet.</p>
   <a href="{{ url_for('createvps') }}" class="btn btn-primary">
-    + Provision VPS
+    Deploy First VPS
   </a>
 </div>
 
