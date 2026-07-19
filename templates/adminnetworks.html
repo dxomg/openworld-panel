@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}Networks - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Networks</h1>
+        <p>Manage Docker networks across nodes. Networks are created on the node automatically.</p>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Registered Networks</h2>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminnetworks') }}" style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search networks...">
+            </form>
+            <button onclick="openModal('addNetworkModal')" class="btn btn-primary btn-small">+ Add Network</button>
+        </div>
+    </div>
+
+    {% if allNetworks %}
+    <div class="vps-grid">
+        {% for net in allNetworks %}
+        <div class="vps-card">
+            <span class="status-pill status-running">
+                <span class="dot"></span>{{ 'IPv6' if net.ipv6 else 'IPv4' }}
+            </span>
+
+            <div class="vps-id">
+                <div class="vps-hostname">{{ net.name }}</div>
+                <div class="vps-meta">Node: {{ net.node_name }}</div>
+            </div>
+
+            <div class="vps-specs">
+                {% if net.subnet %}
+                <span><span class="spec-val">{{ net.subnet }}</span></span>
+                {% endif %}
+                {% if net.gateway %}
+                <span><span class="spec-val">{{ net.gateway }}</span></span>
+                {% endif %}
+            </div>
+
+            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+                <form action="{{ url_for('adminnetworksdelete', netUuid=net.uuid) }}" method="POST" onsubmit="return confirm('Remove this network from the database? The Docker network will NOT be deleted.');">
+                    <button type="submit" class="btn btn-small btn-danger">Remove</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if pagination.totalPages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminnetworks', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&larr; Previous</a>
+        {% endif %}
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
+        </span>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminnetworks', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &rarr;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">&#x2B21;</div>
+        <h3>No Networks Registered</h3>
+        <p>Create a Docker network on a node first, then register it here.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Add Network Modal -->
+<div id="addNetworkModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Register Network</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addNetworkModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminnetworkscreate') }}" method="POST">
+            <div class="field">
+                <label>Node</label>
+                <select name="nodeid" required>
+                    <option value="" disabled selected>Select a node...</option>
+                    {% for node in allNodes %}
+                    <option value="{{ node.id }}">{{ node.name }} ({{ node.address }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label>Network Name</label>
+                <input type="text" name="name" required placeholder="route64-docker">
+                <span class="hint">Will be created on the node via API.</span>
+            </div>
+            <div class="field">
+                <label>Subnet (optional, auto-detected)</label>
+                <input type="text" name="subnet" placeholder="2a11:6c7:2200:b101::/64">
+            </div>
+            <div class="field">
+                <label>Gateway (optional, auto-detected)</label>
+                <input type="text" name="gateway" placeholder="2a11:6c7:2200:b101::1">
+            </div>
+            <div class="field">
+                <label>IPv6</label>
+                <select name="ipv6">
+                    <option value="1" selected>Enabled</option>
+                    <option value="0">Disabled</option>
+                </select>
+            </div>
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeModal('addNetworkModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Register Network</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+</script>
+{% endblock %}

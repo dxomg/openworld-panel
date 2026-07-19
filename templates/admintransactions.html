@@ -24,11 +24,11 @@
 
         <div class="hero-stats">
             <div class="hero-stat">
-                <div class="num accent">{{ totaltransactions }}</div>
+                <div class="num accent">{{ totalTransactions }}</div>
                 <div class="label">Total Transactions</div>
             </div>
             <div class="hero-stat">
-                <div class="num">${{ totalrevenue }}</div>
+                <div class="num">${{ totalRevenue }}</div>
                 <div class="label">Total Revenue</div>
             </div>
         </div>
@@ -41,14 +41,14 @@
         </form>
     </div>
 
-    {% if alltransactions %}
+    {% if allTransactions %}
     <div class="vps-grid">
-        {% for txn in alltransactions %}
+        {% for txn in allTransactions %}
         <div class="vps-card">
-            {% set s_class = 'status-completed' if txn.status == 'completed' 
+            {% set sClass = 'status-completed' if txn.status == 'completed' 
                          else 'status-pending' if txn.status == 'pending' 
                          else 'status-failed' %}
-            <span class="status-pill {{ s_class }}">
+            <span class="status-pill {{ sClass }}">
                 <span class="dot"></span>{{ txn.status|capitalize }}
             </span>
 
@@ -67,18 +67,18 @@
         {% endfor %}
     </div>
 
-    {% if pagination.total_pages > 1 %}
+    {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-        {% if pagination.has_prev %}
-        <a href="{{ url_for('admintransactions', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('admintransactions', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
 
-        {% if pagination.has_next %}
-        <a href="{{ url_for('admintransactions', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('admintransactions', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
         {% endif %}
     </div>
     {% endif %}

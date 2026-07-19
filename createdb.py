@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     hostname TEXT NOT NULL,
     address TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
 
     apikey TEXT NOT NULL,
 
@@ -109,6 +110,24 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS networks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    nodeid INTEGER NOT NULL,
+
+    name TEXT NOT NULL,
+    subnet TEXT,
+    gateway TEXT,
+    ipv6 INTEGER NOT NULL DEFAULT 1
+        CHECK(ipv6 IN (0,1)),
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS nodestorage (
@@ -141,6 +160,7 @@ CREATE TABLE IF NOT EXISTS vps (
     imageid INTEGER NOT NULL,
     nodeid INTEGER NOT NULL,
     storageid INTEGER NOT NULL,
+    networkid INTEGER,
 
     hostname TEXT NOT NULL,
     password TEXT NOT NULL,
@@ -350,7 +370,22 @@ CREATE INDEX IF NOT EXISTS idxlogstarget ON logs(target);
 try:
     cursor.execute("ALTER TABLE plans ADD COLUMN stock INTEGER NOT NULL DEFAULT -1")
 except sqlite3.OperationalError:
-    pass  # column already exists
+    pass
+
+try:
+    cursor.execute("ALTER TABLE nodes ADD COLUMN url TEXT NOT NULL DEFAULT ''")
+except sqlite3.OperationalError:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE vps ADD COLUMN networkid INTEGER")
+except sqlite3.OperationalError:
+    pass
+
+try:
+    cursor.execute("ALTER TABLE vps ADD COLUMN networkid INTEGER")
+except sqlite3.OperationalError:
+    pass
 
 conn.commit()
 conn.close()

@@ -54,8 +54,9 @@
         <h2>Available Plans</h2>
     </div>
 
+    {% if plansList %}
     <div class="plan-grid">
-        {% for plan in plans_list %} 
+        {% for plan in plansList %} 
         <button type="button" class="plan-card-btn" onclick="openDeployModal('{{ plan|tojson|forceescape }}')" {% if plan.stock == 0 %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}>
             <div class="plan-card">
                 <div class="plan-card-head">
@@ -95,6 +96,14 @@
         </button>
         {% endfor %}
     </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">◈</div>
+        <h3>No Plans Available</h3>
+        <p>There are no plans available at the moment. Please check back later.</p>
+        <a href="{{ url_for('dashboard') }}" class="btn btn-small">← Back to Dashboard</a>
+    </div>
+    {% endif %}
 </div>
 
 <!-- Deployment Modal -->
@@ -107,7 +116,7 @@
         
         <form action="{{ url_for('createvps') }}" method="POST">
             <!-- Hidden Plan ID -->
-            <input type="hidden" name="plan_id" id="modal_plan_id">
+            <input type="hidden" name="planId" id="modal_plan_id">
 
             <div class="field" style="margin-bottom: 20px;">
                 <label>Selected Configuration</label>
@@ -116,7 +125,7 @@
 
             <div class="field">
                 <label>Operating System (Image)</label>
-                <select name="image_id" required style="width: 100%; padding: 12px; border-radius: 8px; background: #222; border: 1px solid #444; color: white;">
+                <select name="imageId" required style="width: 100%; padding: 12px; border-radius: 8px; background: #222; border: 1px solid #444; color: white;">
                     <option value="" disabled selected>Select an OS image...</option>
                     {% for img in images %}
                         <option value="{{ img.id }}">{{ img.name }}</option>

@@ -1,40 +1,42 @@
 import uuid
 import secrets
 import requests
-import random
 import string
 import math
 from datetime import datetime, timedelta, timezone
+from werkzeug.security import generate_password_hash, check_password_hash
 from core import db
 
 # --- AUTH & SESSION SERVICES ---
 
-def authenticate_user(email, password):
+def hashpassword(password):
+    return generate_password_hash(password)
+
+def authenticateuser(email, password):
     """Verifies credentials and returns user dict if valid."""
     user = db.getuserbyemail(email)
-    if user and user['password'] == password: # In production, use werkzeug.security.check_password_hash
+    if user and check_password_hash(user['password'], password):
         return user
     return None
 
-def create_session(user_id, ip_address, user_agent, ttl_days):
+def createsession(userId, ipAddress, userAgent, ttlDays):
     """Creates a new session token in the database with a TTL in days."""
     token = secrets.token_urlsafe(64)
-    session_uuid = str(uuid.uuid4())
+    sessionUuid = str(uuid.uuid4())
     
-    # Calculate expiration using days instead of hours
-    expires = (datetime.now(timezone.utc) + timedelta(days=ttl_days)).isoformat()
+    expires = (datetime.now(timezone.utc) + timedelta(days=ttlDays)).isoformat()
     
     db.addsession(
-        uuid=session_uuid,
-        userid=user_id,
+        uuid=sessionUuid,
+        userid=userId,
         token=token,
         expires=expires,
-        ip=ip_address,
-        agent=user_agent
+        ip=ipAddress,
+        agent=userAgent
     )
     return token
 
-def validate_session(token):
+def validatesession(token):
     session = db.getsession(token)
     if not session:
         return None
@@ -55,9 +57,9 @@ def logout(token):
     """Deletes the session from the database."""
     db.removesession(token)
 
-def is_user_banned(user_id):
+def isuserbanned(userId):
     """Checks if the user has an active ban record."""
-    ban = db.getbanbyuserid(user_id)
+    ban = db.getbanbyuserid(userId)
     if not ban:
         return None
     
@@ -69,66 +71,63 @@ def is_user_banned(user_id):
             
     return ban
 
-def find_or_create_discord_user(discord_id, email, username, profile_pic):
+def findorcreatediscorduser(discordId, email, username, profilePic):
     """Handles Discord OAuth registration/login correctly."""
     
-    # 1. Try to find user by Discord ID first (strongest link)
-    user = db.getuserbydiscord(discord_id)
+    user = db.getuserbydiscord(discordId)
     
     if not user:
-        # 2. If not found by Discord ID, try by Email (account linking)
         user = db.getuserbyemail(email)
         
         if user:
-            # User exists via email, link their Discord ID now
-            db.updateuser(user['uuid'], discordid=discord_id)
+            db.updateuser(user['uuid'], discordid=discordId)
         else:
-            # 3. Create a brand new user
-            user_uuid = str(uuid.uuid4())
-            random_pw = secrets.token_urlsafe(16) # Random pass for OAuth users
+            userUuid = str(uuid.uuid4())
+            randomPw = hashpassword(secrets.token_urlsafe(16))
+            role = 'admin' if db.countusers() == 0 else 'user'
             
             try:
-                # Try creating with the Discord username
                 db.adduser(
-                    uuid=user_uuid,
-                    discordid=discord_id,
+                    uuid=userUuid,
+                    discordid=discordId,
                     username=username,
                     email=email,
-                    password=random_pw,
-                    verified=1
+                    password=randomPw,
+                    verified=1,
+                    role=role
                 )
             except Exception:
-                # If username exists, append part of the discord ID to make it unique
-                unique_username = f"{username}{str(discord_id)[-4:]}"
+                uniqueUsername = f"{username}{str(discordId)[-4:]}"
                 db.adduser(
-                    uuid=user_uuid,
-                    discordid=discord_id,
-                    username=unique_username,
+                    uuid=userUuid,
+                    discordid=discordId,
+                    username=uniqueUsername,
                     email=email,
-                    password=random_pw,
-                    verified=1
+                    password=randomPw,
+                    verified=1,
+                    role=role
                 )
             
-            user = db.getuser(user_uuid)
+            user = db.getuser(userUuid)
             
     return user
 
 # --- VPS & RESOURCE SERVICES ---
 
-def list_vps_for_user_panel(user_id, page=1, per_page=10, search=None):
+def listvpsforuserpanel(userId, page=1, perPage=10, search=None):
     """Returns a paginated list of VPSs owned by the user with plan details."""
     with db.getconnection() as conn:
-        offset = (page - 1) * per_page
+        offset = (page - 1) * perPage
         where = "WHERE v.userid = ?"
-        params = [user_id]
+        params = [userId]
 
         if search:
             where += " AND (v.hostname LIKE ? OR v.ipv6 LIKE ? OR v.status LIKE ?)"
             s = f"%{search}%"
             params.extend([s, s, s])
 
-        total_row = conn.execute(f"SELECT COUNT(*) AS cnt FROM vps v {where}", params).fetchone()
-        total = total_row["cnt"] if total_row else 0
+        totalRow = conn.execute(f"SELECT COUNT(*) AS cnt FROM vps v {where}", params).fetchone()
+        total = totalRow["cnt"] if totalRow else 0
 
         query = f"""
             SELECT v.*, p.name as plan_name, i.name as image_name 
@@ -139,46 +138,40 @@ def list_vps_for_user_panel(user_id, page=1, per_page=10, search=None):
             ORDER BY v.created DESC
             LIMIT ? OFFSET ?
         """
-        rows = conn.execute(query, params + [per_page, offset]).fetchall()
+        rows = conn.execute(query, params + [perPage, offset]).fetchall()
         return {
             "vps": [dict(r) for r in rows],
-            "total_count": total,
-            "current_page": page,
-            "per_page": per_page,
-            "total_pages": math.ceil(total / per_page) if per_page else 1,
-            "has_prev": page > 1,
-            "has_next": (page * per_page) < total,
+            "totalCount": total,
+            "currentPage": page,
+            "perPage": perPage,
+            "totalPages": math.ceil(total / perPage) if perPage else 1,
+            "hasPrev": page > 1,
+            "hasNext": (page * perPage) < total,
         }
 
-def provision_vps(user_id, plan_id, image_id, hostname):
-    """
-    Logic to select a node, verify resources, and create the VPS.
-    """
+def provisionvps(userId, planId, imageId, hostname):
     plan = None
     with db.getconnection() as conn:
-        plan = conn.execute("SELECT * FROM plans WHERE id = ?", (plan_id,)).fetchone()
-        image = conn.execute("SELECT * FROM images WHERE id = ?", (image_id,)).fetchone()
-        # Find an online node with enough RAM (Simple load balancing)
+        plan = conn.execute("SELECT * FROM plans WHERE id = ?", (planId,)).fetchone()
+        image = conn.execute("SELECT * FROM images WHERE id = ?", (imageId,)).fetchone()
         node = conn.execute("SELECT * FROM nodes WHERE status = 'online' AND ram >= ? LIMIT 1", (plan['ram'],)).fetchone()
-        # Find storage on that node
         storage = conn.execute("SELECT * FROM nodestorage WHERE nodeid = ? LIMIT 1", (node['id'],)).fetchone()
 
     if not node or not storage:
         raise ValueError("No available nodes have enough resources at this time.")
 
-    vps_uuid = str(uuid.uuid4())
-    root_password = secrets.token_urlsafe(12)
+    vpsUuid = str(uuid.uuid4())
+    rootPassword = secrets.token_urlsafe(16)
 
-    # 1. Save to Database
     db.addvps(
-        uuid=vps_uuid,
-        userid=user_id,
-        planid=plan_id,
-        imageid=image_id,
+        uuid=vpsUuid,
+        userid=userId,
+        planid=planId,
+        imageid=imageId,
         nodeid=node['id'],
         storageid=storage['id'],
         hostname=hostname,
-        password=root_password, # In real life, encrypt this
+        password=rootPassword,
         cpu=plan['cpu'],
         ram=plan['ram'],
         swap=plan['swap'],
@@ -186,19 +179,32 @@ def provision_vps(user_id, plan_id, image_id, hostname):
         status='creating'
     )
 
-    # 2. Communicate with Node Agent (Mock API Request)
-    # try:
-    #     requests.post(f"http://{node['address']}/create", json={...}, headers={"Authorization": node['apikey']})
-    # except:
-    #     pass
+    node = dict(node)
+    payload = {
+        "uuid": vpsUuid,
+        "hostname": hostname,
+        "cpu": plan['cpu'],
+        "ram": f"{plan['ram']}m",
+        "swap": f"{plan['swap']}m",
+        "network": "bridge",
+        "ip": "::1",
+        "dns": ["1.1.1.1", "8.8.8.8"],
+        "image": image['image'],
+        "rootPassword": rootPassword,
+    }
 
-    vps_data = db.getvps(vps_uuid)
-    # We return the password once so the UI can show it
-    res = dict(vps_data)
-    res['root_password'] = root_password
+    result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
+    if result and result.get("containerId"):
+        db.updatevps(vpsUuid, status='running', container=result["containerId"])
+    else:
+        db.updatevps(vpsUuid, status='error')
+
+    vpsData = db.getvps(vpsUuid)
+    res = dict(vpsData)
+    res['rootPassword'] = rootPassword
     return res
 
-def get_vps_details(vps_id):
+def getvpsdetails(vpsId):
     """Gets full VPS info including node and plan details."""
     with db.getconnection() as conn:
         query = """
@@ -209,47 +215,87 @@ def get_vps_details(vps_id):
             JOIN images i ON v.imageid = i.id
             WHERE v.id = ?
         """
-        row = conn.execute(query, (vps_id,)).fetchone()
+        row = conn.execute(query, (vpsId,)).fetchone()
         return dict(row) if row else None
 
-def perform_vps_action(vps_id, action, actor_user_id):
+def nodeapi(node, path, method="GET", data=None, timeout=10):
+    """Call a node agent API endpoint."""
+    base = node.get('url', '').rstrip('/')
+    if not base:
+        base = node.get('address', '').rstrip('/')
+    if not base:
+        return None
+    if not base.startswith('http'):
+        base = f"http://{base}"
+    base = f"{base}/api/v1"
+    headers = {"X-API-Key": node['apikey'], "Content-Type": "application/json"}
+    try:
+        if method == "GET":
+            r = requests.get(f"{base}{path}", headers=headers, timeout=timeout)
+        elif method == "POST":
+            r = requests.post(f"{base}{path}", headers=headers, json=data, timeout=timeout)
+        elif method == "DELETE":
+            r = requests.delete(f"{base}{path}", headers=headers, timeout=timeout)
+        else:
+            return None
+        return r.json() if r.status_code < 500 else None
+    except requests.RequestException:
+        return None
+
+def performvpsaction(vpsId, action, actorUserId):
     """Sends a command (start, stop, restart) to the Node Agent."""
-    vps = get_vps_details(vps_id)
+    vps = getvpsdetails(vpsId)
     if not vps:
         raise ValueError("VPS not found")
 
-    # Mapping actions to statuses
-    status_map = {"start": "running", "stop": "stopped", "restart": "running"}
-    new_status = status_map.get(action, "error")
+    statusMap = {"start": "running", "stop": "stopped", "restart": "running"}
+    newStatus = statusMap.get(action, "error")
 
-    # Here you would normally do:
-    # requests.post(f"http://{vps['node_ip']}/action/{action}", ...)
-    
-    db.updatevps(vps['uuid'], status=new_status)
-    return {"status": new_status}
+    with db.getconnection() as conn:
+        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
 
-def get_latest_vps_metric(vps_id):
-    """
-    Mock metrics. In reality, you would fetch this from 
-    Redis or query the Node Agent.
-    """
+    if node and node['apikey']:
+        node = dict(node)
+        result = nodeapi(node, f"/vps/{vps['hostname']}/{action}", method="POST")
+        if result and "status" in result:
+            newStatus = result["status"]
+
+    db.updatevps(vps['uuid'], status=newStatus)
+    return {"status": newStatus}
+
+def getlatestvpsmetric(vpsId):
+    """Fetch live metrics from the node agent."""
+    vps = getvpsdetails(vpsId)
+    if not vps:
+        return None
+
+    with db.getconnection() as conn:
+        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
+
+    if not node or not node['apikey']:
+        return None
+
+    node = dict(node)
+    result = nodeapi(node, f"/vps/{vps['hostname']}/stats", method="GET")
+    if not result or not result.get("metrics"):
+        return None
+
+    m = result["metrics"]
     return {
-        "cpu_usage": "12%",
-        "ram_usage": "512MB",
-        "disk_usage": "10GB",
-        "net_in": "1.2MB/s",
-        "net_out": "0.5MB/s"
+        "cpu": m.get("cpu", "0%"),
+        "ram": m.get("memoryUsage", "0B"),
+        "disk": m.get("blockIn", "0B"),
+        "netIn": m.get("netIn", "0B"),
+        "netOut": m.get("netOut", "0B"),
     }
 
-def list_firewall_rules_for_vps(vps_id):
+def listfirewallrulesforvps(vpsId):
     """Placeholder for firewall logic."""
     return []
 
-def generate_random_hostname():
-    suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
+def generaterandomhostname():
+    suffix = ''.join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(6))
     return f"vps-{suffix}"
 
-def generate_random_password():
-    # Generates a 12-character secure password
-    chars = string.ascii_letters + string.digits
-    return ''.join(random.choices(chars, k=12))
+def generaterandompassword():
+    return secrets.token_urlsafe(16)

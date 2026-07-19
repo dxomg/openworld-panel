@@ -9,7 +9,7 @@
     <div class="hero">
         <div class="hero-eyebrow">Checkout</div>
         <h1>Invoice Summary</h1>
-        <p>Review your order for <strong>{{ checkout_vps.hostname }}</strong>. Provisioning will begin immediately after payment.</p>
+        <p>Review your order for <strong>{{ checkoutVps.hostname }}</strong>. Provisioning will begin immediately after payment.</p>
     </div>
 
     <div style="max-width: 800px; margin: 40px auto;">
@@ -46,7 +46,7 @@
             <div class="checkout-context">
                 <div class="checkout-context-row">
                     <span style="color: var(--text-dim);">Instance Hostname</span>
-                    <span style="color: var(--text);">{{ checkout_vps.hostname }}</span>
+                    <span style="color: var(--text);">{{ checkoutVps.hostname }}</span>
                 </div>
                 <div class="checkout-context-row">
                     <span style="color: var(--text-dim);">Deployment Tier</span>
@@ -76,12 +76,12 @@
         
         <div style="padding: 28px;">
             <form action="{{ url_for('processpayment') }}" method="POST">
-                <input type="hidden" name="vps_uuid" value="{{ checkout_vps.uuid }}">
+                <input type="hidden" name="vpsUuid" value="{{ checkoutVps.uuid }}">
                 
                 <div style="display: flex; flex-direction: column; gap: 14px;">
                     {% for method in methods %}
                     <label class="method-card">
-                        <input type="radio" name="method_slug" value="{{ method.slug }}" required>
+                        <input type="radio" name="methodSlug" value="{{ method.slug }}" required>
                         <div class="method-details">
                             <span class="method-name">{{ method.name }}</span>
                             <span class="method-meta">Automatic activation via IPN</span>

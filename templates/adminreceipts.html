@@ -17,19 +17,19 @@
 
         <div class="hero-stats">
             <div class="hero-stat">
-                <div class="num accent">{{ allreceipts|length }}</div>
+                <div class="num accent">{{ allReceipts|length }}</div>
                 <div class="label">Total Receipts</div>
             </div>
             <div class="hero-stat">
-                <div class="num">${{ totalrevenue }}</div>
+                <div class="num">${{ totalRevenue }}</div>
                 <div class="label">Total Revenue</div>
             </div>
             <div class="hero-stat">
-                <div class="num">${{ totaltax }}</div>
+                <div class="num">${{ totalTax }}</div>
                 <div class="label">Total Tax Collected</div>
             </div>
             <div class="hero-stat">
-                <div class="num">{{ receiptsthismonth }}</div>
+                <div class="num">{{ receiptsThisMonth }}</div>
                 <div class="label">Issued This Month</div>
             </div>
         </div>
@@ -45,9 +45,9 @@
         </div>
     </div>
 
-    {% if allreceipts %}
+    {% if allReceipts %}
     <div class="vps-grid">
-        {% for receipt in allreceipts %}
+        {% for receipt in allReceipts %}
         <div class="vps-card">
             <span class="status-pill status-running">
                 <span class="dot"></span>{{ receipt.currency }}
@@ -73,7 +73,7 @@
                     onclick="openEditModal('{{ receipt|tojson|forceescape }}')">Edit</button>
 
                 <!-- Dedicated Delete Route -->
-                <form action="{{ url_for('adminreceiptsdelete', receipt_uuid=receipt.uuid) }}" method="POST" onsubmit="return confirm('Delete this receipt? This cannot be undone.');">
+                <form action="{{ url_for('adminreceiptsdelete', receiptUuid=receipt.uuid) }}" method="POST" onsubmit="return confirm('Delete this receipt? This cannot be undone.');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -81,18 +81,18 @@
         {% endfor %}
     </div>
 
-    {% if pagination.total_pages > 1 %}
+    {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-        {% if pagination.has_prev %}
-        <a href="{{ url_for('adminreceipts', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminreceipts', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
 
-        {% if pagination.has_next %}
-        <a href="{{ url_for('adminreceipts', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminreceipts', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
         {% endif %}
     </div>
     {% endif %}
@@ -119,7 +119,7 @@
                 <label>Transaction</label>
                 <select name="transactionid" required>
                     <option value="" disabled selected>Select a transaction</option>
-                    {% for txn in alltransactions %}
+                    {% for txn in allTransactions %}
                     <option value="{{ txn.id }}">{{ txn.transactionid }} &mdash; {{ txn.username }} &mdash; ${{ txn.amount }} {{ txn.currency }}</option>
                     {% endfor %}
                 </select>
@@ -234,7 +234,7 @@
         const form = document.getElementById('editReceiptForm');
 
         // Dynamically update the form action to include the receipt's UUID
-        let baseUrl = "{{ url_for('adminreceiptsupdate', receipt_uuid='UUID_PLACEHOLDER') }}";
+        let baseUrl = "{{ url_for('adminreceiptsupdate', receiptUuid='UUID_PLACEHOLDER') }}";
         form.action = baseUrl.replace('UUID_PLACEHOLDER', receipt.uuid);
 
         // Fill the input fields

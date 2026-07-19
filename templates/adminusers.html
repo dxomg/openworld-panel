@@ -26,7 +26,7 @@
     </div>
 
     <div class="vps-grid">
-        {% for user in allusers %}
+        {% for user in allUsers %}
         <div class="vps-card" style="opacity: {{ '0.7' if user.status == 'banned' else '1' }}; border: 1px solid {{ 'red' if user.status == 'banned' else 'var(--border)' }};">
             <div class="vps-id">
                 <div class="vps-hostname">
@@ -50,7 +50,7 @@
                 
                 {% if user.status == 'banned' %}
                     <!-- Unban Form -->
-                    <form action="{{ url_for('adminunbanuser', user_id=user.id) }}" method="POST" style="display: inline;">
+                    <form action="{{ url_for('adminunbanuser', userId=user.id) }}" method="POST" style="display: inline;">
                         <button type="submit" class="btn btn-small" style="background-color: #5cb85c; color: white; border: none;" onclick="return confirm('Unban this user?');">Unban</button>
                     </form>
                 {% else %}
@@ -68,7 +68,7 @@
                     <button type="button" class="modal-close" onclick="closeViewUserModal('{{ user.id }}')">&times;</button>
                 </div>
                 <div class="vps-meta" style="margin-top: -8px; margin-bottom: 4px;">Joined {{ user.created }}</div>
-                <form action="{{ url_for('adminupdateusers', user_uuid=user.id) }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
+                <form action="{{ url_for('adminupdateusers', userUuid=user.id) }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
                     <div class="field"><label>Username</label><input type="text" name="username" value="{{ user.username }}" required></div>
                     <div class="field"><label>Email</label><input type="email" name="email" value="{{ user.email }}" required></div>
                     <div class="field">
@@ -94,7 +94,7 @@
                     <h3>Ban User: {{ user.username }}</h3>
                     <button type="button" class="modal-close" onclick="closeBanModal('{{ user.id }}')">&times;</button>
                 </div>
-                <form action="{{ url_for('adminbanuser', user_id=user.id) }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
+                <form action="{{ url_for('adminbanuser', userId=user.id) }}" method="POST" style="display: flex; flex-direction: column; gap: 16px;">
                     <div class="field">
                         <label>Reason for Ban</label>
                         <input type="text" name="reason" required placeholder="e.g. Terms of Service violation">
@@ -115,20 +115,20 @@
     </div>
 
     <!-- ===== Pagination Controls ===== -->
-    {% if pagination and pagination.total_pages > 1 %}
+    {% if pagination and pagination.totalPages > 1 %}
     <div class="btn-row" style="justify-content: center; align-items: center; gap: 8px; margin-top: 32px;">
-        {% if pagination.has_prev %}
-            <a href="{{ url_for('adminusers', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">&laquo; Prev</a>
+        {% if pagination.hasPrev %}
+            <a href="{{ url_for('adminusers', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&laquo; Prev</a>
         {% else %}
             <span class="btn btn-small" style="opacity: 0.4; pointer-events: none;">&laquo; Prev</span>
         {% endif %}
 
         <span style="font-size: 14px; color: var(--muted, #888); padding: 0 8px;">
-            Page {{ pagination.current_page }} of {{ pagination.total_pages }}
+            Page {{ pagination.currentPage }} of {{ pagination.totalPages }}
         </span>
 
-        {% if pagination.has_next %}
-            <a href="{{ url_for('adminusers', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next &raquo;</a>
+        {% if pagination.hasNext %}
+            <a href="{{ url_for('adminusers', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &raquo;</a>
         {% else %}
             <span class="btn btn-small" style="opacity: 0.4; pointer-events: none;">Next &raquo;</span>
         {% endif %}

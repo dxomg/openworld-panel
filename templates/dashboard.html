@@ -104,7 +104,7 @@
 
 <!-- Instances Section Header -->
 <div class="section-head">
-  <h2>Active Instances ({{ vps_data.total_count }})</h2>
+  <h2>Active Instances ({{ vpsData.totalCount }})</h2>
   <div class="actions" style="display: flex; gap: 10px; align-items: center;">
       <form method="GET" action="{{ url_for('dashboard') }}" style="display: flex; gap: 8px; align-items: center;">
           <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search instances...">
@@ -114,24 +114,24 @@
 </div>
 
 <!-- Instance List or Empty State -->
-{% if vps_data.vps %}
+{% if vpsData.vps %}
 <div class="vps-grid">
 
-  {% for instance in vps_data.vps %}
+  {% for instance in vpsData.vps %}
   {# Logic to determine status class #}
   {% if instance.status == 'running' %}
-    {% set status_class = 'status-running' %}
+    {% set statusClass = 'status-running' %}
   {% elif instance.status == 'creating' %}
-    {% set status_class = 'status-creating' %}
+    {% set statusClass = 'status-creating' %}
   {% elif instance.status == 'pendingpayment' %}
-    {% set status_class = 'status-pendingpayment' %}
+    {% set statusClass = 'status-pendingpayment' %}
   {% elif instance.status == 'suspended' %}
-    {% set status_class = 'status-suspended' %}
+    {% set statusClass = 'status-suspended' %}
   {% else %}
-    {% set status_class = 'status-stopped' %}
+    {% set statusClass = 'status-stopped' %}
   {% endif %}
 
-  <a href="{{ url_for('checkout', vps_uuid=instance.uuid) if instance.status == 'pendingpayment' else url_for('vpspanel', vps_uuid=instance.uuid) }}" class="vps-card">
+  <a href="{{ url_for('checkout', vpsUuid=instance.uuid) if instance.status == 'pendingpayment' else url_for('vpspanel', vpsUuid=instance.uuid) }}" class="vps-card">
     
     <div class="vps-card-header">
         <div class="vps-info-block">
@@ -139,7 +139,7 @@
             <span class="vps-meta" data-copy="{{ instance.ipv6 }}" title="Click to copy">{{ instance.ipv6 if instance.ipv6 else '0.0.0.0' }}</span>
         </div>
         
-        <span class="status-pill {{ status_class }}">
+        <span class="status-pill {{ statusClass }}">
           <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}
         </span>
     </div>
@@ -171,18 +171,18 @@
 
 </div>
 
-{% if vps_data.total_pages > 1 %}
+{% if vpsData.totalPages > 1 %}
 <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-    {% if vps_data.has_prev %}
-    <a href="{{ url_for('dashboard', page=vps_data.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+    {% if vpsData.hasPrev %}
+    <a href="{{ url_for('dashboard', page=vpsData.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
     {% endif %}
     
     <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-        PAGE {{ vps_data.current_page }} / {{ vps_data.total_pages }}
+        PAGE {{ vpsData.currentPage }} / {{ vpsData.totalPages }}
     </span>
 
-    {% if vps_data.has_next %}
-    <a href="{{ url_for('dashboard', page=vps_data.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+    {% if vpsData.hasNext %}
+    <a href="{{ url_for('dashboard', page=vpsData.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
     {% endif %}
 </div>
 {% endif %}

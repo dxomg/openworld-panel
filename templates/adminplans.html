@@ -21,7 +21,7 @@
     
     <!-- Changed from vps-grid to your native plan-grid -->
     <div class="plan-grid">
-        {% for plan in allplans %}
+        {% for plan in allPlans %}
         <div class="plan-card" style="opacity: {{ '1' if plan.active else '0.6' }};">
             {% if not plan.active %}
             <div class="plan-badge" style="background: var(--text-dim); color: #fff;">Inactive</div>
@@ -48,7 +48,7 @@
             <!-- Pushes the buttons to the bottom of the card -->
             <div class="btn-row" style="margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-soft); justify-content: space-between;">
                 <button onclick="openViewPlanModal('{{ plan.uuid }}')" class="btn btn-small">Edit</button>
-                <form action="{{ url_for('admindeleteplans', plan_uuid=plan.uuid) }}" method="POST" style="margin: 0;" onsubmit="return confirm('Delete plan \'{{ plan.name }}\'? This cannot be undone.');">
+                <form action="{{ url_for('admindeleteplans', planUuid=plan.uuid) }}" method="POST" style="margin: 0;" onsubmit="return confirm('Delete plan \'{{ plan.name }}\'? This cannot be undone.');">
                     <button type="submit" class="btn btn-small btn-danger" style="background: transparent;">Delete</button>
                 </form>
             </div>
@@ -61,7 +61,7 @@
                     <h3>Edit Plan</h3>
                     <button type="button" class="modal-close" onclick="closeViewPlanModal('{{ plan.uuid }}')">&times;</button>
                 </div>
-                <form action="{{ url_for('adminupdateplans', plan_uuid=plan.uuid) }}" method="POST">
+                <form action="{{ url_for('adminupdateplans', planUuid=plan.uuid) }}" method="POST">
                     <!-- Increased gap from 12px to 20px for breathing room -->
                     <div class="form-grid" style="grid-template-columns: 1fr; gap: 20px;">
                         
@@ -120,18 +120,18 @@
         {% endfor %}
     </div>
 
-    {% if pagination.total_pages > 1 %}
+    {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-        {% if pagination.has_prev %}
-        <a href="{{ url_for('adminplans', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminplans', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
 
-        {% if pagination.has_next %}
-        <a href="{{ url_for('adminplans', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminplans', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
         {% endif %}
     </div>
     {% endif %}

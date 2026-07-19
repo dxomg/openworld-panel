@@ -10,12 +10,12 @@
   <div class="detail-title">
     <h1>{{ instance.hostname }}</h1>
 
-    {% set status_class = 'status-running' if instance.status == 'running' 
+    {% set statusClass = 'status-running' if instance.status == 'running' 
                       else 'status-creating' if instance.status == 'creating' 
                       else 'status-pendingpayment' if instance.status == 'pendingpayment' 
                       else 'status-suspended' if instance.status == 'suspended' 
                       else 'status-stopped' %}
-    <span class="status-pill {{ status_class }}">
+    <span class="status-pill {{ statusClass }}">
       <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}
     </span>
   </div>

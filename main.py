@@ -43,7 +43,7 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_or_create_config():
+def loadorcreateconfig():
     if not os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, "w") as f:
             toml.dump(DEFAULT_CONFIG, f)
@@ -53,17 +53,7 @@ def load_or_create_config():
         return toml.load(f)
 
 
-config = load_or_create_config()
-
-# Auto-migrate: add missing columns to existing DBs
-import sqlite3 as _sqlite3
-try:
-    _conn = _sqlite3.connect("database.db")
-    _conn.execute("ALTER TABLE plans ADD COLUMN stock INTEGER NOT NULL DEFAULT -1")
-    _conn.commit()
-    _conn.close()
-except _sqlite3.OperationalError:
-    pass  # column already exists
+config = loadorcreateconfig()
 
 PAYPAL_URL = "https://www.sandbox.paypal.com/cgi-bin/webscr" if config['paypal']['sandbox'] else "https://www.paypal.com/cgi-bin/webscr"
 VERIFY_URL = "https://ipnpb.sandbox.paypal.com/cgi-bin/webscr" if config['paypal']['sandbox'] else "https://ipnpb.paypal.com/cgi-bin/webscr"
@@ -82,17 +72,43 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 COOKIE_NAME = "sessioncookie"
 SESSION_TTL_DAYS = config["general"]["defaultcookiettl"] * 24
 
+# CSRF protection
+def generatecsrftoken():
+    if 'csrf_token' not in g:
+        g.csrf_token = secrets.token_hex(32)
+    return g.csrf_token
 
-def login_required(f):
+@app.before_request
+def csrfprotect():
+    if request.method == "POST":
+        # Skip CSRF for PayPal IPN (external webhook)
+        if request.path == "/paypal/ipn":
+            return
+        token = request.form.get('_csrf_token')
+        sessionToken = request.cookies.get('csrf_token')
+        if not token or not sessionToken or token != sessionToken:
+            return "CSRF validation failed", 403
+
+@app.after_request
+def setcsrfcookie(response):
+    if request.endpoint and request.endpoint != 'static':
+        token = generatecsrftoken()
+        response.set_cookie('csrf_token', token, httponly=False, samesite='Lax')
+    return response
+
+app.jinja_env.globals['csrf_token'] = generatecsrftoken
+
+
+def loginrequired(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.cookies.get(COOKIE_NAME)
-        user = services.validate_session(token) if token else None
+        user = services.validatesession(token) if token else None
 
         if not user:
             return redirect(url_for("login"))
 
-        ban = services.is_user_banned(user["id"])
+        ban = services.isuserbanned(user["id"])
         if ban:
             return render_template("banned.html", **paneluserinfo(user, ban=ban))
 
@@ -100,7 +116,7 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated
 
-def admin_required(f):
+def adminrequired(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         # Accessing by key name is much safer than by index
@@ -119,7 +135,7 @@ def guestuserinfo():
 
 def paneluserinfo(user, ban=None):
     if ban is None:
-        ban = services.is_user_banned(user["id"])
+        ban = services.isuserbanned(user["id"])
 
     return {
         "favicon": config["general"]["favicon"],
@@ -140,7 +156,7 @@ def paneluserinfo(user, ban=None):
 
 def paneladmininfo(user, ban=None):
     if ban is None:
-        ban = services.is_user_banned(user["id"])
+        ban = services.isuserbanned(user["id"])
 
     return {
         "totalusers": db.countusers(),
@@ -159,21 +175,21 @@ def index():
 
 
 @app.route("/dashboard")
-@login_required
+@loginrequired
 def dashboard():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    vps_data = services.list_vps_for_user_panel(g.userinfo["id"], page=page, per_page=10, search=q)
-    return render_template("dashboard.html", vps_data=vps_data, search=q or '', **paneluserinfo(g.userinfo))
+    vpsData = services.listvpsforuserpanel(g.userinfo["id"], page=page, perPage=10, search=q)
+    return render_template("dashboard.html", vpsData=vpsData, search=q or '', **paneluserinfo(g.userinfo))
 
 @app.route("/createvps", methods=["GET", "POST"])
-@login_required
+@loginrequired
 def createvps():
     if request.method == "POST":
-        plan_id = request.form.get("plan_id", type=int)
-        image_id = request.form.get("image_id", type=int)
+        planId = request.form.get("planId", type=int)
+        imageId = request.form.get("imageId", type=int)
 
-        plan = db.getplanbyid(plan_id)
+        plan = db.getplanbyid(planId)
         if not plan:
             flash("Invalid plan selected.", "error")
             return redirect(url_for('createvps'))
@@ -182,77 +198,77 @@ def createvps():
             flash("This plan is out of stock.", "error")
             return redirect(url_for('createvps'))
 
-        is_paid = float(plan['price']) > 0
-        node_id, storage_id = db.get_suitable_node_and_storage(plan['price'])
+        isPaid = float(plan['price']) > 0
+        nodeId, storageId = db.getsuitablenodeandstorage(plan['price'])
         
-        if not node_id or not storage_id:
+        if not nodeId or not storageId:
             flash("No nodes or Storage available for this tier.", "error")
             return redirect(url_for('createvps'))
 
-        vps_uuid = str(uuid.uuid4())
+        vpsUuid = str(uuid.uuid4())
         # STANDARDIZED: Use 'pendingpayment' (no underscore)
-        initial_status = 'pendingpayment' if is_paid else 'creating'
+        initialStatus = 'pendingpayment' if isPaid else 'creating'
 
         try:
             db.addvps(
-                uuid=vps_uuid,
+                uuid=vpsUuid,
                 userid=int(g.userinfo["id"]),
                 planid=plan['id'],
-                imageid=image_id,
-                nodeid=node_id,
-                storageid=storage_id,
-                hostname=services.generate_random_hostname(),
-                password=services.generate_random_password(),
+                imageid=imageId,
+                nodeid=nodeId,
+                storageid=storageId,
+                hostname=services.generaterandomhostname(),
+                password=services.generaterandompassword(),
                 cpu=plan['cpu'], ram=plan['ram'],
                 swap=plan['swap'], disk=plan['disk'],
-                status=initial_status
+                status=initialStatus
             )
             
             db.decrementplanstock(plan['id'])
             
-            if is_paid:
-                return redirect(url_for('checkout', vps_uuid=vps_uuid))
+            if isPaid:
+                return redirect(url_for('checkout', vpsUuid=vpsUuid))
             
             flash("Free VPS is being created!", "success")
             return redirect(url_for('dashboard'))
         except Exception as e:
-            flash(f"Error: {e}", "error")
+            flash("An error occurred while creating the VPS.", "error")
             return redirect(url_for('createvps'))
 
-    return render_template("createvps.html", plans_list=db.listplans(active=1), images=db.listimages(active=1), **paneluserinfo(g.userinfo))
+    return render_template("createvps.html", plansList=db.listplans(active=1), images=db.listimages(active=1), **paneluserinfo(g.userinfo))
 
-@app.route("/checkout/<string:vps_uuid>")
-@login_required
-def checkout(vps_uuid):
-    vps_record = db.getvps(vps_uuid) # Rename to be distinct
+@app.route("/checkout/<string:vpsUuid>")
+@loginrequired
+def checkout(vpsUuid):
+    vpsRecord = db.getvps(vpsUuid) # Rename to be distinct
     
-    if not vps_record or vps_record['userid'] != g.userinfo['id']:
+    if not vpsRecord or vpsRecord['userid'] != g.userinfo['id']:
         flash("Invoice not found.", "error")
         return redirect(url_for('dashboard'))
     
-    if vps_record['status'] != 'pendingpayment':
+    if vpsRecord['status'] != 'pendingpayment':
         flash("This instance is already being processed.", "info")
         return redirect(url_for('dashboard'))
 
-    plan = db.getplanbyid(vps_record['planid'])
-    methods = db.listallpaymentmethods() 
+    plan = db.getplanbyid(vpsRecord['planid'])
+    methods = db.listallPaymentMethods() 
     
-    # Pass it as checkout_vps to avoid collision with paneluserinfo['vps']
+    # Pass it as checkoutVps to avoid collision with paneluserinfo['vps']
     return render_template(
         "checkout.html", 
-        checkout_vps=vps_record, 
+        checkoutVps=vpsRecord, 
         plan=plan, 
         methods=methods, 
         **paneluserinfo(g.userinfo)
     )
 
 @app.route("/checkout/processpayment", methods=["POST"])
-@login_required
+@loginrequired
 def processpayment():
-    vps_uuid = request.form.get("vps_uuid")
-    method_slug = request.form.get("method_slug")
+    vpsUuid = request.form.get("vpsUuid")
+    methodSlug = request.form.get("methodSlug")
 
-    vps = db.getvps(vps_uuid)
+    vps = db.getvps(vpsUuid)
     if not vps:
         flash("Invalid Session: VPS not found.", "error")
         return redirect(url_for('dashboard'))
@@ -261,14 +277,14 @@ def processpayment():
         flash("Invalid Session: Ownership mismatch.", "error")
         return redirect(url_for('dashboard'))
 
-    current_status = str(vps['status']).strip()
-    if current_status != 'pendingpayment':
-        flash(f"Invalid Session: Status is {current_status}.", "error")
+    currentStatus = str(vps['status']).strip()
+    if currentStatus != 'pendingpayment':
+        flash(f"Invalid Session: Status is {currentStatus}.", "error")
         return redirect(url_for('dashboard'))
 
     plan = db.getplanbyid(vps['planid'])
 
-    if method_slug == 'paypal':
+    if methodSlug == 'paypal':
         params = {
             "cmd": "_xclick",
             "business": config['paypal']['email'],
@@ -276,25 +292,25 @@ def processpayment():
             "amount": f"{plan['price']:.2f}",
             "currency_code": "USD",
             "notify_url": f"{config['paypal']['base_url']}/paypal/ipn",
-            "return": f"{config['paypal']['base_url']}/vps/{vps_uuid}",
-            "cancel_return": f"{config['paypal']['base_url']}/checkout/{vps_uuid}",
-            "custom": vps_uuid
+            "return": f"{config['paypal']['base_url']}/vps/{vpsUuid}",
+            "cancel_return": f"{config['paypal']['base_url']}/checkout/{vpsUuid}",
+            "custom": vpsUuid
         }
-        paypal_redirect = PAYPAL_URL + "?" + urlencode(params)
-        return redirect(paypal_redirect)
+        paypalRedirect = PAYPAL_URL + "?" + urlencode(params)
+        return redirect(paypalRedirect)
 
     # Manual / Balance activation
-    db.updatevps(vps_uuid, status='creating')
-    manual_method = db.getpaymentmethodbyslug(method_slug)
-    txn_uuid = str(uuid.uuid4())
+    db.updatevps(vpsUuid, status='creating')
+    manualMethod = db.getpaymentmethodbyslug(methodSlug)
+    txnUuid = str(uuid.uuid4())
     db.addtransaction(
-        uuid=txn_uuid,
+        uuid=txnUuid,
         userid=vps['userid'],
         transactionid=f"manual-{uuid.uuid4().hex[:8]}",
         amount=float(plan['price']),
         currency="USD",
         status="completed",
-        paymentprocessorid=manual_method['id'] if manual_method else 1,
+        paymentprocessorid=manualMethod['id'] if manualMethod else 1,
         vpsid=vps['id'],
         planid=vps['planid']
     )
@@ -304,28 +320,28 @@ def processpayment():
 @app.route("/paypal/ipn", methods=["POST"])
 def paypalipn():
     # 1. Verify with PayPal
-    verify_data = request.form.to_dict(flat=True)
-    verify_data["cmd"] = "_notify-validate"
-    r = requests.post(VERIFY_URL, data=verify_data, headers={"Connection": "close"})
+    verifyData = request.form.to_dict(flat=True)
+    verifyData["cmd"] = "_notify-validate"
+    r = requests.post(VERIFY_URL, data=verifyData, headers={"Connection": "close"})
 
     if r.text != "VERIFIED":
         return "INVALID", 400
 
     # 2. Extract Data
-    vps_uuid = request.form.get("custom")
-    payment_status = request.form.get("payment_status")
+    vpsUuid = request.form.get("custom")
+    paymentStatus = request.form.get("paymentStatus")
     amount = request.form.get("mc_gross")
     receiver = request.form.get("receiver_email")
 
     # 3. Validation Logic
-    vps = db.getvps(vps_uuid)
+    vps = db.getvps(vpsUuid)
     if not vps:
         return "VPS not found", 400
     
     plan = db.getplanbyid(vps['planid'])
 
     # Security Checks
-    if payment_status != "Completed":
+    if paymentStatus != "Completed":
         return "Not completed", 200
     if receiver.lower() != config['paypal']['email'].lower():
         return "Wrong receiver", 400
@@ -334,41 +350,41 @@ def paypalipn():
 
     # 4. Success Action: Update Database
     if vps['status'] == 'pendingpayment':
-        db.updatevps(vps_uuid, status='creating')
-        txn_id = request.form.get("txn_id") or request.form.get("transaction_id")
-        paypal_method = db.getpaymentmethodbyslug("paypal")
-        txn_uuid = str(uuid.uuid4())
+        db.updatevps(vpsUuid, status='creating')
+        txnId = request.form.get("txn_id") or request.form.get("transaction_id")
+        paypalMethod = db.getpaymentmethodbyslug("paypal")
+        txnUuid = str(uuid.uuid4())
         db.addtransaction(
-            uuid=txn_uuid,
+            uuid=txnUuid,
             userid=vps['userid'],
-            transactionid=txn_id,
+            transactionid=txnId,
             amount=float(amount),
             currency=request.form.get("mc_currency", "USD"),
             status="completed",
-            paymentprocessorid=paypal_method['id'] if paypal_method else 1,
+            paymentprocessorid=paypalMethod['id'] if paypalMethod else 1,
             vpsid=vps['id'],
             planid=vps['planid']
         )
 
     return "OK", 200
 
-@app.route("/vps/<vps_uuid>")
-@login_required
-def vpspanel(vps_uuid):
-    vps = db.getvps(vps_uuid)
+@app.route("/vps/<vpsUuid>")
+@loginrequired
+def vpspanel(vpsUuid):
+    vps = db.getvps(vpsUuid)
     if not vps or vps["userid"] != g.userinfo["id"]:
         return "VPS not found", 404
 
-    instance = services.get_vps_details(vps["id"])
-    metric = services.get_latest_vps_metric(vps["id"])
-    firewall_rules = services.list_firewall_rules_for_vps(vps["id"])
+    instance = services.getvpsdetails(vps["id"])
+    metric = services.getlatestvpsmetric(vps["id"])
+    firewallRules = services.listfirewallrulesforvps(vps["id"])
 
     return render_template(
         "vpspanel.html",
         **paneluserinfo(g.userinfo),
         instance=instance,
         metric=metric,
-        firewall_rules=firewall_rules,
+        firewallRules=firewallRules,
     )
 
 
@@ -378,10 +394,13 @@ def vpspanel(vps_uuid):
 #
 #############
 
-@app.route("/vps/<vps_uuid>/action/<action>", methods=["POST"])
-@login_required
-def vps_action(vps_uuid, action):
-    vps = db.getvps(vps_uuid)
+@app.route("/vps/<vpsUuid>/action/<action>", methods=["POST"])
+@loginrequired
+def vpsaction(vpsUuid, action):
+    if action not in ("start", "stop", "restart"):
+        return jsonify({"error": "Invalid action"}), 400
+
+    vps = db.getvps(vpsUuid)
     if not vps or vps["userid"] != g.userinfo["id"]:
         return jsonify({"error": "VPS not found"}), 404
     
@@ -389,144 +408,172 @@ def vps_action(vps_uuid, action):
         return jsonify({"error": "This VPS is suspended and cannot be modified."}), 403
 
     try:
-        updated = services.perform_vps_action(vps["id"], action, actor_user_id=g.userinfo["id"])
+        updated = services.performvpsaction(vps["id"], action, actorUserId=g.userinfo["id"])
         return jsonify({"status": updated["status"]})
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
 
-@app.route("/vps/<vps_uuid>/status")
-@login_required
-def vps_status_poll(vps_uuid):
-    vps = db.getvps(vps_uuid)
+@app.route("/vps/<vpsUuid>/status")
+@loginrequired
+def vpsstatuspoll(vpsUuid):
+    vps = db.getvps(vpsUuid)
     if not vps or vps["userid"] != g.userinfo["id"]:
         return jsonify({"error": "VPS not found"}), 404
 
-    metric = services.get_latest_vps_metric(vps["id"])
+    metric = services.getlatestvpsmetric(vps["id"])
     return jsonify({"status": vps["status"], "metrics": metric})
 
 
 #Admin
 
 @app.route("/dashboard/admin")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def admindashboard():
     return render_template("admindashboard.html", **paneluserinfo(g.userinfo), **paneladmininfo(g.userinfo))
 
-@app.route("/dashboard/admin/users")
-@login_required
-@admin_required
+@app.route("/dashboard/admin/users", methods=["GET", "POST"])
+@loginrequired
+@adminrequired
 def adminusers():
+    if request.method == "POST":
+        username = request.form.get("username")
+        email = request.form.get("email")
+        password = request.form.get("password")
+        if username and email and password:
+            userUuid = str(uuid.uuid4())
+            hashedPw = services.hashpassword(password)
+            role = 'admin' if db.countusers() == 0 else 'user'
+            try:
+                db.adduser(uuid=userUuid, username=username, email=email, password=hashedPw, role=role)
+                flash("User created.", "success")
+            except Exception:
+                flash("Error creating user.", "error")
+        else:
+            flash("All fields required.", "error")
+        return redirect(url_for('adminusers'))
+
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
     perpage = 12 
     
-    pagination_data = db.listuserspaginated(page=page, perpage=perpage, search=q)
+    paginationData = db.listuserspaginated(page=page, perpage=perpage, search=q)
     
     return render_template(
         "adminusers.html", 
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo),
-        allusers=pagination_data['users'],
-        pagination=pagination_data,
+        allUsers=paginationData['users'],
+        pagination=paginationData,
         search=q or ''
     )
-@app.route("/dashboard/admin/users/update/<string:user_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminupdateusers(user_uuid):
-    # Retrieve form data
+@app.route("/dashboard/admin/users/update/<string:userUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminupdateusers(userUuid):
     username = request.form.get('username')
     email = request.form.get('email')
     role = request.form.get('role')
     
-    # Update the user in the database
+    if role not in ('user', 'admin'):
+        flash("Invalid role.", "error")
+        return redirect(url_for('adminusers'))
+
+    # Prevent admin from demoting themselves
+    targetUser = db.getuser(userUuid)
+    if targetUser and targetUser['id'] == g.userinfo['id'] and role != 'admin':
+        flash("You cannot demote yourself.", "error")
+        return redirect(url_for('adminusers'))
+    
     db.updateuser(
-        user_uuid,
+        userUuid,
         username=username,
         email=email,
         role=role
     )
     
     flash("User updated successfully!", "success")
-    
-    # Redirect back to the admin users page 
-    # (replace 'adminusers' with your actual function name for the user list if different)
     return redirect(url_for('adminusers'))
 
-@app.route("/dashboard/admin/users/ban/<int:user_id>", methods=["POST"])
-@login_required
-@admin_required
-def adminbanuser(user_id):
+@app.route("/dashboard/admin/users/ban/<int:userId>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminbanuser(userId):
+    if userId == g.userinfo["id"]:
+        flash("You cannot ban yourself.", "error")
+        return redirect(url_for('adminusers'))
+
+    target = db.getuserbyid(userId)
+    if not target:
+        flash("User not found.", "error")
+        return redirect(url_for('adminusers'))
+
     reason = request.form.get("reason", "No reason provided")
-    ban_uuid = str(uuid.uuid4())
-    admin_id = g.userinfo["id"] 
+    banUuid = str(uuid.uuid4())
+    adminId = g.userinfo["id"] 
     
-    # Add ban record
-    db.addban(ban_uuid, user_id, admin_id, reason, expires=None)
-    
-    # Update the user's STATUS column to "banned"
-    db.updateuser(user_id, status="banned") 
+    db.addban(banUuid, userId, adminId, reason, expires=None)
+    db.updateuser(userId, status="banned") 
     
     flash("User has been banned.", "success")
     return redirect(url_for('adminusers'))
 
 
-@app.route("/dashboard/admin/users/unban/<int:user_id>", methods=["POST"])
-@login_required
-@admin_required
-def adminunbanuser(user_id):
+@app.route("/dashboard/admin/users/unban/<int:userId>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminunbanuser(userId):
     # Find their active ban and remove it
-    active_ban = db.getbanbyuserid(user_id)
-    if active_ban:
-        db.removeban(active_ban["uuid"])
+    activeBan = db.getbanbyuserid(userId)
+    if activeBan:
+        db.removeban(activeBan["uuid"])
     
     # Restore the user's STATUS column to "active"
-    db.updateuser(user_id, status="active")
+    db.updateuser(userId, status="active")
     
     flash("User has been unbanned.", "success")
     return redirect(url_for('adminusers'))
 
 
 @app.route("/dashboard/admin/vps")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminvps():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    vps_data = db.listvpspaginated(page=page, perpage=12, search=q)
+    vpsData = db.listvpspaginated(page=page, perpage=12, search=q)
     
     users = db.listallusers()
     plans = db.listplans(active=1)
     images = db.listimages(active=1)
-    nodes_storage = db.listnodestorage()
+    nodesStorage = db.listnodestorage()
     
     return render_template(
         "adminvps.html", 
-        all_vps=vps_data['vps'],
-        pagination=vps_data,
+        allVps=vpsData['vps'],
+        pagination=vpsData,
         users=users,
         plans=plans,
         images=images,
-        nodes_storage=nodes_storage,
+        nodesStorage=nodesStorage,
         search=q or '',
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo)
     )
 
-@app.route("/dashboard/admin/vps/<vps_uuid>")
-@login_required
-@admin_required
-def adminvpspanel(vps_uuid):
-    vps = db.getvps(vps_uuid)
+@app.route("/dashboard/admin/vps/<vpsUuid>")
+@loginrequired
+@adminrequired
+def adminvpspanel(vpsUuid):
+    vps = db.getvps(vpsUuid)
     if not vps:
         flash("VPS not found.", "error")
         return redirect(url_for('adminvps'))
 
-    instance = services.get_vps_details(vps["id"])
-    metric = services.get_latest_vps_metric(vps["id"])
-    firewall_rules = services.list_firewall_rules_for_vps(vps["id"])
+    instance = services.getvpsdetails(vps["id"])
+    metric = services.getlatestvpsmetric(vps["id"])
+    firewallRules = services.listfirewallrulesforvps(vps["id"])
     owner = db.getuserbyid(vps["userid"])
 
     return render_template(
@@ -535,17 +582,17 @@ def adminvpspanel(vps_uuid):
         **paneladmininfo(g.userinfo),
         instance=instance,
         metric=metric,
-        firewall_rules=firewall_rules,
+        firewallRules=firewallRules,
         owner=owner,
     )
 
 @app.route("/dashboard/admin/vps/create", methods=["GET", "POST"])
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def admincreatevps():
     if request.method == "POST":
         # 1. Automatic UUID Generation
-        vps_uuid = str(uuid.uuid4())
+        vpsUuid = str(uuid.uuid4())
         
         # 2. Extract basic info from the form
         userid = request.form.get('userid', type=int)
@@ -567,9 +614,17 @@ def admincreatevps():
             flash("This plan is out of stock.", "danger")
             return redirect(url_for('adminvps'))
 
+        if not db.getuserbyid(userid):
+            flash("Invalid user selected.", "danger")
+            return redirect(url_for('adminvps'))
+
+        if not db.getimagebyid(imageid):
+            flash("Invalid image selected.", "danger")
+            return redirect(url_for('adminvps'))
+
         try:
             db.addvps(
-                uuid=vps_uuid,
+                uuid=vpsUuid,
                 userid=userid,
                 planid=planid,
                 imageid=imageid,
@@ -588,15 +643,15 @@ def admincreatevps():
             return redirect(url_for('adminvps'))
             
         except Exception as e:
-            flash(f"Deployment Error: {str(e)}", "danger")
+            flash("Deployment error.", "danger")
             return redirect(url_for('adminvps'))
 
     # GET: Fetching data for the dropdowns
     context = {
-        "users": db.listallusers(),
+        "users": db.listallUsers(),
         "plans": db.listplans(active=1),
         "images": db.listimages(active=1),
-        "nodes_storage": db.listnodestorage()
+        "nodesStorage": db.listnodestorage()
     }
 
     return render_template(
@@ -608,8 +663,8 @@ def admincreatevps():
 
 
 @app.route("/dashboard/admin/plans", methods=["GET", "POST"])
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminplans():
     # Handle New Plan Creation
     if request.method == "POST":
@@ -627,27 +682,27 @@ def adminplans():
 
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    plans_data = db.listplanspaginated(page=page, perpage=12, search=q)
+    plansData = db.listplanspaginated(page=page, perpage=12, search=q)
 
     return render_template(
         "adminplans.html", 
-        allplans=plans_data['plans'],
-        pagination=plans_data,
+        allPlans=plansData['plans'],
+        pagination=plansData,
         search=q or '',
         **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo)
     )
 
-@app.route("/dashboard/admin/plans/update/<string:plan_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminupdateplans(plan_uuid):
+@app.route("/dashboard/admin/plans/update/<string:planUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminupdateplans(planUuid):
     # Retrieve form data
     # Note: Use request.form.get() for inputs, 
     # check for checkbox values if you add them later (they might return 'on')
     
     db.updateplan(
-        uuid=plan_uuid,
+        uuid=planUuid,
         name=request.form.get("name"),
         cpu=int(request.form.get("cpu")),
         ram=int(request.form.get("ram")),
@@ -663,112 +718,114 @@ def adminupdateplans(plan_uuid):
     
     return redirect(url_for('adminplans'))
 
-@app.route("/dashboard/admin/plans/delete/<string:plan_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def admindeleteplans(plan_uuid):
-    db.removeplan(uuid=plan_uuid)
+@app.route("/dashboard/admin/plans/delete/<string:planUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def admindeleteplans(planUuid):
+    db.removeplan(uuid=planUuid)
     return redirect(url_for('adminplans'))
 
 @app.route("/dashboard/admin/nodes")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminnodes():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    nodes_data = db.listnodespaginated(page=page, perpage=12, search=q)
+    nodesData = db.listnodespaginated(page=page, perpage=12, search=q)
     
     return render_template(
         "adminnodes.html", 
-        all_nodes=nodes_data['nodes'],
-        pagination=nodes_data,
+        allNodes=nodesData['nodes'],
+        pagination=nodesData,
         search=q or '',
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo)
     )
 
 @app.route("/dashboard/admin/nodes/create", methods=["POST"])
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminnodescreate():
     try:
-        node_uuid = str(uuid.uuid4())
+        nodeUuid = str(uuid.uuid4())
         db.addnode(
-            uuid=node_uuid,
+            uuid=nodeUuid,
             name=request.form.get("name"),
             hostname=request.form.get("hostname"),
             address=request.form.get("address"),
+            url=request.form.get("url", ""),
             apikey=request.form.get("apikey"),
             cpu=int(request.form.get("cpu", 0)),
             ram=int(request.form.get("ram", 0)),
             disk=int(request.form.get("disk", 0)),
             status=request.form.get("status", "online"),
-            tier=request.form.get("tier", "free") # New field
+            tier=request.form.get("tier", "free")
         )
         flash(f"Node '{request.form.get('name')}' registered successfully.", "success")
     except Exception as e:
-        flash(f"Error creating node: {e}", "danger")
+        flash("Error creating node.", "danger")
     
     return redirect(url_for('adminnodes'))
 
-@app.route("/dashboard/admin/nodes/update/<string:node_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminnodesupdate(node_uuid):
+@app.route("/dashboard/admin/nodes/update/<string:nodeUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnodesupdate(nodeUuid):
     try:
-        update_data = {
+        updateData = {
             "name": request.form.get("name"),
             "hostname": request.form.get("hostname"),
             "address": request.form.get("address"),
+            "url": request.form.get("url", ""),
             "ram": int(request.form.get("ram", 0)),
             "status": request.form.get("status"),
-            "tier": request.form.get("tier") # New field
+            "tier": request.form.get("tier")
         }
         
-        new_key = request.form.get("apikey")
-        if new_key and new_key.strip() != "":
-            update_data["apikey"] = new_key
+        newKey = request.form.get("apikey")
+        if newKey and newKey.strip() != "":
+            updateData["apikey"] = newKey
 
-        db.updatenode(node_uuid, **update_data)
+        db.updatenode(nodeUuid, **updateData)
         flash("Node configuration updated.", "success")
     except Exception as e:
-        flash(f"Error updating node: {e}", "danger")
+        flash("Error updating node.", "danger")
 
     return redirect(url_for('adminnodes'))
 
-@app.route("/dashboard/admin/nodes/delete/<string:node_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminnodesdelete(node_uuid):
+@app.route("/dashboard/admin/nodes/delete/<string:nodeUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnodesdelete(nodeUuid):
     try:
-        db.removenode(node_uuid)
+        db.removenode(nodeUuid)
         flash("Node removed successfully.", "warning")
     except Exception as e:
-        flash(f"Error deleting node: {e}", "danger")
+        flash("Error deleting node.", "danger")
         
     return redirect(url_for('adminnodes'))
 
 @app.route("/dashboard/admin/osimage")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminosimage():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    images_data = db.listimagespaginated(page=page, perpage=12, search=q)
+    imagesData = db.listimagespaginated(page=page, perpage=12, search=q)
     
     return render_template(
         "adminosimage.html",
-        all_images=images_data['images'],
-        pagination=images_data,
-        active_images_count=sum(1 for i in images_data['images'] if i['active']),
+        allImages=imagesData['images'],
+        pagination=imagesData,
+        activeImagesCount=sum(1 for i in imagesData['images'] if i['active']),
         search=q or '',
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo)
     )
 
 @app.route("/dashboard/admin/osimage/create", methods=["POST"])
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminosimagecreate():
     try:
         db.addimage(
@@ -780,61 +837,61 @@ def adminosimagecreate():
         )
         flash("OS Image added successfully.", "success")
     except Exception as e:
-        flash(f"Error adding image: {e}", "danger")
+        flash("Error adding image.", "danger")
     return redirect(url_for('adminosimage'))
 
-@app.route("/dashboard/admin/osimage/update/<string:image_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminosimageupdate(image_uuid):
+@app.route("/dashboard/admin/osimage/update/<string:imageUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminosimageupdate(imageUuid):
     try:
-        update_data = {
+        updateData = {
             "name": request.form.get("name"),
             "image": request.form.get("image"),
             "description": request.form.get("description"),
             "active": int(request.form.get("active"))
         }
-        db.updateimage(image_uuid, **update_data)
+        db.updateimage(imageUuid, **updateData)
         flash("OS Image updated.", "success")
     except Exception as e:
-        flash(f"Error updating image: {e}", "danger")
+        flash("Error updating image.", "danger")
     return redirect(url_for('adminosimage'))
 
-@app.route("/dashboard/admin/osimage/delete/<string:image_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminosimagedelete(image_uuid):
+@app.route("/dashboard/admin/osimage/delete/<string:imageUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminosimagedelete(imageUuid):
     try:
-        db.removeimage(image_uuid)
+        db.removeimage(imageUuid)
         flash("OS Image removed.", "warning")
     except Exception as e:
-        flash(f"Error deleting image: {e}", "danger")
+        flash("Error deleting image.", "danger")
     return redirect(url_for('adminosimage'))
 
 
 
 @app.route("/dashboard/admin/nodesstorage")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminnodesstorage():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    storage_data = db.listnodesstoragepaginated(page=page, perpage=12, search=q)
-    nodes_list = db.listallnodes()
+    storageData = db.listnodesstoragepaginated(page=page, perpage=12, search=q)
+    nodesList = db.listallnodes()
 
     return render_template(
         "adminnodesstorage.html", 
-        all_storage=storage_data['storage'],
-        pagination=storage_data,
-        all_nodes=nodes_list,
+        allStorage=storageData['storage'],
+        pagination=storageData,
+        allNodes=nodesList,
         search=q or '',
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo)
     )
 
 @app.route("/dashboard/admin/nodesstorage/create", methods=["POST"])
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminnodesstoragecreate():
     try:
         db.addnodesstorage( # Updated function name
@@ -846,54 +903,162 @@ def adminnodesstoragecreate():
             size=int(request.form.get("size", 0))
         )
         flash("Storage unit registered.", "success")
-    except Exception as e:
-        flash(f"Error: {e}", "danger")
+    except Exception:
+        flash("Error creating storage.", "danger")
     return redirect(url_for('adminnodesstorage'))
 
-@app.route("/dashboard/admin/nodesstorage/update/<string:s_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminnodesstorageupdate(s_uuid):
+@app.route("/dashboard/admin/nodesstorage/update/<string:sUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnodesstorageupdate(sUuid):
     try:
-        update_data = {
+        updateData = {
             "name": request.form.get("name"),
             "path": request.form.get("path"),
             "type": request.form.get("type"),
             "size": int(request.form.get("size", 0))
         }
-        db.updatenodesstorage(s_uuid, **update_data) # Updated function name
+        db.updatenodesstorage(sUuid, **updateData)
         flash("Storage configuration updated.", "success")
-    except Exception as e:
-        flash(f"Error: {e}", "danger")
+    except Exception:
+        flash("Error updating storage.", "danger")
     return redirect(url_for('adminnodesstorage'))
 
-@app.route("/dashboard/admin/nodesstorage/delete/<string:s_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminnodesstoragedelete(s_uuid):
+@app.route("/dashboard/admin/nodesstorage/delete/<string:sUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnodesstoragedelete(sUuid):
     try:
-        db.removenodesstorage(s_uuid) # Updated function name
+        db.removenodesstorage(sUuid)
         flash("Storage unit removed.", "warning")
-    except Exception as e:
-        flash(f"Error: {e}", "danger")
+    except Exception:
+        flash("Error deleting storage.", "danger")
     return redirect(url_for('adminnodesstorage'))
+
+# --- Network Management ---
+
+@app.route("/dashboard/admin/networks")
+@loginrequired
+@adminrequired
+def adminnetworks():
+    page = request.args.get('page', 1, type=int)
+    q = request.args.get('q', '').strip() or None
+    networksData = db.listnetworkspaginated(page=page, perpage=12, search=q)
+    allNodes = db.listallnodes()
+    return render_template(
+        "adminnetworks.html",
+        allNetworks=networksData['networks'],
+        pagination=networksData,
+        allNodes=allNodes,
+        search=q or '',
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
+
+@app.route("/dashboard/admin/networks/create", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnetworkscreate():
+    nodeid = request.form.get("nodeid", type=int)
+    name = request.form.get("name")
+    subnet = request.form.get("subnet")
+    gateway = request.form.get("gateway")
+    ipv6 = int(request.form.get("ipv6", 1))
+
+    if not nodeid or not name:
+        flash("Node and network name required.", "error")
+        return redirect(url_for('adminnetworks'))
+
+    node = db.getnodebyid(nodeid)
+    if not node:
+        flash("Node not found.", "error")
+        return redirect(url_for('adminnetworks'))
+
+    if db.getnetworkbynamenodeid(name, nodeid):
+        flash("Network already registered for this node.", "error")
+        return redirect(url_for('adminnetworks'))
+
+    # Try to create the network on the node
+    payload = {
+        "name": name,
+        "ipv6": bool(ipv6),
+        "enableMasquerade": False,
+    }
+    if subnet:
+        payload["subnet"] = subnet
+    if gateway:
+        payload["gateway"] = gateway
+
+    result = services.nodeapi(node, "/networks", method="POST", data=payload, timeout=30)
+    if not result:
+        flash("Node unreachable. Could not create network.", "error")
+        return redirect(url_for('adminnetworks'))
+    if result.get("error"):
+        flash(f"Node error: {result['error']}", "error")
+        return redirect(url_for('adminnetworks'))
+
+    # Get the actual subnet/gateway from the node if not provided
+    if not subnet or not gateway:
+        info = services.nodeapi(node, f"/networks/{name}", method="GET")
+        if info and not info.get("error"):
+            ipam = info.get("ipam", {})
+            configs = ipam.get("Config", [])
+            if configs:
+                subnet = subnet or configs[0].get("Subnet", "")
+                gateway = gateway or configs[0].get("Gateway", "")
+
+    netUuid = str(uuid.uuid4())
+    db.addnetwork(uuid=netUuid, nodeid=nodeid, name=name, subnet=subnet, gateway=gateway, ipv6=ipv6)
+    flash(f"Network '{name}' created and registered.", "success")
+    return redirect(url_for('adminnetworks'))
+
+@app.route("/dashboard/admin/networks/delete/<string:netUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnetworksdelete(netUuid):
+    network = db.getnetwork(netUuid)
+    if not network:
+        flash("Network not found.", "error")
+        return redirect(url_for('adminnetworks'))
+
+    # Check if any VPS is using this network
+    vpsCount = db.countvpsbynetwork(network['id'])
+    if vpsCount > 0:
+        flash(f"Cannot delete: {vpsCount} VPS instance(s) are assigned to this network.", "error")
+        return redirect(url_for('adminnetworks'))
+
+    # Check if any containers are connected on the node
+    node = db.getnodebyid(network['nodeid'])
+    if node:
+        info = services.nodeapi(node, f"/networks/{network['name']}", method="GET")
+        if info and not info.get("error"):
+            containers = info.get("containers", {})
+            if containers:
+                flash(f"Cannot delete: {len(containers)} container(s) still connected on the node.", "error")
+                return redirect(url_for('adminnetworks'))
+        # Delete from node
+        services.nodeapi(node, f"/networks/{network['name']}", method="DELETE")
+
+    db.removenetwork(netUuid)
+    flash("Network removed.", "warning")
+    return redirect(url_for('adminnetworks'))
 
 @app.route("/dashboard/admin/paymentmethods")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminpaymentmethods():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    methods_data = db.listpaymentmethodspaginated(page=page, perpage=12, search=q)
+    methodsData = db.listpaymentmethodspaginated(page=page, perpage=12, search=q)
     stats = db.gettransactionstats()
 
     return render_template(
         "adminpaymentmethods.html",
-        allpaymentmethods=methods_data['methods'],
-        pagination=methods_data,
-        activemethodscount=db.countactivepaymentmethods(),
-        totaltransactions=stats["total_transactions"],
-        totalrevenue=stats["total_revenue"],
+        allPaymentMethods=methodsData['methods'],
+        pagination=methodsData,
+        activeMethodsCount=db.countactivepaymentmethods(),
+        totalTransactions=stats["total_transactions"],
+        totalRevenue=stats["total_revenue"],
         search=q or '',
         **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo)
@@ -901,81 +1066,81 @@ def adminpaymentmethods():
 
 
 @app.route("/dashboard/admin/paymentmethods/create", methods=["POST"])
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminpaymentmethodscreate():
     try:
-        paymentmethod_uuid = str(uuid.uuid4())
+        paymentmethodUuid = str(uuid.uuid4())
         db.addpaymentmethod(
-            uuid=paymentmethod_uuid,
+            uuid=paymentmethodUuid,
             name=request.form.get("name"),
             slug=request.form.get("slug"),
             active=int(request.form.get("active", 1))
         )
         flash(f"Payment method '{request.form.get('name')}' added successfully.", "success")
-    except Exception as e:
-        flash(f"Error adding payment method: {e}", "danger")
+    except Exception:
+        flash("Error adding payment method.", "danger")
     return redirect(url_for('adminpaymentmethods'))
 
 
-@app.route("/dashboard/admin/payment-methods/update/<string:paymentmethod_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminpaymentmethodsupdate(paymentmethod_uuid):
+@app.route("/dashboard/admin/payment-methods/update/<string:paymentmethodUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminpaymentmethodsupdate(paymentmethodUuid):
     try:
-        update_data = {
+        updateData = {
             "name": request.form.get("name"),
             "slug": request.form.get("slug"),
             "active": int(request.form.get("active", 1))
         }
-        db.updatepaymentmethods(paymentmethod_uuid, **update_data)
+        db.updatepaymentmethods(paymentmethodUuid, **updateData)
         flash("Payment method updated.", "success")
-    except Exception as e:
-        flash(f"Error updating payment method: {e}", "danger")
+    except Exception:
+        flash("Error updating payment method.", "danger")
     return redirect(url_for('adminpaymentmethods'))
 
 
-@app.route("/dashboard/admin/payment-methods/delete/<string:paymentmethod_uuid>", methods=["POST"])
-@login_required
-@admin_required
-def adminpaymentmethodsdelete(paymentmethod_uuid):
+@app.route("/dashboard/admin/payment-methods/delete/<string:paymentmethodUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminpaymentmethodsdelete(paymentmethodUuid):
     try:
-        db.removepaymentmethods(paymentmethod_uuid)
+        db.removepaymentmethods(paymentmethodUuid)
         flash("Payment method removed.", "warning")
-    except Exception as e:
-        flash(f"Error deleting payment method: {e}", "danger")
+    except Exception:
+        flash("Error deleting payment method.", "danger")
     return redirect(url_for('adminpaymentmethods'))
 
 @app.route("/dashboard/admin/receipts")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminreceipts():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    receipts_data = db.listreceiptspaginated(page=page, perpage=12, search=q)
+    receiptsData = db.listreceiptspaginated(page=page, perpage=12, search=q)
     
-    allreceipts = []
-    totalrevenue = totaltax = receiptsthismonth = 0
-    currentmonth = datetime.utcnow().strftime("%Y-%m")
+    allReceipts = []
+    totalRevenue = totalTax = receiptsThisMonth = 0
+    currentMonth = datetime.utcnow().strftime("%Y-%m")
 
-    for row in receipts_data['receipts']:
+    for row in receiptsData['receipts']:
         receipt = dict(row)
         receipt["transactionid_display"] = row["txn_public_id"] or "N/A"
-        allreceipts.append(receipt)
-        totalrevenue += row["amount"] or 0
-        totaltax += row["taxamount"] or 0
-        if (row["created"] or "").startswith(currentmonth): receiptsthismonth += 1
+        allReceipts.append(receipt)
+        totalRevenue += row["amount"] or 0
+        totalTax += row["taxamount"] or 0
+        if (row["created"] or "").startswith(currentMonth): receiptsThisMonth += 1
 
-    return render_template("adminreceipts.html", allreceipts=allreceipts, 
-        pagination=receipts_data,
-        alltransactions=db.geteligibletransactions(), totalrevenue=f"{totalrevenue:.2f}", 
-        totaltax=f"{totaltax:.2f}", receiptsthismonth=receiptsthismonth,
+    return render_template("adminreceipts.html", allReceipts=allReceipts, 
+        pagination=receiptsData,
+        allTransactions=db.geteligibletransactions(), totalRevenue=f"{totalRevenue:.2f}", 
+        totalTax=f"{totalTax:.2f}", receiptsThisMonth=receiptsThisMonth,
         search=q or '',
         **paneluserinfo(g.userinfo), **paneladmininfo(g.userinfo))
 
 @app.route("/dashboard/admin/receipts/create", methods=["POST"])
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def adminreceiptscreate():
     tid = request.form.get("transactionid", type=int)
     txn = db.gettransaction(tid)
@@ -985,17 +1150,17 @@ def adminreceiptscreate():
     elif db.getreceiptbytransaction(tid):
         flash("Receipt already exists.", "error")
     else:
-        txn_full = db.gettransactionfull(tid)
+        txnFull = db.gettransactionfull(tid)
         amount = request.form.get("amount", type=float)
-        if not amount and txn_full:
-            amount = txn_full['amount']
+        if not amount and txnFull:
+            amount = txnFull['amount']
         
         data = {
             "transactionid": tid, "userid": txn["userid"],
             "amount": amount or 0,
-            "currency": (request.form.get("currency") or (txn_full['currency'] if txn_full else "USD")).strip().upper(),
+            "currency": (request.form.get("currency") or (txnFull['currency'] if txnFull else "USD")).strip().upper(),
             "taxamount": request.form.get("taxamount", type=float) or 0,
-            "receiptnumber": request.form.get("receiptnumber") or db.generate_receipt_number(),
+            "receiptnumber": request.form.get("receiptnumber") or db.generatereceiptnumber(),
             "billingname": request.form.get("billingname"),
             "billingemail": request.form.get("billingemail"),
             "billingaddress": request.form.get("billingaddress"),
@@ -1005,11 +1170,11 @@ def adminreceiptscreate():
         flash("Receipt created.", "success")
     return redirect(url_for("adminreceipts"))
 
-@app.route("/dashboard/admin/receipts/<receipt_uuid>/update", methods=["POST"])
-@login_required
-@admin_required
-def adminreceiptsupdate(receipt_uuid):
-    if not db.getreceipt(receipt_uuid):
+@app.route("/dashboard/admin/receipts/<receiptUuid>/update", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminreceiptsupdate(receiptUuid):
+    if not db.getreceipt(receiptUuid):
         flash("Receipt not found.", "error")
     else:
         data = {
@@ -1022,33 +1187,33 @@ def adminreceiptsupdate(receipt_uuid):
             "billingaddress": request.form.get("billingaddress"),
             "notes": request.form.get("notes")
         }
-        db.updatereceipt(receipt_uuid, data)
+        db.updatereceipt(receiptUuid, data)
         flash("Receipt updated.", "success")
     return redirect(url_for("adminreceipts"))
 
-@app.route("/dashboard/admin/receipts/<receipt_uuid>/delete", methods=["POST"])
-@login_required
-@admin_required
-def adminreceiptsdelete(receipt_uuid):
-    db.deletereceipt(receipt_uuid)
+@app.route("/dashboard/admin/receipts/<receiptUuid>/delete", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminreceiptsdelete(receiptUuid):
+    db.deletereceipt(receiptUuid)
     flash("Receipt deleted.", "success")
     return redirect(url_for("adminreceipts"))
 
 @app.route("/dashboard/admin/transactions")
-@login_required
-@admin_required
+@loginrequired
+@adminrequired
 def admintransactions():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    txn_data = db.listtransactionspaginated(page=page, perpage=12, search=q)
+    txnData = db.listtransactionspaginated(page=page, perpage=12, search=q)
     stats = db.gettransactionstats()
 
     return render_template(
         "admintransactions.html",
-        alltransactions=txn_data['transactions'],
-        pagination=txn_data,
-        totaltransactions=stats["total_transactions"],
-        totalrevenue=stats["total_revenue"],
+        allTransactions=txnData['transactions'],
+        pagination=txnData,
+        totalTransactions=stats["total_transactions"],
+        totalRevenue=stats["total_revenue"],
         search=q or '',
         **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo)
@@ -1062,9 +1227,9 @@ def admintransactions():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    session_cookie = request.cookies.get(COOKIE_NAME)
-    if session_cookie:
-        user = services.validate_session(session_cookie)
+    sessionCookie = request.cookies.get(COOKIE_NAME)
+    if sessionCookie:
+        user = services.validatesession(sessionCookie)
         if user:
             return redirect(url_for("dashboard"))
         return redirect(url_for("logout"))
@@ -1073,23 +1238,23 @@ def login():
         email = request.form.get("email")
         password = request.form.get("password")
 
-        user = services.authenticate_user(email, password)
+        user = services.authenticateuser(email, password)
 
         if user:
-            userip = request.headers.get("X-Forwarded-For", request.remote_addr)
-            user_agent = request.headers.get("User-Agent", "unknown")
+            userIp = request.headers.get("X-Forwarded-For", request.remote_addr)
+            userAgent = request.headers.get("User-Agent", "unknown")
 
-            raw_token = services.create_session(
-                user_id=user["id"],
-                ip_address=userip,
-                user_agent=user_agent,
-                ttl_days=SESSION_TTL_DAYS,
+            rawToken = services.createsession(
+                userId=user["id"],
+                ipAddress=userIp,
+                userAgent=userAgent,
+                ttlDays=SESSION_TTL_DAYS,
             )
 
             response = make_response(redirect(url_for("dashboard")))
             response.set_cookie(
                 COOKIE_NAME,
-                raw_token,
+                rawToken,
                 max_age=daystoseconds(config["general"]["defaultcookiettl"]),
                 httponly=True,
                 secure=True,
@@ -1104,11 +1269,11 @@ def login():
 
 @app.route("/discord-login")
 def discordlogin():
-    discord_auth_url = (
+    discordAuthUrl = (
         f"{config['discord']['discordbaseurl']}/oauth2/authorize?client_id={config['discord']['clientid']}"
         f"&redirect_uri={config['discord']['redirecturl']}&response_type=code&scope=identify%20email"
     )
-    return redirect(discord_auth_url)
+    return redirect(discordAuthUrl)
 
 
 @app.route("/discord-callback")
@@ -1118,7 +1283,7 @@ def discordcallback():
         flash("Discord login failed.", "error")
         return redirect(url_for("login"))
 
-    token_response = requests.post(
+    tokenResponse = requests.post(
         f"{config['discord']['discordbaseurl']}/oauth2/token",
         data={
             "client_id": config["discord"]["clientid"],
@@ -1130,33 +1295,31 @@ def discordcallback():
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     ).json()
 
-    if "access_token" not in token_response:
+    if "access_token" not in tokenResponse:
         flash("Could not verify Discord token.", "error")
         return redirect(url_for("login"))
 
-    access_token = token_response["access_token"]
-    user_data = requests.get(
+    accessToken = tokenResponse["access_token"]
+    userData = requests.get(
         f"{config['discord']['discordbaseurl']}/users/@me",
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Authorization": f"Bearer {accessToken}"},
     ).json()
 
-    # CRITICAL: Discord user email can be None if the account isn't verified
-    email = user_data.get("email")
+    email = userData.get("email")
     if not email:
         flash("Your Discord account must have a verified email to log in.", "error")
         return redirect(url_for("login"))
 
-    profile_pic = None
-    if user_data.get("avatar"):
-        profile_pic = f"https://cdn.discordapp.com/avatars/{user_data['id']}/{user_data['avatar']}.png"
+    profilePic = None
+    if userData.get("avatar"):
+        profilePic = f"https://cdn.discordapp.com/avatars/{userData['id']}/{userData['avatar']}.png"
 
     try:
-        # UPDATED: We now pass the Discord ID (user_data['id'])
-        user = services.find_or_create_discord_user(
-            discord_id=user_data["id"], 
+        user = services.findorcreatediscorduser(
+            discordId=userData["id"], 
             email=email, 
-            username=user_data["username"], 
-            profile_pic=profile_pic
+            username=userData["username"], 
+            profilePic=profilePic
         )
     except Exception as e:
         # Printing the error to console helps you debug specific SQL issues
@@ -1164,14 +1327,14 @@ def discordcallback():
         flash("Database error during login.", "error")
         return redirect(url_for("login"))
 
-    userip = request.headers.get("X-Forwarded-For", request.remote_addr)
-    user_agent = request.headers.get("User-Agent", "unknown")
-    raw_token = services.create_session(user["id"], userip, user_agent, ttl_days=SESSION_TTL_DAYS)
+    userIp = request.headers.get("X-Forwarded-For", request.remote_addr)
+    userAgent = request.headers.get("User-Agent", "unknown")
+    rawToken = services.createsession(user["id"], userIp, userAgent, ttlDays=SESSION_TTL_DAYS)
 
     response = make_response(redirect(url_for("dashboard")))
     response.set_cookie(
         COOKIE_NAME,
-        raw_token,
+        rawToken,
         max_age=daystoseconds(config["general"]["defaultcookiettl"]),
         httponly=True,
         secure=True,
@@ -1191,21 +1354,8 @@ def logout():
 
 
 @app.errorhandler(404)
-def page_not_found(e):
+def pagenotfound(e):
     return render_template("404.html"), 404
-
-@app.route("/test/userinfo", methods=["GET"])
-@login_required
-def test_userinfo():
-    """
-    Test endpoint to visualize what data is currently 
-    available inside g.userinfo for the logged-in user.
-    """
-    # Check if g.userinfo exists to prevent crashes just in case
-    if hasattr(g, 'userinfo'):
-        return jsonify(g.userinfo)
-    else:
-        return jsonify({"error": "g.userinfo is not set"}), 404
 
 if __name__ == "__main__":
     app.run(

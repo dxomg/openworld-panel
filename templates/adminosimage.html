@@ -17,7 +17,7 @@
 
         <div class="hero-stats">
             <div class="hero-stat">
-                <div class="num accent">{{ all_images|length }}</div>
+                <div class="num accent">{{ allImages|length }}</div>
                 <div class="label">Total Images</div>
             </div>
             <div class="hero-stat">
@@ -26,9 +26,9 @@
             </div>
             <div class="hero-stat">
                 <div class="num">
-                    {% set total_usage = namespace(value=0) %}
-                    {% for img in all_images %}{% set total_usage.value = total_usage.value + img.vps_count %}{% endfor %}
-                    {{ total_usage.value }}
+                    {% set totalUsage = namespace(value=0) %}
+                    {% for img in allImages %}{% set totalUsage.value = totalUsage.value + img.vps_count %}{% endfor %}
+                    {{ totalUsage.value }}
                 </div>
                 <div class="label">Total Deployments</div>
             </div>
@@ -45,12 +45,12 @@
         </div>
     </div>
 
-    {% if all_images %}
+    {% if allImages %}
     <div class="vps-grid">
-        {% for img in all_images %}
+        {% for img in allImages %}
         <div class="vps-card">
-            {% set s_class = 'status-running' if img.active else 'status-unknown' %}
-            <span class="status-pill {{ s_class }}">
+            {% set sClass = 'status-running' if img.active else 'status-unknown' %}
+            <span class="status-pill {{ sClass }}">
                 <span class="dot"></span>{{ 'Public' if img.active else 'Hidden' }}
             </span>
 
@@ -69,7 +69,7 @@
                 <button class="btn btn-small"
                     onclick="openEditModal('{{ img|tojson|forceescape }}')">Edit</button>
 
-                <form action="{{ url_for('adminosimagedelete', image_uuid=img.uuid) }}" method="POST" onsubmit="return confirm('Delete this image? Existing VPS instances using this image will remain in the database but may face issues if reinstalled.');">
+                <form action="{{ url_for('adminosimagedelete', imageUuid=img.uuid) }}" method="POST" onsubmit="return confirm('Delete this image? Existing VPS instances using this image will remain in the database but may face issues if reinstalled.');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -77,18 +77,18 @@
         {% endfor %}
     </div>
 
-    {% if pagination.total_pages > 1 %}
+    {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-        {% if pagination.has_prev %}
-        <a href="{{ url_for('adminosimage', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminosimage', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
 
-        {% if pagination.has_next %}
-        <a href="{{ url_for('adminosimage', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminosimage', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
         {% endif %}
     </div>
     {% endif %}
@@ -182,7 +182,7 @@
         const img = JSON.parse(imgData);
         const form = document.getElementById('editImageForm');
 
-        let baseUrl = "{{ url_for('adminosimageupdate', image_uuid='UUID_PLACEHOLDER') }}";
+        let baseUrl = "{{ url_for('adminosimageupdate', imageUuid='UUID_PLACEHOLDER') }}";
         form.action = baseUrl.replace('UUID_PLACEHOLDER', img.uuid);
 
         document.getElementById('edit_name').value = img.name;

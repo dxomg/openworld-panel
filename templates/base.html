@@ -29,33 +29,69 @@
     {% elif request.endpoint in ['dashboard', 'createvps'] %}
         <a href="{{ url_for('dashboard') }}" class="btn {{ 'active' if request.endpoint == 'dashboard' else '' }}">Dashboard</a>
         
-        <!-- NEW: Check g.userinfo dictionary for role == 'admin' -->
         {% if g.userinfo and g.userinfo.get('role') == 'admin' %}
-            <a href="{{ url_for('admindashboard') }}" class="btn">
-                Admin Console
-            </a>
+            <a href="{{ url_for('admindashboard') }}" class="btn">Admin Console</a>
         {% endif %}
         
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
 
     {% elif request.endpoint and request.endpoint.startswith('admin') %}
-        <a href="{{ url_for('admindashboard') }}" class="btn {{ 'active' if request.endpoint == 'admindashboard' else '' }}">Infrastructure</a>
-        <a href="{{ url_for('adminusers') }}" class="btn {{ 'active' if request.endpoint == 'adminusers' else '' }}">Users</a>
-        <a href="{{ url_for('adminvps') }}" class="btn {{ 'active' if request.endpoint == 'adminvps' else '' }}">Vps</a>
-        <a href="{{ url_for('adminplans') }}" class="btn {{ 'active' if request.endpoint == 'adminplans' else '' }}">Plans</a>
-        <a href="{{ url_for('adminnodes') }}" class="btn {{ 'active' if request.endpoint == 'adminnodes' else '' }}">Nodes</a>
-        <a href="{{ url_for('adminnodesstorage') }}" class="btn {{ 'active' if request.endpoint == 'adminnodesstorage' else '' }}">Nodes Storage</a>
-        <a href="{{ url_for('adminosimage') }}" class="btn {{ 'active' if request.endpoint == 'adminosimage' else '' }}">OS Images</a>
-        <a href="{{ url_for('adminpaymentmethods') }}" class="btn {{ 'active' if request.endpoint == 'adminpaymentmethods' else '' }}">Payment Methods</a>
-        <a href="{{ url_for('adminreceipts') }}" class="btn {{ 'active' if request.endpoint == 'adminreceipts' else '' }}">Admin Receipts</a>
-        <a href="{{ url_for('admintransactions') }}" class="btn {{ 'active' if request.endpoint == 'admintransactions' else '' }}">Transactions</a>
-        <a href="{{ url_for('dashboard') }}" class="btn">Exit Admin</a>
+        <a href="{{ url_for('dashboard') }}" class="btn">← Back to Panel</a>
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
     {% endif %}
 </nav>
 </header>
 
-<main class="page">
+{% if request.endpoint and request.endpoint.startswith('admin') %}
+<button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle admin menu">
+    <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+</button>
+<aside class="admin-sidebar" id="adminSidebar">
+    <div class="sidebar-header">
+        <span class="sidebar-title">Admin</span>
+        <button class="sidebar-close" onclick="toggleSidebar()">&times;</button>
+    </div>
+    <nav class="sidebar-nav">
+        <a href="{{ url_for('admindashboard') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admindashboard' else '' }}">
+            <span class="sidebar-icon">⊞</span> Infrastructure
+        </a>
+        <a href="{{ url_for('adminusers') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminusers' else '' }}">
+            <span class="sidebar-icon">⊙</span> Users
+        </a>
+        <a href="{{ url_for('adminvps') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminvps' else '' }}">
+            <span class="sidebar-icon">▣</span> VPS
+        </a>
+        <div class="sidebar-divider"></div>
+        <a href="{{ url_for('adminplans') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminplans' else '' }}">
+            <span class="sidebar-icon">◈</span> Plans
+        </a>
+        <a href="{{ url_for('adminnodes') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminnodes' else '' }}">
+            <span class="sidebar-icon">⬡</span> Nodes
+        </a>
+        <a href="{{ url_for('adminnetworks') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminnetworks' else '' }}">
+            <span class="sidebar-icon">◎</span> Networks
+        </a>
+        <a href="{{ url_for('adminnodesstorage') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminnodesstorage' else '' }}">
+            <span class="sidebar-icon">◉</span> Storage
+        </a>
+        <a href="{{ url_for('adminosimage') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminosimage' else '' }}">
+            <span class="sidebar-icon">◎</span> Images
+        </a>
+        <div class="sidebar-divider"></div>
+        <a href="{{ url_for('adminpaymentmethods') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminpaymentmethods' else '' }}">
+            <span class="sidebar-icon">◇</span> Payments
+        </a>
+        <a href="{{ url_for('adminreceipts') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminreceipts' else '' }}">
+            <span class="sidebar-icon">◫</span> Receipts
+        </a>
+        <a href="{{ url_for('admintransactions') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admintransactions' else '' }}">
+            <span class="sidebar-icon">⟷</span> Transactions
+        </a>
+    </nav>
+</aside>
+{% endif %}
+
+<main class="page{% if request.endpoint and request.endpoint.startswith('admin') %} has-sidebar{% endif %}">
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             <div class="flash-stack">
@@ -79,10 +115,42 @@
     function toggleMenu() {
         document.querySelector('.topnav').classList.toggle('is-open');
     }
+    function toggleSidebar() {
+        document.getElementById('adminSidebar').classList.toggle('is-open');
+    }
+
+    // === CSRF Protection ===
+    // Auto-inject CSRF token into all forms
+    (function() {
+        function getCookie(name) {
+            var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+            return match ? match[2] : null;
+        }
+        var token = getCookie('csrf_token');
+        if (token) {
+            document.querySelectorAll('form[method="POST"], form[method="post"]').forEach(function(form) {
+                if (!form.querySelector('input[name="_csrf_token"]')) {
+                    var input = document.createElement('input');
+                    input.type = 'hidden';
+                    input.name = '_csrf_token';
+                    input.value = token;
+                    form.appendChild(input);
+                }
+            });
+        }
+    })();
+
+    // Close sidebar on backdrop click
+    document.addEventListener('click', function(e) {
+        var sidebar = document.getElementById('adminSidebar');
+        if (sidebar && sidebar.classList.contains('is-open')) {
+            if (!sidebar.contains(e.target) && !e.target.closest('.sidebar-toggle')) {
+                sidebar.classList.remove('is-open');
+            }
+        }
+    });
 
     // === Foolproof UI Utilities ===
-
-    // Close any open modal on Escape
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal-backdrop.is-open').forEach(function(m) {

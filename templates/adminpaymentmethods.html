@@ -17,19 +17,19 @@
 
         <div class="hero-stats">
             <div class="hero-stat">
-                <div class="num accent">{{ allpaymentmethods|length }}</div>
+                <div class="num accent">{{ allPaymentMethods|length }}</div>
                 <div class="label">Total Processors</div>
             </div>
             <div class="hero-stat">
-                <div class="num">{{ activemethodscount }}</div>
+                <div class="num">{{ activeMethodsCount }}</div>
                 <div class="label">Active</div>
             </div>
             <div class="hero-stat">
-                <div class="num">{{ totaltransactions }}</div>
+                <div class="num">{{ totalTransactions }}</div>
                 <div class="label">Total Transactions</div>
             </div>
             <div class="hero-stat">
-                <div class="num">${{ totalrevenue }}</div>
+                <div class="num">${{ totalRevenue }}</div>
                 <div class="label">Total Revenue</div>
             </div>
         </div>
@@ -45,13 +45,13 @@
         </div>
     </div>
 
-    {% if allpaymentmethods %}
+    {% if allPaymentMethods %}
     <div class="vps-grid">
-        {% for processor in allpaymentmethods %}
+        {% for processor in allPaymentMethods %}
         <div class="vps-card">
             <!-- Dynamic Status Color -->
-            {% set s_class = 'status-running' if processor.active else 'status-unknown' %}
-            <span class="status-pill {{ s_class }}">
+            {% set sClass = 'status-running' if processor.active else 'status-unknown' %}
+            <span class="status-pill {{ sClass }}">
                 <span class="dot"></span>{{ 'Active' if processor.active else 'Inactive' }}
             </span>
 
@@ -71,7 +71,7 @@
                     onclick="openEditModal('{{ processor|tojson|forceescape }}')">Edit</button>
 
                 <!-- Dedicated Delete Route -->
-                <form action="{{ url_for('adminpaymentmethodsdelete', paymentmethod_uuid=processor.uuid) }}" method="POST" onsubmit="return confirm('Delete this payment method? Existing transactions referencing it will be kept, but no new transactions can use it.');">
+                <form action="{{ url_for('adminpaymentmethodsdelete', paymentmethodUuid=processor.uuid) }}" method="POST" onsubmit="return confirm('Delete this payment method? Existing transactions referencing it will be kept, but no new transactions can use it.');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -79,18 +79,18 @@
         {% endfor %}
     </div>
 
-    {% if pagination.total_pages > 1 %}
+    {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-        {% if pagination.has_prev %}
-        <a href="{{ url_for('adminpaymentmethods', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminpaymentmethods', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
 
-        {% if pagination.has_next %}
-        <a href="{{ url_for('adminpaymentmethods', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminpaymentmethods', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
         {% endif %}
     </div>
     {% endif %}
@@ -185,7 +185,7 @@
 
         // Dynamically update the form action to include the processor's UUID
         // We use a placeholder string to generate the base URL via Jinja, then replace it in JS
-        let baseUrl = "{{ url_for('adminpaymentmethodsupdate', paymentmethod_uuid='UUID_PLACEHOLDER') }}";
+        let baseUrl = "{{ url_for('adminpaymentmethodsupdate', paymentmethodUuid='UUID_PLACEHOLDER') }}";
         form.action = baseUrl.replace('UUID_PLACEHOLDER', processor.uuid);
 
         // Fill the input fields

@@ -58,14 +58,14 @@
         </div>
     </div>
 
-    {% if all_nodes %}
+    {% if allNodes %}
     <div class="vps-grid">
-        {% for node in all_nodes %}
+        {% for node in allNodes %}
         <div class="vps-card">
-            {% set s_class = 'status-running' if node.status == 'online' else 'status-unknown' %}
+            {% set sClass = 'status-running' if node.status == 'online' else 'status-unknown' %}
             
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-                <span class="status-pill {{ s_class }}">
+                <span class="status-pill {{ sClass }}">
                     <span class="dot"></span>{{ node.status|capitalize }}
                 </span>
                 <!-- TIER BADGE -->
@@ -88,7 +88,7 @@
                 <button class="btn btn-small" 
                     onclick="openEditModal('{{ node|tojson|forceescape }}')">Edit</button>
                 
-                <form action="{{ url_for('adminnodesdelete', node_uuid=node.uuid) }}" method="POST" onsubmit="return confirm('Delete this node? All associated VPS data in the DB may be affected.');">
+                <form action="{{ url_for('adminnodesdelete', nodeUuid=node.uuid) }}" method="POST" onsubmit="return confirm('Delete this node? All associated VPS data in the DB may be affected.');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -96,18 +96,18 @@
         {% endfor %}
     </div>
 
-    {% if pagination.total_pages > 1 %}
+    {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-        {% if pagination.has_prev %}
-        <a href="{{ url_for('adminnodes', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminnodes', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-            PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
 
-        {% if pagination.has_next %}
-        <a href="{{ url_for('adminnodes', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminnodes', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
         {% endif %}
     </div>
     {% endif %}
@@ -140,6 +140,10 @@
             <div class="field">
                 <label>IP Address</label>
                 <input type="text" name="address" required placeholder="1.2.3.4">
+            </div>
+            <div class="field">
+                <label>Node URL</label>
+                <input type="text" name="url" required placeholder="http://1.2.3.4:1234">
             </div>
             
             <!-- TIER SELECTOR (NEW) -->
@@ -204,6 +208,10 @@
                 <label>IP Address</label>
                 <input type="text" name="address" id="edit_address" required>
             </div>
+            <div class="field">
+                <label>Node URL</label>
+                <input type="text" name="url" id="edit_url" required>
+            </div>
             <div class="field" style="grid-column: span 2;">
                 <label>API Key</label>
                 <input type="password" name="apikey" id="edit_apikey" placeholder="Leave blank to keep current">
@@ -252,12 +260,13 @@
         const node = JSON.parse(nodeData);
         const form = document.getElementById('editNodeForm');
         
-        let baseUrl = "{{ url_for('adminnodesupdate', node_uuid='UUID_PLACEHOLDER') }}";
+        let baseUrl = "{{ url_for('adminnodesupdate', nodeUuid='UUID_PLACEHOLDER') }}";
         form.action = baseUrl.replace('UUID_PLACEHOLDER', node.uuid);
 
         document.getElementById('edit_name').value = node.name;
         document.getElementById('edit_hostname').value = node.hostname;
         document.getElementById('edit_address').value = node.address;
+        document.getElementById('edit_url').value = node.url || '';
         document.getElementById('edit_ram').value = node.ram;
         document.getElementById('edit_status').value = node.status;
         document.getElementById('edit_tier').value = node.tier; // SET TIER IN JS

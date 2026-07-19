@@ -108,7 +108,7 @@
 
 <!-- Section Head -->
 <div class="section-head">
-  <h2>All Instances ({{ pagination.total_count }})</h2>
+  <h2>All Instances ({{ pagination.totalCount }})</h2>
   <div class="admin-actions" style="display: flex; gap: 12px; align-items: center;">
       <form method="GET" action="{{ url_for('adminvps') }}" style="display: flex; gap: 8px; align-items: center;">
           <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search instances...">
@@ -117,17 +117,17 @@
   </div>
 </div>
 
-{% if all_vps %}
+{% if allVps %}
 <div class="vps-grid">
-  {% for instance in all_vps %}
+  {% for instance in allVps %}
   {# Status Logic #}
-  {% set status_class = 'status-running' if instance.status == 'running' 
+  {% set statusClass = 'status-running' if instance.status == 'running' 
                      else 'status-creating' if instance.status == 'creating' 
                      else 'status-pendingpayment' if instance.status == 'pendingpayment' 
                      else 'status-suspended' if instance.status == 'suspended' 
                      else 'status-stopped' %}
 
-  <a href="{{ url_for('adminvpspanel', vps_uuid=instance.uuid) }}" class="vps-card">
+  <a href="{{ url_for('adminvpspanel', vpsUuid=instance.uuid) }}" class="vps-card">
     
     <div class="vps-card-header">
         <div class="vps-info-block">
@@ -141,7 +141,7 @@
             </div>
         </div>
         
-        <span class="status-pill {{ status_class }}">
+        <span class="status-pill {{ statusClass }}">
           <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}
         </span>
     </div>
@@ -167,18 +167,18 @@
 </div>
 
 <!-- Pagination -->
-{% if pagination.total_pages > 1 %}
+{% if pagination.totalPages > 1 %}
 <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-    {% if pagination.has_prev %}
-    <a href="{{ url_for('adminvps', page=pagination.current_page - 1, q=search) }}" class="btn btn-small">← Previous</a>
+    {% if pagination.hasPrev %}
+    <a href="{{ url_for('adminvps', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
     {% endif %}
     
     <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-        PAGE {{ pagination.current_page }} / {{ pagination.total_pages }}
+        PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
     </span>
 
-    {% if pagination.has_next %}
-    <a href="{{ url_for('adminvps', page=pagination.current_page + 1, q=search) }}" class="btn btn-small">Next →</a>
+    {% if pagination.hasNext %}
+    <a href="{{ url_for('adminvps', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
     {% endif %}
 </div>
 {% endif %}
@@ -233,7 +233,7 @@
                     <label>Target Node & Storage</label>
                     <select id="nodeSelect" onchange="updateModalLocation()" required>
                         <option value="" disabled selected>Select location...</option>
-                        {% for item in nodes_storage %}
+                        {% for item in nodesStorage %}
                         <option value="{{ item.nodeid }}" data-storage="{{ item.storageid }}">
                             {{ item.nodename }} ({{ item.storagename }})
                         </option>
