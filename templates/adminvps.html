@@ -230,17 +230,15 @@
             </div>
             <div style="display: flex; flex-direction: column; gap: 16px;">
                 <div class="field">
-                    <label>Target Node & Storage</label>
-                    <select id="nodeSelect" onchange="updateModalLocation()" required>
-                        <option value="" disabled selected>Select location...</option>
-                        {% for item in nodesStorage %}
-                        <option value="{{ item.nodeid }}" data-storage="{{ item.storageid }}">
-                            {{ item.nodename }} ({{ item.storagename }})
-                        </option>
+                    <label>Target Node</label>
+                    <select name="nodeid" required>
+                        <option value="" disabled selected>Select node...</option>
+                        {% for node in users %}
+                        {% endfor %}
+                        {% for pool in storagePools %}
+                        <option value="{{ pool.nodeid }}">{{ pool.node_name }} — {{ pool.name }}</option>
                         {% endfor %}
                     </select>
-                    <input type="hidden" name="nodeid" id="modalNodeId">
-                    <input type="hidden" name="storageid" id="modalStorageId">
                 </div>
                 <div class="field">
                     <label>Resource Plan</label>
@@ -259,6 +257,15 @@
                         <option value="" disabled selected>Select a network...</option>
                         {% for net in networks %}
                         <option value="{{ net.id }}">{{ net.name }} ({{ net.node_name }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Storage Pool</label>
+                    <select name="storagepoolid">
+                        <option value="" selected>Default</option>
+                        {% for pool in storagePools %}
+                        <option value="{{ pool.id }}">{{ pool.name }} ({{ pool.node_name }})</option>
                         {% endfor %}
                     </select>
                 </div>

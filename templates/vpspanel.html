@@ -53,12 +53,12 @@
 
 
       <div class="terminal-body" style="flex-grow:1;overflow-y:auto;">
-{{ instance.image }} {{ instance.hostname }} tty1
+{{ instance.image_name or instance.image_path }} {{ instance.hostname }} tty1
 
 {{ instance.hostname }} login: root
 Password:
 
-Welcome to {{ instance.image }}
+Welcome to {{ instance.image_name or instance.image_path }}
 
 root@{{ instance.hostname }}:~# <span class="cursor"></span>
 
@@ -79,29 +79,28 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
 
       <div class="kv-list">
 
+        {% if assignedIp %}
         <div class="kv-row">
           <span class="k">IPv6 Address</span>
-          <span class="v" style="color:var(--accent);" data-copy="{{ instance.ip }}" title="Click to copy">
-            {{ instance.ip }}
+          <span class="v" style="color:var(--accent);" data-copy="{{ assignedIp }}" title="Click to copy">
+            {{ assignedIp }}
           </span>
         </div>
+        {% endif %}
 
+        <div class="kv-row">
+          <span class="k">Root Password</span>
+          <span class="v" data-copy="{{ instance.password }}" title="Click to copy" style="cursor:pointer;">
+            ••••••••
+          </span>
+        </div>
 
         <div class="kv-row">
           <span class="k">OS Image</span>
           <span class="v">
-            {{ instance.image }}
+            {{ instance.image_name or instance.image }}
           </span>
         </div>
-
-
-        <div class="kv-row">
-          <span class="k">Node UUID</span>
-          <span class="v" data-copy="{{ instance.nodeuuid }}" title="Click to copy">
-            {{ instance.nodeuuid }}
-          </span>
-        </div>
-
 
         <div class="kv-row">
           <span class="k">VPS UUID</span>
@@ -110,13 +109,14 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
           </span>
         </div>
 
-
+        {% if networkDns %}
         <div class="kv-row">
           <span class="k">DNS</span>
-          <span class="v">
-            {{ instance.dns }}
+          <span class="v" data-copy="{{ networkDns }}" title="Click to copy" style="cursor:pointer;">
+            {{ networkDns }}
           </span>
         </div>
+        {% endif %}
 
       </div>
 
@@ -130,65 +130,50 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
         Resources
       </h3>
 
-
       <div class="metric">
-
         <div class="metric-label">
           <span>CPU ({{ instance.cpu }} vCPU)</span>
-          <span class="metric-val">--</span>
+          <span class="metric-val">{{ metric.cpu if metric and metric.cpu else '--' }}</span>
         </div>
-
         <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
+          <div class="metric-fill" style="width:{% if metric and metric.cpu %}{{ metric.cpu|replace('%','') }}{% else %}0{% endif %}%;"></div>
         </div>
-
       </div>
 
-
-
       <div class="metric">
-
         <div class="metric-label">
           <span>RAM ({{ instance.ram }} MB)</span>
-          <span class="metric-val">--</span>
+          <span class="metric-val">{{ metric.ram if metric and metric.ram else '--' }}</span>
         </div>
-
         <div class="metric-track">
           <div class="metric-fill" style="width:0%;"></div>
         </div>
-
       </div>
 
-
-
       <div class="metric">
-
-        <div class="metric-label">
-          <span>Swap ({{ instance.swap }} MB)</span>
-          <span class="metric-val">--</span>
-        </div>
-
-        <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
-        </div>
-
-      </div>
-
-
-
-      <div class="metric">
-
         <div class="metric-label">
           <span>Disk ({{ instance.disk }} MB)</span>
-          <span class="metric-val">--</span>
+          <span class="metric-val">{% if metric and metric.diskUsed %}{{ metric.diskUsed }} / {{ metric.diskTotal }} ({{ metric.disk }}){% else %}--{% endif %}</span>
         </div>
-
         <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
+          <div class="metric-fill" style="width:{% if metric and metric.disk %}{{ metric.disk|replace('%','') }}{% else %}0{% endif %}%;"></div>
         </div>
-
       </div>
 
+      {% if metric and metric.netIn %}
+      <div class="metric">
+        <div class="metric-label">
+          <span>Network In</span>
+          <span class="metric-val">{{ metric.netIn }}</span>
+        </div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">
+          <span>Network Out</span>
+          <span class="metric-val">{{ metric.netOut }}</span>
+        </div>
+      </div>
+      {% endif %}
 
     </div>
 

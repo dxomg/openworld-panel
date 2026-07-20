@@ -8,13 +8,28 @@
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>IP Management</h1>
         <p>Manage IP address pools across all networks. IPs are assigned to VPS instances automatically.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ ipStats.total }}</div>
+                <div class="label">Total IPs</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num" style="color: var(--warn);">{{ ipStats.assigned }}</div>
+                <div class="label">Assigned</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num" style="color: var(--accent);">{{ ipStats.available }}</div>
+                <div class="label">Available</div>
+            </div>
+        </div>
     </section>
 
     <div class="section-head" style="margin-top: 48px;">
         <h2>All IP Addresses</h2>
         <div style="display: flex; gap: 10px; align-items: center;">
             <form method="GET" action="{{ url_for('adminips') }}" style="display: flex; gap: 8px; align-items: center;">
-                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search IPs or networks...">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search IPs, networks, nodes...">
             </form>
             <button onclick="openModal('generateModal')" class="btn btn-primary btn-small">+ Generate IPs</button>
         </div>

@@ -7,7 +7,7 @@
     <section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Networks</h1>
-        <p>Manage Docker networks across nodes. Networks are created on the node automatically.</p>
+        <p>Manage networks across nodes. Networks are created on the node automatically.</p>
     </section>
 
     <div class="section-head" style="margin-top: 48px;">
@@ -15,18 +15,35 @@
         <div style="display: flex; gap: 10px; align-items: center;">
             <form method="GET" action="{{ url_for('adminnetworks') }}" style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search networks...">
+                <input type="hidden" name="type" value="{{ nodeType }}">
             </form>
             <button onclick="openModal('addNetworkModal')" class="btn btn-primary btn-small">+ Add Network</button>
         </div>
+    </div>
+
+    <!-- Node Type Tabs -->
+    <div style="display: flex; gap: 8px; margin-bottom: 24px;">
+        <a href="{{ url_for('adminnetworks', q=search) }}" 
+           class="btn btn-small {% if not nodeType %}btn-primary{% endif %}">All</a>
+        <a href="{{ url_for('adminnetworks', type='docker', q=search) }}" 
+           class="btn btn-small {% if nodeType == 'docker' %}btn-primary{% endif %}">Docker</a>
+        <a href="{{ url_for('adminnetworks', type='proxmox', q=search) }}" 
+           class="btn btn-small {% if nodeType == 'proxmox' %}btn-primary{% endif %}">Proxmox</a>
     </div>
 
     {% if allNetworks %}
     <div class="vps-grid">
         {% for net in allNetworks %}
         <div class="vps-card">
-            <span class="status-pill status-running">
-                <span class="dot"></span>{{ 'IPv6' if net.ipv6 else 'IPv4' }}
-            </span>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span class="status-pill status-running">
+                    <span class="dot"></span>{{ 'IPv6' if net.ipv6 else 'IPv4' }}
+                </span>
+                <!-- NODE TYPE BADGE -->
+                <span class="tier-pill" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6;">
+                    {{ net.node_type|default('docker')|upper }}
+                </span>
+            </div>
 
             <div class="vps-id">
                 <div class="vps-hostname">{{ net.name }}</div>
@@ -37,14 +54,14 @@
                 {% if net.subnet %}
                 <span><span class="spec-val">{{ net.subnet }}</span></span>
                 {% endif %}
-                {% if net.gateway %}
-                <span><span class="spec-val">{{ net.gateway }}</span></span>
+                {% if net.dns %}
+                <span style="font-size: 11px; color: var(--text-faint);">DNS: {{ net.dns }}</span>
                 {% endif %}
             </div>
 
             <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
                 <a href="{{ url_for('adminnetworkips', netUuid=net.uuid) }}" class="btn btn-small">IP Pool</a>
-                <form action="{{ url_for('adminnetworksdelete', netUuid=net.uuid) }}" method="POST" onsubmit="return confirm('Remove this network from the database? The Docker network will NOT be deleted.');">
+                <form action="{{ url_for('adminnetworksdelete', netUuid=net.uuid) }}" method="POST" onsubmit="return confirm('Remove this network from the database?');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -55,13 +72,13 @@
     {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
         {% if pagination.hasPrev %}
-        <a href="{{ url_for('adminnetworks', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&larr; Previous</a>
+        <a href="{{ url_for('adminnetworks', page=pagination.currentPage - 1, q=search, type=nodeType) }}" class="btn btn-small">&larr; Previous</a>
         {% endif %}
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
             PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
         {% if pagination.hasNext %}
-        <a href="{{ url_for('adminnetworks', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &rarr;</a>
+        <a href="{{ url_for('adminnetworks', page=pagination.currentPage + 1, q=search, type=nodeType) }}" class="btn btn-small">Next &rarr;</a>
         {% endif %}
     </div>
     {% endif %}
@@ -70,7 +87,7 @@
     <div class="empty-state">
         <div class="glyph">&#x2B21;</div>
         <h3>No Networks Registered</h3>
-        <p>Create a Docker network on a node first, then register it here.</p>
+        <p>Create a network on a node first, then register it here.</p>
     </div>
     {% endif %}
 </div>
@@ -88,22 +105,18 @@
                 <select name="nodeid" required>
                     <option value="" disabled selected>Select a node...</option>
                     {% for node in allNodes %}
-                    <option value="{{ node.id }}">{{ node.name }} ({{ node.address }})</option>
+                    <option value="{{ node.id }}">{{ node.name }} ({{ node.type|default('docker')|upper }})</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="field">
                 <label>Network Name</label>
-                <input type="text" name="name" required placeholder="route64-docker">
-                <span class="hint">Will be created on the node via API.</span>
+                <input type="text" name="name" required placeholder="my-network">
+                <span class="hint">Will be created on the node via API (Docker) or registered (Proxmox).</span>
             </div>
             <div class="field">
-                <label>Subnet (optional, auto-detected)</label>
-                <input type="text" name="subnet" placeholder="2a11:6c7:2200:b101::/64">
-            </div>
-            <div class="field">
-                <label>Gateway (optional, auto-detected)</label>
-                <input type="text" name="gateway" placeholder="2a11:6c7:2200:b101::1">
+                <label>Subnet (optional)</label>
+                <input type="text" name="subnet" placeholder="2a11:6c7:2200:b101::/64 or 172.20.0.0/16">
             </div>
             <div class="field">
                 <label>IPv6</label>
@@ -111,6 +124,11 @@
                     <option value="1" selected>Enabled</option>
                     <option value="0">Disabled</option>
                 </select>
+            </div>
+            <div class="field">
+                <label>DNS Servers (comma-separated)</label>
+                <input type="text" name="dns" value="1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888">
+                <span class="hint">Applied to all VPS instances on this network.</span>
             </div>
             <div class="modal-actions btn-row">
                 <button type="button" onclick="closeModal('addNetworkModal')" class="btn">Cancel</button>

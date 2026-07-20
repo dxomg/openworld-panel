@@ -3,9 +3,12 @@ import secrets
 import requests
 import string
 import math
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from core import db
+from utils import proxmox as pveclient
 
 # --- AUTH & SESSION SERVICES ---
 
@@ -155,7 +158,7 @@ def provisionvps(userId, planId, imageId, hostname):
         plan = conn.execute("SELECT * FROM plans WHERE id = ?", (planId,)).fetchone()
         image = conn.execute("SELECT * FROM images WHERE id = ?", (imageId,)).fetchone()
         node = conn.execute("SELECT * FROM nodes WHERE status = 'online' AND ram >= ? LIMIT 1", (plan['ram'],)).fetchone()
-        storage = conn.execute("SELECT * FROM nodestorage WHERE nodeid = ? LIMIT 1", (node['id'],)).fetchone()
+        storage = conn.execute("SELECT * FROM storagepools WHERE nodeid = ? LIMIT 1", (node['id'],)).fetchone()
 
     if not node or not storage:
         raise ValueError("No available nodes have enough resources at this time.")
@@ -195,7 +198,7 @@ def getvpsdetails(vpsId):
         query = """
             SELECT v.*, p.name as plan_name, p.readbps, p.writebps,
                    n.address as node_ip, n.url as node_url, n.apikey as node_apikey,
-                   i.image as image_path
+                   i.name as image_name, i.image as image_path
             FROM vps v
             JOIN plans p ON v.planid = p.id
             JOIN nodes n ON v.nodeid = n.id
@@ -206,7 +209,27 @@ def getvpsdetails(vpsId):
         return dict(row) if row else None
 
 def provisiononnode(vpsUuid):
-    """Provision a VPS container on the node. Call after VPS record exists in DB."""
+    """Provision a VPS on the node. Routes to Docker or Proxmox based on node type."""
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        raise ValueError("VPS not found")
+
+    # Get node to check type
+    with db.getconnection() as conn:
+        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
+    if not node:
+        raise ValueError("Node not found")
+    node = dict(node)
+
+    nodeType = node.get('type', 'docker')
+    
+    if nodeType == 'proxmox':
+        return provisiononproxmox(vpsUuid)
+    else:
+        return provisionondocker(vpsUuid)
+
+def provisionondocker(vpsUuid):
+    """Provision a VPS container on Docker node."""
     vps = db.getvps(vpsUuid)
     if not vps:
         raise ValueError("VPS not found")
@@ -225,12 +248,15 @@ def provisiononnode(vpsUuid):
     networkName = "bridge"
     assignedIp = None
     assignedIpId = None
+    networkDns = ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111", "2001:4860:4860::8888"]
     if vps.get('networkid'):
         with db.getconnection() as conn:
             net = conn.execute("SELECT * FROM networks WHERE id = ?", (vps['networkid'],)).fetchone()
         if net:
             net = dict(net)
             networkName = net['name']
+            if net.get('dns'):
+                networkDns = [s.strip() for s in net['dns'].split(',') if s.strip()]
 
         # Get an available IP from the pool
         availIp = db.getavailableip(vps['networkid'])
@@ -239,20 +265,27 @@ def provisiononnode(vpsUuid):
             assignedIpId = availIp['id']
             db.assignip(availIp['id'], vps['id'])
 
+    # Get storage pool name
+    poolName = "default"
+    if vps.get('storagepoolid'):
+        with db.getconnection() as conn:
+            pool = conn.execute("SELECT name FROM storagepools WHERE id = ?", (vps['storagepoolid'],)).fetchone()
+        if pool:
+            poolName = pool['name']
+
     payload = {
         "uuid": vpsUuid,
         "hostname": vps['hostname'],
         "cpu": vps['cpu'],
-        "ram": f"{vps['ram']}m",
-        "swap": f"{vps['swap']}m",
+        "ram": vps['ram'],
+        "swap": vps['swap'],
+        "diskMb": vps.get('disk', 20) or 20,
         "network": networkName,
         "ip": assignedIp,
-        "dns": ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111", "2001:4860:4860::8888"],
+        "dns": networkDns,
         "image": vpsDetails['image_path'],
         "rootPassword": vps['password'],
-        "readBps": vpsDetails.get('readbps', 0) or 0,
-        "writeBps": vpsDetails.get('writebps', 0) or 0,
-        "diskMb": vps.get('disk', 0) or 0,
+        "pool": poolName,
     }
 
     result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
@@ -302,14 +335,14 @@ def nodeapi(node, path, method="GET", data=None, timeout=10):
         except ValueError:
             return {"error": f"node returned status {r.status_code}"}
     except requests.ConnectionError:
-        return None
+        return {"error": "node unreachable"}
     except requests.Timeout:
-        return None
-    except requests.RequestException:
-        return None
+        return {"error": "node timeout"}
+    except requests.RequestException as e:
+        return {"error": str(e)}
 
 def performvpsaction(vpsId, action, actorUserId):
-    """Sends a command (start, stop, restart) to the Node Agent."""
+    """Sends a command (start, stop, restart) to the Node."""
     vps = getvpsdetails(vpsId)
     if not vps:
         raise ValueError("VPS not found")
@@ -320,17 +353,42 @@ def performvpsaction(vpsId, action, actorUserId):
     with db.getconnection() as conn:
         node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
 
-    if node and node['apikey']:
-        node = dict(node)
-        result = nodeapi(node, f"/vps/{vps['hostname']}/{action}", method="POST")
-        if result and "status" in result:
-            newStatus = result["status"]
+    if not node:
+        raise ValueError("Node not found")
+    
+    node = dict(node)
+    nodeType = node.get('type', 'docker')
+
+    if nodeType == 'proxmox':
+        vmid = getvmidmapping(vps['uuid'])
+        if not vmid:
+            raise ValueError("VMID not found for this VPS")
+        
+        pve = getproxmoxclient(node)
+        node_name = node.get('proxmoxnode', 'pve')
+        
+        try:
+            if action == "start":
+                pveclient.startlxc(pve, node_name, vmid)
+            elif action == "stop":
+                pveclient.stoplxc(pve, node_name, vmid)
+            elif action == "restart":
+                pveclient.restartlxc(pve, node_name, vmid)
+            else:
+                raise ValueError("Invalid action")
+        except Exception as e:
+            raise ValueError(f"Proxmox action failed: {e}")
+    else:
+        if node.get('apikey'):
+            result = nodeapi(node, f"/vps/{vps['uuid']}/{action}", method="POST")
+            if result and "status" in result:
+                newStatus = result["status"]
 
     db.updatevps(vps['uuid'], status=newStatus)
     return {"status": newStatus}
 
 def getlatestvpsmetric(vpsId):
-    """Fetch live metrics from the node agent."""
+    """Fetch live metrics from the node."""
     vps = getvpsdetails(vpsId)
     if not vps:
         return None
@@ -338,22 +396,60 @@ def getlatestvpsmetric(vpsId):
     with db.getconnection() as conn:
         node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
 
-    if not node or not node['apikey']:
+    if not node:
         return None
 
     node = dict(node)
-    result = nodeapi(node, f"/vps/{vps['hostname']}/stats", method="GET")
-    if not result or not result.get("metrics"):
-        return None
+    nodeType = node.get('type', 'docker')
 
-    m = result["metrics"]
-    return {
-        "cpu": m.get("cpu", "0%"),
-        "ram": m.get("memoryUsage", "0B"),
-        "disk": m.get("blockIn", "0B"),
-        "netIn": m.get("netIn", "0B"),
-        "netOut": m.get("netOut", "0B"),
-    }
+    if nodeType == 'proxmox':
+        vmid = getvmidmapping(vps['uuid'])
+        if not vmid:
+            return None
+        
+        try:
+            pve = getproxmoxclient(node)
+            node_name = node.get('proxmoxnode', 'pve')
+            status = pveclient.getlxcstatus(pve, node_name, vmid)
+        except Exception:
+            return None
+        
+        if not status or status.get('status') != 'running':
+            return None
+        
+        cpu_usage = status.get('cpu', 0)
+        mem_usage = status.get('mem', 0)
+        mem_max = status.get('maxmem', 0)
+        disk_usage = status.get('disk', 0)
+        disk_max = status.get('maxdisk', 0)
+        
+        return {
+            "cpu": f"{cpu_usage * 100:.1f}%",
+            "ram": f"{mem_usage / (1024**2):.0f}MB",
+            "disk": f"{(disk_usage / disk_max * 100):.1f}%" if disk_max > 0 else "0%",
+            "diskUsed": f"{disk_usage / (1024**3):.1f}GB",
+            "diskTotal": f"{disk_max / (1024**3):.1f}GB",
+            "netIn": "N/A",
+            "netOut": "N/A",
+        }
+    else:
+        if not node.get('apikey'):
+            return None
+        
+        result = nodeapi(node, f"/vps/{vps['uuid']}/stats", method="GET")
+        if not result or not result.get("metrics"):
+            return None
+
+        m = result["metrics"]
+        return {
+            "cpu": m.get("cpu", "0%"),
+            "ram": m.get("memoryUsage", "0B"),
+            "disk": m.get("diskPercent", "0%"),
+            "diskUsed": m.get("diskUsed", "0B"),
+            "diskTotal": m.get("diskTotal", "0B"),
+            "netIn": m.get("netIn", "0B"),
+            "netOut": m.get("netOut", "0B"),
+        }
 
 def listfirewallrulesforvps(vpsId):
     """Placeholder for firewall logic."""
@@ -365,3 +461,134 @@ def generaterandomhostname():
 
 def generaterandompassword():
     return secrets.token_urlsafe(16)
+
+def getproxmoxclient(node):
+    """Create a ProxmoxAPI client from node config."""
+    return pveclient.getproxmoxclient(node)
+
+def provisiononproxmox(vpsUuid):
+    """Provision a VPS as LXC container on Proxmox."""
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        raise ValueError("VPS not found")
+
+    vpsDetails = getvpsdetails(vps['id'])
+    if not vpsDetails:
+        raise ValueError("VPS details not found")
+
+    # Get node details
+    with db.getconnection() as conn:
+        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
+    if not node:
+        raise ValueError("Node not found")
+    node = dict(node)
+
+    node_name = node.get('proxmoxnode', 'pve')
+
+    # Get network info and assign IP
+    assignedIp = None
+    assignedIpId = None
+    if vps.get('networkid'):
+        availIp = db.getavailableip(vps['networkid'])
+        if availIp:
+            assignedIp = availIp['ip']
+            assignedIpId = availIp['id']
+            db.assignip(availIp['id'], vps['id'])
+
+    # Get Proxmox client
+    pve = getproxmoxclient(node)
+
+    # Get next VMID
+    vmid = pveclient.nextvmid(pve)
+    if not vmid:
+        if assignedIpId:
+            db.unassignip(assignedIpId)
+        db.updatevps(vpsUuid, status='error')
+        raise ValueError("Failed to get VMID")
+
+    # Build LXC parameters
+    ram = int(vps['ram'])
+    cpu = int(vps['cpu'])
+    disk_gb = max(1, int(vps.get('disk', 20)) // 1024)  # Convert MB to GB, min 1GB
+    
+    # Image is expected to be a template name like "ubuntu-22.04-standard"
+    template = vpsDetails.get('image_path', 'ubuntu-22.04-standard')
+    if not template.endswith('.tar.gz') and not template.endswith('.tar.xz'):
+        template = f"local:vztmpl/{template}.tar.gz"
+
+    lxc_params = {
+        "hostname": vps['hostname'],
+        "cores": cpu,
+        "memory": ram,
+        "rootfs": f"local-lvm:{disk_gb}",
+        "ostemplate": template,
+        "password": vps['password'],
+        "net0": "name=eth0,bridge=vmbr0,ip=dhcp",
+        "onboot": 1,
+        "swap": int(vps.get('swap', 0)),
+    }
+
+    # If we have a specific IP, set it
+    if assignedIp:
+        if ':' in assignedIp:
+            lxc_params["net0"] = f"name=eth0,bridge=vmbr0,ip6={assignedIp}/64,ip=dhcp"
+        else:
+            lxc_params["net0"] = f"name=eth0,bridge=vmbr0,ip={assignedIp}/24,gw=auto"
+
+    # Create LXC
+    try:
+        pveclient.createlxc(pve, node_name, vmid, lxc_params)
+    except Exception as e:
+        if assignedIpId:
+            db.unassignip(assignedIpId)
+        db.updatevps(vpsUuid, status='error')
+        raise ValueError(f"LXC creation failed: {e}")
+
+    # Start LXC
+    time.sleep(1)
+    try:
+        pveclient.startlxc(pve, node_name, vmid)
+    except Exception as e:
+        if assignedIpId:
+            db.unassignip(assignedIpId)
+        db.updatevps(vpsUuid, status='error')
+        raise ValueError(f"LXC start failed: {e}")
+
+    # Store VMID mapping
+    setvmidmapping(vpsUuid, vmid)
+
+    db.updatevps(vpsUuid, status='running', container=str(vmid))
+    return {"containerId": str(vmid), "vmid": vmid, "status": "created"}
+
+# VMID mapping storage
+VMID_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vmid_map.json")
+
+def loadvmidmap():
+    import json
+    if not os.path.exists(VMID_MAP_PATH):
+        return {}
+    try:
+        with open(VMID_MAP_PATH, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+def savevmidmap(vmap):
+    import json
+    with open(VMID_MAP_PATH, "w") as f:
+        json.dump(vmap, f, indent=2)
+
+def setvmidmapping(uuid, vmid):
+    vmap = loadvmidmap()
+    vmap[uuid] = vmid
+    savevmidmap(vmap)
+
+def getvmidmapping(uuid):
+    vmap = loadvmidmap()
+    return vmap.get(uuid)
+
+def removevmidmapping(uuid):
+    vmap = loadvmidmap()
+    if uuid in vmap:
+        del vmap[uuid]
+        savevmidmap(vmap)

@@ -4,7 +4,6 @@
 
 {% block content %}
 <style>
-    /* Node cards: vertical layout inside grid */
     .vps-grid .vps-card {
         flex-direction: column;
         align-items: flex-start;
@@ -20,6 +19,8 @@
     }
     .tier-free { background: rgba(255, 255, 255, 0.1); color: #aaa; border: 1px solid #444; }
     .tier-paid { background: rgba(255, 215, 0, 0.1); color: #ffd700; border: 1px solid #ffd700; }
+    .proxmox-fields { display: none; }
+    .proxmox-fields.visible { display: block; }
 </style>
 
 <div class="page">
@@ -68,10 +69,14 @@
                 <span class="status-pill {{ sClass }}">
                     <span class="dot"></span>{{ node.status|capitalize }}
                 </span>
-                <!-- TIER BADGE -->
-                <span class="tier-pill tier-{{ node.tier }}">
-                    {{ node.tier }}
-                </span>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <span class="tier-pill" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6;">
+                        {{ node.type|default('docker')|upper }}
+                    </span>
+                    <span class="tier-pill tier-{{ node.tier }}">
+                        {{ node.tier }}
+                    </span>
+                </div>
             </div>
             
             <div class="vps-id">
@@ -99,7 +104,7 @@
     {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
         {% if pagination.hasPrev %}
-        <a href="{{ url_for('adminnodes', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        <a href="{{ url_for('adminnodes', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&larr; Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
@@ -107,7 +112,7 @@
         </span>
 
         {% if pagination.hasNext %}
-        <a href="{{ url_for('adminnodes', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
+        <a href="{{ url_for('adminnodes', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &rarr;</a>
         {% endif %}
     </div>
     {% endif %}
@@ -142,16 +147,23 @@
                 <input type="text" name="address" required placeholder="1.2.3.4">
             </div>
             <div class="field">
-                <label>Node URL</label>
-                <input type="text" name="url" required placeholder="http://1.2.3.4:1234">
+                <label>Node URL (Docker Agent)</label>
+                <input type="text" name="url" placeholder="http://1.2.3.4:1234">
+                <span class="hint">Only for Docker nodes running the agent.</span>
             </div>
             
-            <!-- TIER SELECTOR (NEW) -->
             <div class="field">
                 <label>Billing Tier</label>
                 <select name="tier">
                     <option value="free">Free Node</option>
                     <option value="paid">Paid Node</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Node Type</label>
+                <select name="type" id="add_type" onchange="toggleProxmoxFields('add')">
+                    <option value="docker">Docker</option>
+                    <option value="proxmox">Proxmox</option>
                 </select>
             </div>
             <div class="field">
@@ -164,8 +176,9 @@
             </div>
 
             <div class="field" style="grid-column: span 2;">
-                <label>API Key (Daemon Connection)</label>
-                <input type="password" name="apikey" required placeholder="••••••••••••">
+                <label>API Key (Docker Agent Connection)</label>
+                <input type="password" name="apikey" placeholder="••••••••••••">
+                <span class="hint">Only for Docker nodes.</span>
             </div>
             <div class="field">
                 <label>Total CPU (Cores)</label>
@@ -178,6 +191,42 @@
             <div class="field" style="grid-column: span 2;">
                 <label>Total Disk (MB)</label>
                 <input type="number" name="disk" required value="102400">
+            </div>
+
+            <!-- Proxmox-specific fields -->
+            <div id="add_proxmox_fields" class="proxmox-fields" style="grid-column: span 2;">
+                <div style="border-top: 1px solid #333; padding-top: 15px; margin-top: 10px;">
+                    <h4 style="margin-bottom: 15px; color: #60a5fa;">Proxmox Configuration</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div class="field">
+                            <label>Proxmox Host</label>
+                            <input type="text" name="proxmoxhost" placeholder="https://proxmox.example.com">
+                        </div>
+                        <div class="field">
+                            <label>Proxmox Port</label>
+                            <input type="number" name="proxmoxport" value="8006">
+                        </div>
+                        <div class="field">
+                            <label>Username</label>
+                            <input type="text" name="proxmoxuser" placeholder="root@pam">
+                        </div>
+                        <div class="field">
+                            <label>Password</label>
+                            <input type="password" name="proxmoxpassword" placeholder="••••••••">
+                        </div>
+                        <div class="field">
+                            <label>Node Name</label>
+                            <input type="text" name="proxmoxnode" value="pve" placeholder="pve">
+                        </div>
+                        <div class="field">
+                            <label>Verify SSL</label>
+                            <select name="proxmoxssl">
+                                <option value="0">No</option>
+                                <option value="1">Yes</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
@@ -210,9 +259,9 @@
             </div>
             <div class="field">
                 <label>Node URL</label>
-                <input type="text" name="url" id="edit_url" required>
+                <input type="text" name="url" id="edit_url" placeholder="http://1.2.3.4:1234">
             </div>
-            <div class="field" style="grid-column: span 2;">
+            <div class="field">
                 <label>API Key</label>
                 <input type="password" name="apikey" id="edit_apikey" placeholder="Leave blank to keep current">
             </div>
@@ -221,12 +270,18 @@
                 <input type="number" name="ram" id="edit_ram" required>
             </div>
 
-            <!-- TIER SELECTOR (NEW) -->
             <div class="field">
                 <label>Billing Tier</label>
                 <select name="tier" id="edit_tier">
                     <option value="free">Free Node</option>
                     <option value="paid">Paid Node</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Node Type</label>
+                <select name="type" id="edit_type" onchange="toggleProxmoxFields('edit')">
+                    <option value="docker">Docker</option>
+                    <option value="proxmox">Proxmox</option>
                 </select>
             </div>
             
@@ -237,6 +292,42 @@
                     <option value="maintenance">Maintenance</option>
                     <option value="offline">Offline</option>
                 </select>
+            </div>
+
+            <!-- Proxmox-specific fields -->
+            <div id="edit_proxmox_fields" class="proxmox-fields" style="grid-column: span 2;">
+                <div style="border-top: 1px solid #333; padding-top: 15px; margin-top: 10px;">
+                    <h4 style="margin-bottom: 15px; color: #60a5fa;">Proxmox Configuration</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div class="field">
+                            <label>Proxmox Host</label>
+                            <input type="text" name="proxmoxhost" id="edit_proxmoxhost" placeholder="https://proxmox.example.com">
+                        </div>
+                        <div class="field">
+                            <label>Proxmox Port</label>
+                            <input type="number" name="proxmoxport" id="edit_proxmoxport" value="8006">
+                        </div>
+                        <div class="field">
+                            <label>Username</label>
+                            <input type="text" name="proxmoxuser" id="edit_proxmoxuser" placeholder="root@pam">
+                        </div>
+                        <div class="field">
+                            <label>Password</label>
+                            <input type="password" name="proxmoxpassword" id="edit_proxmoxpassword" placeholder="Leave blank to keep current">
+                        </div>
+                        <div class="field">
+                            <label>Node Name</label>
+                            <input type="text" name="proxmoxnode" id="edit_proxmoxnode" value="pve" placeholder="pve">
+                        </div>
+                        <div class="field">
+                            <label>Verify SSL</label>
+                            <select name="proxmoxssl" id="edit_proxmoxssl">
+                                <option value="0">No</option>
+                                <option value="1">Yes</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
@@ -256,6 +347,18 @@
         document.getElementById(id).classList.remove('is-open');
     }
 
+    function toggleProxmoxFields(prefix) {
+        const typeSelect = document.getElementById(prefix + '_type');
+        const fields = document.getElementById(prefix + '_proxmox_fields');
+        if (typeSelect && fields) {
+            if (typeSelect.value === 'proxmox') {
+                fields.classList.add('visible');
+            } else {
+                fields.classList.remove('visible');
+            }
+        }
+    }
+
     function openEditModal(nodeData) {
         const node = JSON.parse(nodeData);
         const form = document.getElementById('editNodeForm');
@@ -269,7 +372,18 @@
         document.getElementById('edit_url').value = node.url || '';
         document.getElementById('edit_ram').value = node.ram;
         document.getElementById('edit_status').value = node.status;
-        document.getElementById('edit_tier').value = node.tier; // SET TIER IN JS
+        document.getElementById('edit_tier').value = node.tier;
+        document.getElementById('edit_type').value = node.type || 'docker';
+        
+        // Set Proxmox fields if they exist
+        if (node.proxmoxhost) document.getElementById('edit_proxmoxhost').value = node.proxmoxhost;
+        if (node.proxmoxport) document.getElementById('edit_proxmoxport').value = node.proxmoxport;
+        if (node.proxmoxuser) document.getElementById('edit_proxmoxuser').value = node.proxmoxuser;
+        if (node.proxmoxnode) document.getElementById('edit_proxmoxnode').value = node.proxmoxnode;
+        document.getElementById('edit_proxmoxssl').value = node.proxmoxssl ? '1' : '0';
+        
+        // Show/hide Proxmox fields
+        toggleProxmoxFields('edit');
         
         document.getElementById('edit_apikey').value = ""; 
         

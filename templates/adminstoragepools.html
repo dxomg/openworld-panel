@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}Storage Pools - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Storage Pools</h1>
+        <p>Manage storage pools across nodes. Pools must be created before VPS instances can use them.</p>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>Registered Pools</h2>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminstoragepools') }}" style="display: flex; gap: 8px; align-items: center;">
+                <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search pools...">
+                <input type="hidden" name="type" value="{{ nodeType }}">
+            </form>
+            <button onclick="openModal('addPoolModal')" class="btn btn-primary btn-small">+ Add Pool</button>
+        </div>
+    </div>
+
+    <!-- Node Type Tabs -->
+    <div style="display: flex; gap: 8px; margin-bottom: 24px;">
+        <a href="{{ url_for('adminstoragepools', q=search) }}" 
+           class="btn btn-small {% if not nodeType %}btn-primary{% endif %}">All</a>
+        <a href="{{ url_for('adminstoragepools', type='docker', q=search) }}" 
+           class="btn btn-small {% if nodeType == 'docker' %}btn-primary{% endif %}">Docker</a>
+        <a href="{{ url_for('adminstoragepools', type='proxmox', q=search) }}" 
+           class="btn btn-small {% if nodeType == 'proxmox' %}btn-primary{% endif %}">Proxmox</a>
+    </div>
+
+    {% if allPools %}
+    <div class="vps-grid">
+        {% for pool in allPools %}
+        <div class="vps-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span class="status-pill status-running">
+                    <span class="dot"></span>{{ pool.driver|upper }}
+                </span>
+                <!-- NODE TYPE BADGE -->
+                <span class="tier-pill" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6;">
+                    {{ pool.node_type|default('docker')|upper }}
+                </span>
+            </div>
+
+            <div class="vps-id">
+                <div class="vps-hostname">{{ pool.name }}</div>
+                <div class="vps-meta">Node: {{ pool.node_name }}{% if pool.source %} &middot; {{ pool.source }}{% endif %}</div>
+            </div>
+
+            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+                <button class="btn btn-small" onclick="openEditPoolModal('{{ pool|tojson|forceescape }}')">Edit</button>
+                <form action="{{ url_for('adminstoragepoolsdelete', poolUuid=pool.uuid) }}" method="POST" onsubmit="return confirm('Delete this storage pool from the database?');">
+                    <button type="submit" class="btn btn-small btn-danger">Delete</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if pagination.totalPages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if pagination.hasPrev %}
+        <a href="{{ url_for('adminstoragepools', page=pagination.currentPage - 1, q=search, type=nodeType) }}" class="btn btn-small">&larr; Previous</a>
+        {% endif %}
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
+        </span>
+        {% if pagination.hasNext %}
+        <a href="{{ url_for('adminstoragepools', page=pagination.currentPage + 1, q=search, type=nodeType) }}" class="btn btn-small">Next &rarr;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">&#x25C9;</div>
+        <h3>No Storage Pools</h3>
+        <p>Create a storage pool to start provisioning VPS instances.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Add Pool Modal -->
+<div id="addPoolModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Create Storage Pool</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addPoolModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminstoragepoolscreate') }}" method="POST">
+            <div class="field">
+                <label>Node</label>
+                <select name="nodeid" required>
+                    <option value="" disabled selected>Select a node...</option>
+                    {% for node in allNodes %}
+                    <option value="{{ node.id }}">{{ node.name }} ({{ node.type|default('docker')|upper }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label>Pool Name</label>
+                <input type="text" name="name" required placeholder="custom-pool">
+            </div>
+            <div class="field">
+                <label>Driver</label>
+                <select name="driver">
+                    <option value="dir" selected>dir</option>
+                    <option value="zfs">zfs</option>
+                    <option value="btrfs">btrfs</option>
+                    <option value="lvm">lvm</option>
+                    <option value="local">local (Proxmox)</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Source (optional)</label>
+                <input type="text" name="source" placeholder="/dev/sdX or /mnt/storage">
+                <span class="hint">Device path or directory. Leave empty for default.</span>
+            </div>
+            <div class="field">
+                <label>Size in GB (0 = unlimited)</label>
+                <input type="number" name="size" value="0" min="0">
+                <span class="hint">Maximum storage capacity for this pool.</span>
+            </div>
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeModal('addPoolModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Pool</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Pool Modal -->
+<div id="editPoolModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Edit Storage Pool</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editPoolModal')">&times;</button>
+        </div>
+        <form id="editPoolForm" action="" method="POST">
+            <div class="field">
+                <label>Node</label>
+                <select name="nodeid" id="edit_pool_nodeid" required disabled>
+                    {% for node in allNodes %}
+                    <option value="{{ node.id }}">{{ node.name }} ({{ node.type|default('docker')|upper }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label>Pool Name</label>
+                <input type="text" name="name" id="edit_pool_name" required>
+            </div>
+            <div class="field">
+                <label>Driver</label>
+                <select name="driver" id="edit_pool_driver">
+                    <option value="dir">dir</option>
+                    <option value="zfs">zfs</option>
+                    <option value="btrfs">btrfs</option>
+                    <option value="lvm">lvm</option>
+                    <option value="local">local (Proxmox)</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Source</label>
+                <input type="text" name="source" id="edit_pool_source" placeholder="/dev/sdX or /mnt/storage">
+            </div>
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeModal('editPoolModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+
+    function openEditPoolModal(poolData) {
+        const pool = JSON.parse(poolData);
+        const form = document.getElementById('editPoolForm');
+
+        let baseUrl = "{{ url_for('adminstoragepoolsupdate', poolUuid='UUID_PLACEHOLDER') }}";
+        form.action = baseUrl.replace('UUID_PLACEHOLDER', pool.uuid);
+
+        document.getElementById('edit_pool_nodeid').value = pool.nodeid;
+        document.getElementById('edit_pool_name').value = pool.name;
+        document.getElementById('edit_pool_driver').value = pool.driver;
+        document.getElementById('edit_pool_source').value = pool.source || '';
+
+        openModal('editPoolModal');
+    }
+</script>
+{% endblock %}
