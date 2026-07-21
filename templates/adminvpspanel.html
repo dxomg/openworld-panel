@@ -4,7 +4,7 @@
 
 {% block content %}
 
-<a href="{{ url_for('adminvps') }}" class="back-link">← Back to All Instances</a>
+<a href="{{ url_for('adminvps') }}" class="back-link">&larr; Back to All Instances</a>
 
 <div class="detail-head">
   <div class="detail-title">
@@ -21,16 +21,20 @@
   </div>
 
   <div class="btn-row">
+    {% if instance.status == 'running' and (assignedIpv4 or assignedIpv6) %}
+    <button type="button" class="btn btn-console btn-small" onclick="openConsole('{{ instance.uuid }}')">&#9000; Console</button>
+    {% endif %}
+
     <form method="POST" action="/vps/{{ instance.uuid }}/action/start" style="display:inline;">
-      <button type="submit" class="btn btn-primary btn-small">► Start</button>
+      <button type="submit" class="btn btn-primary btn-small">&#9654; Start</button>
     </form>
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/restart" style="display:inline;">
-      <button type="submit" class="btn btn-small">↻ Restart</button>
+      <button type="submit" class="btn btn-small">&#8635; Restart</button>
     </form>
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/stop" style="display:inline;">
-      <button type="submit" class="btn btn-danger btn-small">■ Stop</button>
+      <button type="submit" class="btn btn-danger btn-small">&#9632; Stop</button>
     </form>
 
     <form method="POST" action="{{ url_for('adminvpsdelete', vpsUuid=instance.uuid) }}" style="display:inline;" onsubmit="return confirm('DELETE this VPS? This will destroy the container and remove it from the database.');">
@@ -47,44 +51,11 @@
 
 <div class="detail-grid">
 
-  <!-- Terminal -->
+  <!-- Credentials -->
   <div style="display:flex;flex-direction:column;">
 
-    <div class="terminal" style="flex-grow:1;display:flex;flex-direction:column;margin-bottom:0;min-height:440px;">
-
-      <div class="terminal-bar">
-        <div class="terminal-dots">
-          <span></span><span></span><span></span>
-        </div>
-
-        Web Console - {{ instance.hostname }} (tty1)
-      </div>
-
-
-      <div class="terminal-body" style="flex-grow:1;overflow-y:auto;">
-{{ instance.image_name or instance.image_path }} {{ instance.hostname }} tty1
-
-{{ instance.hostname }} login: root
-Password:
-
-Welcome to {{ instance.image_name or instance.image_path }}
-
-root@{{ instance.hostname }}:~# <span class="cursor"></span>
-
-      </div>
-
-    </div>
-
-  </div>
-
-
-  <!-- Stats -->
-  <div style="display:flex;flex-direction:column;gap:16px;">
-
-
-    <div class="panel">
-
-      <h3>Instance Details</h3>
+    <div class="panel" style="flex-grow:1;">
+      <h3>Connection Details</h3>
 
       <div class="kv-list">
 
@@ -95,108 +66,234 @@ root@{{ instance.hostname }}:~# <span class="cursor"></span>
           </span>
         </div>
 
-        {% if assignedIp %}
+        {% if assignedIpv6 %}
         <div class="kv-row">
           <span class="k">IPv6 Address</span>
-          <span class="v" style="color:var(--accent);" data-copy="{{ assignedIp }}" title="Click to copy">
-            {{ assignedIp }}
+          <span class="v" style="color:var(--accent);cursor:pointer;" data-copy="{{ assignedIpv6 }}" title="Click to copy">
+            {{ assignedIpv6 }} <span style="opacity:0.5;font-size:12px;">&#x2398;</span>
+          </span>
+        </div>
+        {% endif %}
+
+        {% if assignedIpv4 %}
+        <div class="kv-row">
+          <span class="k">IPv4 Address</span>
+          <span class="v" style="color:var(--accent);cursor:pointer;" data-copy="{{ assignedIpv4 }}" title="Click to copy">
+            {{ assignedIpv4 }} <span style="opacity:0.5;font-size:12px;">&#x2398;</span>
           </span>
         </div>
         {% endif %}
 
         <div class="kv-row">
-          <span class="k">Root Password</span>
-          <span class="v" data-copy="{{ instance.password }}" title="Click to copy" style="cursor:pointer;">
-            ••••••••
+          <span class="k">SSH Port</span>
+          <span class="v">22</span>
+        </div>
+
+        <div class="kv-row">
+          <span class="k">Username</span>
+          <span class="v" style="cursor:pointer;" data-copy="root" title="Click to copy">root <span style="opacity:0.5;font-size:12px;">&#x2398;</span></span>
+        </div>
+
+        <div class="kv-row">
+          <span class="k">Password</span>
+          <span class="v">
+            <span data-copy="{{ instance.password }}" title="Click to reveal" style="cursor:pointer;color:var(--accent);filter:blur(5px);" onclick="this.style.filter='none';">{{ instance.password }}</span>
+            <span data-copy="{{ instance.password }}" title="Click to copy" style="cursor:pointer;opacity:0.5;font-size:12px;">&#x2398;</span>
           </span>
         </div>
+
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <h3>Instance Info</h3>
+
+      <div class="kv-list">
 
         <div class="kv-row">
           <span class="k">OS Image</span>
-          <span class="v">
-            {{ instance.image_name or instance.image }}
-          </span>
+          <span class="v">{{ instance.image_name or instance.image }}</span>
         </div>
 
         <div class="kv-row">
-          <span class="k">VPS UUID</span>
-          <span class="v" data-copy="{{ instance.uuid }}" title="Click to copy">
-            {{ instance.uuid }}
-          </span>
+          <span class="k">UUID</span>
+          <span class="v" data-copy="{{ instance.uuid }}" title="Click to copy">{{ instance.uuid }}</span>
         </div>
-
-        {% if networkDns %}
-        <div class="kv-row">
-          <span class="k">DNS</span>
-          <span class="v" data-copy="{{ networkDns }}" title="Click to copy" style="cursor:pointer;">
-            {{ networkDns }}
-          </span>
-        </div>
-        {% endif %}
 
       </div>
-
     </div>
 
+  </div>
 
+
+  <!-- Stats -->
+  <div style="display:flex;flex-direction:column;gap:16px;">
 
     <div class="panel" style="flex-grow:1;">
 
-      <h3 style="margin-bottom:20px;">
-        Resources
-      </h3>
+      <h3 style="margin-bottom:20px;">Resources{% if metrics_mode == 'dynamic' %} <span id="metricsLive" style="color:var(--accent);font-size:10px;vertical-align:middle;margin-left:8px;">&#9679; LIVE</span>{% endif %}</h3>
 
       <div class="metric">
         <div class="metric-label">
           <span>CPU ({{ instance.cpu }} vCPU)</span>
-          <span class="metric-val">{{ metric.cpu if metric and metric.cpu else '--' }}</span>
+          <span class="metric-val" data-metric="cpu">{{ metric.cpu if metric and metric.cpu else '--' }}</span>
         </div>
         <div class="metric-track">
-          <div class="metric-fill" style="width:{% if metric and metric.cpu %}{{ metric.cpu|replace('%','') }}{% else %}0{% endif %}%;"></div>
+          <div class="metric-fill" data-metric="cpu-bar" style="width:{% if metric and metric.cpu %}{{ metric.cpu|replace('%','') }}{% else %}0{% endif %}%;"></div>
         </div>
       </div>
 
       <div class="metric">
         <div class="metric-label">
           <span>RAM ({{ instance.ram }} MB)</span>
-          <span class="metric-val">{{ metric.ram if metric and metric.ram else '--' }}</span>
+          <span class="metric-val" data-metric="ram">{{ metric.ram if metric and metric.ram else '--' }}</span>
         </div>
         <div class="metric-track">
-          <div class="metric-fill" style="width:0%;"></div>
+          <div class="metric-fill" data-metric="ram-bar" style="width:0%;"></div>
         </div>
       </div>
 
       <div class="metric">
         <div class="metric-label">
           <span>Disk ({{ instance.disk }} MB)</span>
-          <span class="metric-val">{% if metric and metric.diskUsed %}{{ metric.diskUsed }} / {{ metric.diskTotal }} ({{ metric.disk }}){% else %}--{% endif %}</span>
+          <span class="metric-val" data-metric="disk">{% if metric and metric.diskUsed %}{{ metric.diskUsed }} / {{ metric.diskTotal }} ({{ metric.disk }}){% else %}--{% endif %}</span>
         </div>
         <div class="metric-track">
-          <div class="metric-fill" style="width:{% if metric and metric.disk %}{{ metric.disk|replace('%','') }}{% else %}0{% endif %}%;"></div>
+          <div class="metric-fill" data-metric="disk-bar" style="width:{% if metric and metric.disk %}{{ metric.disk|replace('%','') }}{% else %}0{% endif %}%;"></div>
         </div>
       </div>
 
-      {% if metric and metric.netIn %}
       <div class="metric">
         <div class="metric-label">
           <span>Network In</span>
-          <span class="metric-val">{{ metric.netIn }}</span>
+          <span class="metric-val" data-metric="netIn">{{ metric.netIn if metric and metric.netIn else '--' }}</span>
         </div>
       </div>
       <div class="metric">
         <div class="metric-label">
           <span>Network Out</span>
-          <span class="metric-val">{{ metric.netOut }}</span>
+          <span class="metric-val" data-metric="netOut">{{ metric.netOut if metric and metric.netOut else '--' }}</span>
         </div>
       </div>
-      {% endif %}
 
     </div>
 
-
   </div>
 
-
 </div>
+
+{% if metrics_mode == 'dynamic' %}
+<script>
+(function() {
+    var vpsUuid = {{ instance.uuid | tojson }};
+    var pollInterval = 5000;
+
+    function pct(s) {
+        if (!s) return 0;
+        return parseFloat(s.replace('%','')) || 0;
+    }
+
+    function updateMetrics() {
+        fetch('/vps/' + vpsUuid + '/status')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error || !data.metrics) return;
+            var m = data.metrics;
+
+            var cpuVal = document.querySelector('[data-metric="cpu"]');
+            var cpuBar = document.querySelector('[data-metric="cpu-bar"]');
+            if (cpuVal) cpuVal.textContent = m.cpu || '--';
+            if (cpuBar) cpuBar.style.width = pct(m.cpu) + '%';
+
+            var ramVal = document.querySelector('[data-metric="ram"]');
+            var ramBar = document.querySelector('[data-metric="ram-bar"]');
+            if (ramVal) ramVal.textContent = m.ram || '--';
+            if (ramBar) ramBar.style.width = pct(m.ram) + '%';
+
+            var diskVal = document.querySelector('[data-metric="disk"]');
+            var diskBar = document.querySelector('[data-metric="disk-bar"]');
+            if (diskVal) {
+                if (m.diskUsed) diskVal.textContent = m.diskUsed + ' / ' + m.diskTotal + ' (' + m.disk + ')';
+                else diskVal.textContent = '--';
+            }
+            if (diskBar) diskBar.style.width = pct(m.disk) + '%';
+
+            var netIn = document.querySelector('[data-metric="netIn"]');
+            var netOut = document.querySelector('[data-metric="netOut"]');
+            if (netIn) netIn.textContent = m.netIn || '--';
+            if (netOut) netOut.textContent = m.netOut || '--';
+        })
+        .catch(function() {});
+    }
+
+    setInterval(updateMetrics, pollInterval);
+})();
+</script>
+{% endif %}
+
+<!-- Console Modal -->
+<div class="console-backdrop" id="consoleModal">
+  <div class="console-dialog">
+    <div class="console-titlebar">
+      <span class="console-title" id="consoleTitle">Console</span>
+      <button class="console-close" onclick="closeConsole()">&times;</button>
+    </div>
+    <div class="console-body" id="consoleBody">
+      <div class="console-loading">Connecting...</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+    var consoleModal = document.getElementById('consoleModal');
+    var consoleBody = document.getElementById('consoleBody');
+    var consoleTitle = document.getElementById('consoleTitle');
+    var consoleIframe = null;
+
+    window.openConsole = function(vpsUuid) {
+        consoleModal.classList.add('is-open');
+        consoleBody.innerHTML = '<div class="console-loading">Initializing...</div>';
+
+        function getCookie(n){var m=document.cookie.match('(^| )'+n+'=([^;]+)');return m?m[2]:null;}
+        fetch('/vps/' + vpsUuid + '/console/token', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token') || ''}
+        })
+        .then(function(r) {
+            if (!r.ok) throw new Error('Failed (' + r.status + ')');
+            return r.json();
+        })
+        .then(function(data) {
+            if (data.error) throw new Error(data.error);
+            consoleTitle.textContent = 'Console \u2014 {{ assignedIpv4 or assignedIpv6 or "VPS" }}';
+
+            consoleIframe = document.createElement('iframe');
+            consoleIframe.className = 'console-iframe';
+            consoleIframe.src = '/vps/' + vpsUuid + '/console?t=' + data.token;
+            consoleBody.innerHTML = '';
+            consoleBody.appendChild(consoleIframe);
+        })
+        .catch(function(err) {
+            consoleBody.innerHTML = '<div class="console-loading error">' + err.message + '</div>';
+        });
+    };
+
+    window.closeConsole = function() {
+        consoleModal.classList.remove('is-open');
+        consoleBody.innerHTML = '';
+        if (consoleIframe) {
+            consoleIframe.src = 'about:blank';
+            consoleIframe = null;
+        }
+    };
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && consoleModal.classList.contains('is-open')) {
+            closeConsole();
+        }
+    });
+})();
+</script>
 
 {% endblock %}

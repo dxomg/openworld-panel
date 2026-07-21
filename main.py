@@ -1,10 +1,14 @@
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, make_response, g
+from flask_sock import Sock
 import os
 import secrets
 import requests
 import toml
 import uuid
 import math
+import json
+import socket
+import paramiko
 from urllib.parse import urlencode
 from datetime import datetime
 from functools import wraps
@@ -41,6 +45,13 @@ DEFAULT_CONFIG = {
         "redirecturl": "http://localhost:5000/discord-callback",
         "discordbaseurl": "https://discord.com/api"
     },
+    "loadbalancing": {
+        "strategy": "both"  # random | least_vps | resources | both
+    },
+    "console": {
+        "timeout": 10,
+        "metrics": "dynamic"
+    },
 }
 
 
@@ -69,23 +80,22 @@ def daystoseconds(days: int) -> int:
 app = Flask(__name__)
 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
+sock = Sock(app)
+
+# One-time console tokens: {token: {"vpsUuid", "hostname", "ip", "port", "username", "password", "used"}}
+_console_tokens = {}
 
 COOKIE_NAME = "sessioncookie"
 SESSION_TTL_DAYS = config["general"]["defaultcookiettl"]
 
 # CSRF protection
-def generatecsrftoken():
-    if 'csrf_token' not in g:
-        g.csrf_token = secrets.token_hex(32)
-    return g.csrf_token
-
 @app.before_request
 def csrfprotect():
     if request.method == "POST":
         # Skip CSRF for PayPal IPN (external webhook)
         if request.path == "/paypal/ipn":
             return
-        token = request.form.get('_csrf_token')
+        token = request.form.get('_csrf_token') or request.headers.get('X-CSRFToken')
         sessionToken = request.cookies.get('csrf_token')
         if not token or not sessionToken or token != sessionToken:
             return "CSRF validation failed", 403
@@ -93,11 +103,12 @@ def csrfprotect():
 @app.after_request
 def setcsrfcookie(response):
     if request.endpoint and request.endpoint != 'static':
-        token = generatecsrftoken()
-        response.set_cookie('csrf_token', token, httponly=False, samesite='Lax')
+        if not request.cookies.get('csrf_token'):
+            token = secrets.token_hex(32)
+            response.set_cookie('csrf_token', token, httponly=False, samesite='Lax')
     return response
 
-app.jinja_env.globals['csrf_token'] = generatecsrftoken
+app.jinja_env.globals['csrf_token'] = lambda: request.cookies.get('csrf_token', '')
 
 
 def loginrequired(f):
@@ -206,28 +217,35 @@ def createvps():
             flash("You already have a free VPS. Free users can only create one free instance.", "error")
             return redirect(url_for('createvps'))
 
-        nodeId, storageId = db.getsuitablenodeandstorage(plan['price'])
+        nodeId, storageId = db.getsuitablenodeandstorage(
+            plan['price'],
+            strategy=config.get('loadbalancing', {}).get('strategy', 'both')
+        )
         
-        if not nodeId or not storageId:
-            flash("No nodes or Storage available for this tier.", "error")
+        if not nodeId:
+            flash("No nodes available for this tier.", "error")
             return redirect(url_for('createvps'))
 
         # Auto-assign network from the node
-        nodeNetworks = db.listnetworks(nodeid=nodeId)
+        node = db.getnodebyid(nodeId)
+        nodeNetType = node.get('type', 'docker') if node else 'docker'
+        nodeNetworks = db.listnetworks(nodeid=nodeId, network_type=nodeNetType)
         if not nodeNetworks:
             flash("No network configured for this node. Contact an admin.", "error")
             return redirect(url_for('createvps'))
         networkId = nodeNetworks[0]['id']
 
-        # Auto-assign storage pool from the node
-        nodePools = db.liststoragepools(nodeid=nodeId)
-        if not nodePools:
-            flash("No storage pool configured for this node. Contact an admin.", "error")
-            return redirect(url_for('createvps'))
-        storagePoolId = nodePools[0]['id']
+        # Auto-assign storage pool from the node (proxmox only)
+        storagePoolId = None
+        if nodeNetType == 'proxmox':
+            nodePools = db.liststoragepools(nodeid=nodeId)
+            if not nodePools:
+                flash("No storage pool configured for this node. Contact an admin.", "error")
+                return redirect(url_for('createvps'))
+            storagePoolId = nodePools[0]['id']
 
         # Check IP availability
-        availIp = db.getavailableip(networkId)
+        availIp = db.getavailableip(networkId, network_type=nodeNetType)
         if not availIp:
             flash("No IPs available for this network. Contact an admin.", "error")
             return redirect(url_for('createvps'))
@@ -245,6 +263,7 @@ def createvps():
                 nodeid=nodeId,
                 storageid=storageId,
                 networkid=networkId,
+                network_type=nodeNetType,
                 storagepoolid=storagePoolId,
                 hostname=hostname,
                 password=services.generaterandompassword(),
@@ -254,6 +273,8 @@ def createvps():
             )
             
             db.decrementplanstock(plan['id'])
+            if storagePoolId:
+                db.decreasestorageavailable(storagePoolId, plan['disk'])
             
             if isPaid:
                 return redirect(url_for('checkout', vpsUuid=vpsUuid))
@@ -267,7 +288,7 @@ def createvps():
             
             return redirect(url_for('dashboard'))
         except Exception as e:
-            flash("An error occurred while creating the VPS.", "error")
+            flash(f"An error occurred while creating the VPS: {e}", "error")
             return redirect(url_for('createvps'))
 
     return render_template("createvps.html", plansList=db.listplans(active=1), images=db.listimages(active=1), **paneluserinfo(g.userinfo))
@@ -373,8 +394,13 @@ def paypalipn():
     paymentStatus = request.form.get("payment_status")
     amount = request.form.get("mc_gross")
     receiver = request.form.get("receiver_email")
+    txnId = request.form.get("txn_id") or request.form.get("transaction_id")
 
-    # 3. Validation Logic
+    # 3. Replay protection: reject if txn_id already processed
+    if txnId and db.gettransactionbytxnid(txnId):
+        return "Already processed", 200
+
+    # 4. Validation Logic
     vps = db.getvps(vpsUuid)
     if not vps:
         return "VPS not found", 400
@@ -389,10 +415,9 @@ def paypalipn():
     if float(amount) < float(plan['price']):
         return "Insufficient amount", 400
 
-    # 4. Success Action: Update Database
+    # 5. Success Action: Update Database
     if vps['status'] == 'pendingpayment':
         db.updatevps(vpsUuid, status='creating')
-        txnId = request.form.get("txn_id") or request.form.get("transaction_id")
         paypalMethod = db.getpaymentmethodbyslug("paypal")
         txnUuid = str(uuid.uuid4())
         db.addtransaction(
@@ -424,19 +449,15 @@ def vpspanel(vpsUuid):
     instance = services.getvpsdetails(vps["id"])
     metric = services.getlatestvpsmetric(vps["id"])
 
-    # Get assigned IP
-    assignedIp = None
-    if vps.get('networkid'):
-        with db.getconnection() as conn:
-            ipRow = conn.execute("SELECT ip FROM networkips WHERE vpsid = ?", (vps['id'],)).fetchone()
-        if ipRow:
-            assignedIp = ipRow['ip']
+    assignedIpv4 = vps.get('ipv4')
+    assignedIpv6 = vps.get('ipv6')
 
     # Get DNS from network
     networkDns = None
     if vps.get('networkid'):
+        netTable = "proxmox_networks" if vps.get('network_type') == 'proxmox' else "docker_networks"
         with db.getconnection() as conn:
-            net = conn.execute("SELECT dns FROM networks WHERE id = ?", (vps['networkid'],)).fetchone()
+            net = conn.execute(f"SELECT dns FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
         if net and net['dns']:
             networkDns = net['dns']
 
@@ -445,8 +466,10 @@ def vpspanel(vpsUuid):
         **paneluserinfo(g.userinfo),
         instance=instance,
         metric=metric,
-        assignedIp=assignedIp,
+        assignedIpv4=assignedIpv4,
+        assignedIpv6=assignedIpv6,
         networkDns=networkDns,
+        metrics_mode=config.get("console", {}).get("metrics", "dynamic"),
     )
 
 
@@ -498,6 +521,144 @@ def vpsstatuspoll(vpsUuid):
 
     metric = services.getlatestvpsmetric(vps["id"])
     return jsonify({"status": vps["status"], "metrics": metric})
+
+
+@app.route("/vps/<vpsUuid>/console/token", methods=["POST"])
+@loginrequired
+def vpsconsoletoken(vpsUuid):
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        return jsonify({"error": "VPS not found"}), 404
+
+    isAdmin = g.userinfo.get('role') == 'admin'
+    if not isAdmin and vps["userid"] != g.userinfo["id"]:
+        return jsonify({"error": "VPS not found"}), 404
+
+    if vps["status"] != "running":
+        return jsonify({"error": "VPS must be running to open console"}), 400
+
+    ip = vps.get("ipv4") or vps.get("ipv6")
+    if not ip:
+        return jsonify({"error": "No IP assigned to this VPS"}), 400
+
+    token = secrets.token_urlsafe(32)
+    _console_tokens[token] = {
+        "vpsUuid": vpsUuid,
+        "hostname": ip,
+        "port": 22,
+        "username": "root",
+        "password": vps["password"],
+        "used": False,
+    }
+    return jsonify({"token": token})
+
+
+@app.route("/vps/<vpsUuid>/console")
+@loginrequired
+def vpsconsole(vpsUuid):
+    token = request.args.get("t")
+    if not token or token not in _console_tokens:
+        return "Invalid or expired console token", 403
+
+    ct = _console_tokens.pop(token)
+    if ct["vpsUuid"] != vpsUuid:
+        return "Invalid or expired console token", 403
+
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        return "VPS not found", 404
+
+    isAdmin = g.userinfo.get('role') == 'admin'
+    if not isAdmin and vps["userid"] != g.userinfo["id"]:
+        return "VPS not found", 404
+
+    return render_template(
+        "console.html",
+        hostname=ct["hostname"],
+        port=ct["port"],
+        username=ct["username"],
+        password=ct["password"],
+        hostname_display=vps.get("ipv4") or vps.get("ipv6", "unknown"),
+    )
+
+
+@sock.route("/ws/ssh")
+def ws_ssh(ws):
+    host = request.args.get("host", "")
+    port = int(request.args.get("port", 22))
+    username = request.args.get("user", "root")
+    password = request.args.get("pass", "")
+
+    if not host:
+        ws.close(1008, "Missing host")
+        return
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    try:
+        ssh.connect(host, port=port, username=username, password=password, timeout=config.get("console", {}).get("timeout", 10))
+    except Exception as e:
+        ws.close(1011, f"SSH connect failed: {e}")
+        return
+
+    try:
+        chan = ssh.invoke_shell(term="xterm-256color", width=120, height=40)
+    except Exception:
+        try:
+            chan = ssh.invoke_shell(term="xterm", width=120, height=40)
+        except Exception as e:
+            ssh.close()
+            ws.close(1011, f"Shell failed: {e}")
+            return
+
+    chan.settimeout(0.0)
+
+    try:
+        while True:
+            while True:
+                try:
+                    data = chan.recv(4096)
+                except socket.timeout:
+                    data = None
+                except OSError:
+                    data = b""
+                if not data:
+                    break
+                try:
+                    ws.send(data)
+                except Exception:
+                    data = b""
+                    break
+            if data == b"":
+                break
+
+            msg = ws.receive(timeout=0.02)
+            if msg is not None:
+                try:
+                    d = json.loads(msg)
+                except (json.JSONDecodeError, TypeError):
+                    d = None
+                if d:
+                    if "data" in d:
+                        try:
+                            chan.send(d["data"])
+                        except Exception:
+                            break
+                    if "resize" in d and len(d["resize"]) == 2:
+                        try:
+                            chan.resize_pty(width=d["resize"][0], height=d["resize"][1])
+                        except Exception:
+                            pass
+    finally:
+        try:
+            chan.close()
+        except Exception:
+            pass
+        try:
+            ssh.close()
+        except Exception:
+            pass
 
 
 #Admin
@@ -621,8 +782,11 @@ def adminvps():
     
     users = db.listallusers()
     plans = db.listplans(active=1)
-    images = db.listimages(active=1)
-    networks = db.listnetworks()
+    dockerImages = db.listimages(active=1, node_type='docker')
+    proxmoxImages = db.listimages(active=1, node_type='proxmox')
+    images = dockerImages + proxmoxImages
+    networks = db.listnetworks(network_type='docker') + db.listnetworks(network_type='proxmox')
+    allNodes = db.listallnodes()
     storagePools = db.liststoragepools()
     
     return render_template(
@@ -633,6 +797,7 @@ def adminvps():
         plans=plans,
         images=images,
         networks=networks,
+        allNodes=allNodes,
         storagePools=storagePools,
         search=q or '',
         **paneluserinfo(g.userinfo), 
@@ -652,19 +817,15 @@ def adminvpspanel(vpsUuid):
     metric = services.getlatestvpsmetric(vps["id"])
     owner = db.getuserbyid(vps["userid"])
 
-    # Get assigned IP
-    assignedIp = None
-    if vps.get('networkid'):
-        with db.getconnection() as conn:
-            ipRow = conn.execute("SELECT ip FROM networkips WHERE vpsid = ?", (vps['id'],)).fetchone()
-        if ipRow:
-            assignedIp = ipRow['ip']
+    assignedIpv4 = vps.get('ipv4')
+    assignedIpv6 = vps.get('ipv6')
 
     # Get DNS from network
     networkDns = None
     if vps.get('networkid'):
+        netTable = "proxmox_networks" if vps.get('network_type') == 'proxmox' else "docker_networks"
         with db.getconnection() as conn:
-            net = conn.execute("SELECT dns FROM networks WHERE id = ?", (vps['networkid'],)).fetchone()
+            net = conn.execute(f"SELECT dns FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
         if net and net['dns']:
             networkDns = net['dns']
 
@@ -675,8 +836,10 @@ def adminvpspanel(vpsUuid):
         instance=instance,
         metric=metric,
         owner=owner,
-        assignedIp=assignedIp,
+        assignedIpv4=assignedIpv4,
+        assignedIpv6=assignedIpv6,
         networkDns=networkDns,
+        metrics_mode=config.get("console", {}).get("metrics", "dynamic"),
     )
 
 @app.route("/dashboard/admin/vps/<string:vpsUuid>/delete", methods=["POST"])
@@ -720,6 +883,10 @@ def adminvpsdelete(vpsUuid):
 
     # Release assigned IP
     db.unassignipbyvpsid(vps['id'])
+
+    # Restore storage pool usage
+    if vps.get('storagepoolid') and vps.get('disk'):
+        db.increasestorageavailable(vps['storagepoolid'], vps['disk'])
 
     # Restore plan stock
     if vps.get('planid'):
@@ -785,7 +952,8 @@ def admincreatevps():
             flash("You must select a network.", "danger")
             return redirect(url_for('adminvps'))
 
-        network = db.getnetworkbyid(networkid)
+        network_type = request.form.get('network_type', 'docker')
+        network = db.getnetworkbyid(networkid, network_type=network_type)
         if not network:
             flash("Selected network not found.", "danger")
             return redirect(url_for('adminvps'))
@@ -794,7 +962,7 @@ def admincreatevps():
             flash("Selected network is not on the assigned node.", "danger")
             return redirect(url_for('adminvps'))
 
-        availIp = db.getavailableip(networkid)
+        availIp = db.getavailableip(networkid, network_type=network_type)
         if not availIp:
             flash("No IPs available for this network. Generate more IPs first.", "danger")
             return redirect(url_for('adminvps'))
@@ -815,6 +983,7 @@ def admincreatevps():
                 nodeid=nodeid,
                 storageid=storageid,
                 networkid=networkid,
+                network_type=network_type,
                 storagepoolid=storagepoolid,
                 hostname=hostname,
                 password=password,
@@ -825,6 +994,8 @@ def admincreatevps():
                 status='creating'
             )
             db.decrementplanstock(plan['id'])
+            if storagepoolid:
+                db.decreasestorageavailable(storagepoolid, plan['disk'])
             flash(f"Instance {hostname} created successfully with {plan['name']} resources.", "success")
             return redirect(url_for('adminvps'))
             
@@ -1010,7 +1181,8 @@ def adminnodesdelete(nodeUuid):
 def adminosimage():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    imagesData = db.listimagespaginated(page=page, perpage=12, search=q)
+    nodeType = request.args.get('type', '').strip() or None
+    imagesData = db.listimagespaginated(page=page, perpage=12, search=q, node_type=nodeType)
     
     return render_template(
         "adminosimage.html",
@@ -1018,6 +1190,7 @@ def adminosimage():
         pagination=imagesData,
         activeImagesCount=sum(1 for i in imagesData['images'] if i['active']),
         search=q or '',
+        nodeType=nodeType or '',
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo)
     )
@@ -1030,9 +1203,10 @@ def adminosimagecreate():
         db.addimage(
             uuid=str(uuid.uuid4()),
             name=request.form.get("name"),
-            image=request.form.get("image"), # The actual tag like 'ubuntu-22.04'
+            image=request.form.get("image"),
             description=request.form.get("description"),
-            active=int(request.form.get("active", 1))
+            active=int(request.form.get("active", 1)),
+            node_type=request.form.get("node_type", "docker")
         )
         flash("OS Image added successfully.", "success")
     except Exception as e:
@@ -1048,7 +1222,8 @@ def adminosimageupdate(imageUuid):
             "name": request.form.get("name"),
             "image": request.form.get("image"),
             "description": request.form.get("description"),
-            "active": int(request.form.get("active"))
+            "active": int(request.form.get("active")),
+            "node_type": request.form.get("node_type", "docker")
         }
         db.updateimage(imageUuid, **updateData)
         flash("OS Image updated.", "success")
@@ -1077,7 +1252,7 @@ def adminosimagedelete(imageUuid):
 def adminstoragepools():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    nodeType = request.args.get('type', '').strip() or None
+    nodeType = request.args.get('type', 'proxmox').strip() or None
     poolsData = db.liststoragepoolspaginated(page=page, perpage=12, search=q, nodeType=nodeType)
     allNodes = db.listallnodes()
     return render_template(
@@ -1097,12 +1272,10 @@ def adminstoragepools():
 def adminstoragepoolscreate():
     nodeid = request.form.get("nodeid", type=int)
     name = request.form.get("name")
-    driver = request.form.get("driver", "dir")
-    source = request.form.get("source")
     size = int(request.form.get("size", 0))
 
     if not nodeid or not name:
-        flash("Node and pool name required.", "error")
+        flash("Node and disk name required.", "error")
         return redirect(url_for('adminstoragepools'))
 
     node = db.getnodebyid(nodeid)
@@ -1110,25 +1283,12 @@ def adminstoragepoolscreate():
         flash("Node not found.", "error")
         return redirect(url_for('adminstoragepools'))
 
-    nodeType = node.get('type', 'docker')
-
-    # Create on node (only for docker nodes)
-    if nodeType == 'docker':
-        payload = {"name": name, "driver": driver}
-        if source:
-            payload["source"] = source
-        if size:
-            payload["size"] = size
-        result = services.nodeapi(node, "/storage", method="POST", data=payload, timeout=30)
-        if not result:
-            flash("Node unreachable.", "error")
-            return redirect(url_for('adminstoragepools'))
-        if result.get("error"):
-            flash(f"Node error: {result['error']}", "error")
-            return redirect(url_for('adminstoragepools'))
+    if node.get('type') != 'proxmox':
+        flash("Storage pools are only for Proxmox nodes.", "error")
+        return redirect(url_for('adminstoragepools'))
 
     poolUuid = str(uuid.uuid4())
-    db.addstoragepool(uuid=poolUuid, nodeid=nodeid, name=name, driver=driver, source=source, size=size, nodeType=nodeType)
+    db.addstoragepool(uuid=poolUuid, nodeid=nodeid, name=name, size=size, nodeType='proxmox')
     flash(f"Storage pool '{name}' created.", "success")
     return redirect(url_for('adminstoragepools'))
 
@@ -1140,10 +1300,6 @@ def adminstoragepoolsdelete(poolUuid):
     if not pool:
         flash("Pool not found.", "error")
         return redirect(url_for('adminstoragepools'))
-
-    node = db.getnodebyid(pool['nodeid'])
-    if node:
-        services.nodeapi(node, f"/storage/{pool['name']}", method="DELETE")
 
     db.removestoragepool(poolUuid)
     flash("Storage pool removed.", "warning")
@@ -1159,10 +1315,9 @@ def adminstoragepoolsupdate(poolUuid):
         return redirect(url_for('adminstoragepools'))
 
     name = request.form.get("name")
-    driver = request.form.get("driver", "dir")
-    source = request.form.get("source")
+    size = int(request.form.get("size", 0))
 
-    db.updatestoragepool(poolUuid, name=name, driver=driver, source=source)
+    db.updatestoragepool(poolUuid, name=name, size=size)
     flash("Storage pool updated.", "success")
     return redirect(url_for('adminstoragepools'))
 
@@ -1175,7 +1330,7 @@ def adminnetworks():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
     nodeType = request.args.get('type', '').strip() or None
-    networksData = db.listnetworkspaginated(page=page, perpage=12, search=q, nodeType=nodeType)
+    networksData = db.listnetworkspaginated(page=page, perpage=12, search=q, network_type=nodeType)
     allNodes = db.listallnodes()
     return render_template(
         "adminnetworks.html",
@@ -1194,9 +1349,14 @@ def adminnetworks():
 def adminnetworkscreate():
     nodeid = request.form.get("nodeid", type=int)
     name = request.form.get("name")
-    subnet = request.form.get("subnet")
+    ipv4 = int(request.form.get("ipv4", 0))
     ipv6 = int(request.form.get("ipv6", 1))
+    ipv4_subnet = request.form.get("ipv4_subnet") or None
+    ipv4_gateway = request.form.get("ipv4_gateway") or None
+    ipv6_subnet = request.form.get("ipv6_subnet") or None
+    ipv6_gateway = request.form.get("ipv6_gateway") or None
     dns = request.form.get("dns", "1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888")
+    network_type = request.form.get("node_type", "docker")
 
     if not nodeid or not name:
         flash("Node and network name required.", "error")
@@ -1207,22 +1367,23 @@ def adminnetworkscreate():
         flash("Node not found.", "error")
         return redirect(url_for('adminnetworks'))
 
-    if db.getnetworkbynamenodeid(name, nodeid):
+    if db.getnetworkbynamenodeid(name, nodeid, network_type=network_type):
         flash("Network already registered for this node.", "error")
         return redirect(url_for('adminnetworks'))
 
-    nodeType = node.get('type', 'docker')
-
     # Create on node (only for docker nodes)
-    if nodeType == 'docker':
+    if network_type == 'docker':
         payload = {
             "name": name,
+            "ipv4": bool(ipv4),
             "ipv6": bool(ipv6),
             "nat": False,
             "dns": [s.strip() for s in dns.split(',') if s.strip()] if dns else [],
         }
-        if subnet:
-            payload["subnet"] = subnet
+        if ipv6_subnet:
+            payload["subnet"] = ipv6_subnet
+        if ipv6_gateway:
+            payload["gateway"] = ipv6_gateway
 
         result = services.nodeapi(node, "/networks", method="POST", data=payload, timeout=30)
         if not result:
@@ -1233,7 +1394,9 @@ def adminnetworkscreate():
             return redirect(url_for('adminnetworks'))
 
     netUuid = str(uuid.uuid4())
-    db.addnetwork(uuid=netUuid, nodeid=nodeid, name=name, subnet=subnet, ipv6=ipv6, dns=dns, nodeType=nodeType)
+    db.addnetwork(uuid=netUuid, nodeid=nodeid, name=name, network_type=network_type,
+                  subnet=ipv6_subnet, gateway=ipv6_gateway, ipv4=ipv4, ipv6=ipv6,
+                  ipv4_subnet=ipv4_subnet, ipv4_gateway=ipv4_gateway, dns=dns)
     flash(f"Network '{name}' created and registered.", "success")
     return redirect(url_for('adminnetworks'))
 
@@ -1241,30 +1404,32 @@ def adminnetworkscreate():
 @loginrequired
 @adminrequired
 def adminnetworksdelete(netUuid):
-    network = db.getnetwork(netUuid)
+    network_type = request.form.get("network_type", "docker")
+    network = db.getnetwork(netUuid, network_type=network_type)
     if not network:
         flash("Network not found.", "error")
         return redirect(url_for('adminnetworks'))
 
     # Check if any VPS is using this network
-    vpsCount = db.countvpsbynetwork(network['id'])
+    vpsCount = db.countvpsbynetwork(network['id'], network_type=network_type)
     if vpsCount > 0:
         flash(f"Cannot delete: {vpsCount} VPS instance(s) are assigned to this network.", "error")
         return redirect(url_for('adminnetworks'))
 
-    # Check if any containers are connected on the node
-    node = db.getnodebyid(network['nodeid'])
-    if node:
-        info = services.nodeapi(node, f"/networks/{network['name']}", method="GET")
-        if info and not info.get("error"):
-            containers = info.get("containers", {})
-            if containers:
-                flash(f"Cannot delete: {len(containers)} container(s) still connected on the node.", "error")
-                return redirect(url_for('adminnetworks'))
-        # Delete from node
-        services.nodeapi(node, f"/networks/{network['name']}", method="DELETE")
+    # Check if any containers are connected on the node (docker only)
+    if network_type == 'docker':
+        node = db.getnodebyid(network['nodeid'])
+        if node:
+            info = services.nodeapi(node, f"/networks/{network['name']}", method="GET")
+            if info and not info.get("error"):
+                containers = info.get("containers", {})
+                if containers:
+                    flash(f"Cannot delete: {len(containers)} container(s) still connected on the node.", "error")
+                    return redirect(url_for('adminnetworks'))
+            # Delete from node
+            services.nodeapi(node, f"/networks/{network['name']}", method="DELETE")
 
-    db.removenetwork(netUuid)
+    db.removenetwork(netUuid, network_type=network_type)
     flash("Network removed.", "warning")
     return redirect(url_for('adminnetworks'))
 
@@ -1276,35 +1441,40 @@ def adminnetworksdelete(netUuid):
 def adminips():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    allNetworks = db.listnetworks()
+    allDockerNetworks = db.listnetworks(network_type='docker')
+    allProxmoxNetworks = db.listnetworks(network_type='proxmox')
+    allNetworks = allDockerNetworks + allProxmoxNetworks
 
     with db.getconnection() as conn:
         offset = (page - 1) * 50
         where = ""
         params = []
         if q:
-            where = "WHERE ni.ip LIKE ? OR nd.name LIKE ? OR n.name LIKE ?"
+            where = "WHERE ni.ip LIKE ? OR nd.name LIKE ? OR COALESCE(dn.name, pn.name) LIKE ?"
             params = [f"%{q}%", f"%{q}%", f"%{q}%"]
         total = conn.execute(f"""
             SELECT COUNT(*) FROM networkips ni
-            JOIN networks n ON ni.networkid = n.id
-            JOIN nodes nd ON n.nodeid = nd.id
+            LEFT JOIN docker_networks dn ON ni.networkid = dn.id AND ni.network_type = 'docker'
+            LEFT JOIN proxmox_networks pn ON ni.networkid = pn.id AND ni.network_type = 'proxmox'
+            JOIN nodes nd ON nd.id = COALESCE(dn.nodeid, pn.nodeid)
             {where}
         """, params).fetchone()[0]
         assigned = conn.execute(f"""
             SELECT COUNT(*) FROM networkips ni
-            JOIN networks n ON ni.networkid = n.id
-            JOIN nodes nd ON n.nodeid = nd.id
+            LEFT JOIN docker_networks dn ON ni.networkid = dn.id AND ni.network_type = 'docker'
+            LEFT JOIN proxmox_networks pn ON ni.networkid = pn.id AND ni.network_type = 'proxmox'
+            JOIN nodes nd ON nd.id = COALESCE(dn.nodeid, pn.nodeid)
             {where + (' AND' if where else 'WHERE')} ni.assigned = 1
         """, params).fetchone()[0]
         rows = conn.execute(f"""
-            SELECT ni.*, n.name as network_name, nd.name as node_name, v.hostname as vps_hostname
+            SELECT ni.*, COALESCE(dn.name, pn.name) as network_name, nd.name as node_name, v.hostname as vps_hostname
             FROM networkips ni
-            JOIN networks n ON ni.networkid = n.id
-            JOIN nodes nd ON n.nodeid = nd.id
+            LEFT JOIN docker_networks dn ON ni.networkid = dn.id AND ni.network_type = 'docker'
+            LEFT JOIN proxmox_networks pn ON ni.networkid = pn.id AND ni.network_type = 'proxmox'
+            JOIN nodes nd ON nd.id = COALESCE(dn.nodeid, pn.nodeid)
             LEFT JOIN vps v ON ni.vpsid = v.id
             {where}
-            ORDER BY nd.name, n.name, ni.ip ASC
+            ORDER BY nd.name, network_name, ni.ip ASC
             LIMIT ? OFFSET ?
         """, params + [50, offset]).fetchall()
         ipsList = [dict(r) for r in rows]
@@ -1332,11 +1502,37 @@ def adminips():
         **paneladmininfo(g.userinfo)
     )
 
+@app.route("/dashboard/admin/ips/add", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminipadd():
+    networkid = request.form.get("networkid", type=int)
+    network_type = request.form.get("network_type", "docker")
+    ip = request.form.get("ip", "").strip()
+
+    if not networkid or not ip:
+        flash("Network and IP address required.", "error")
+        return redirect(url_for('adminips'))
+
+    network = db.getnetworkbyid(networkid, network_type=network_type)
+    if not network:
+        flash("Network not found.", "error")
+        return redirect(url_for('adminips'))
+
+    ipuuid = str(uuid.uuid4())
+    try:
+        db.addnetworkip(ipuuid, networkid, ip, network_type=network_type)
+        flash(f"IP {ip} added to {network['name']}.", "success")
+    except Exception:
+        flash("IP already exists or invalid.", "error")
+    return redirect(url_for('adminips'))
+
 @app.route("/dashboard/admin/ips/generate", methods=["POST"])
 @loginrequired
 @adminrequired
 def adminipsgenerate():
     networkid = request.form.get("networkid", type=int)
+    network_type = request.form.get("network_type", "docker")
     baseip = request.form.get("baseip")
     count = request.form.get("count", type=int)
 
@@ -1344,13 +1540,13 @@ def adminipsgenerate():
         flash("Network, base IP, and count required.", "error")
         return redirect(url_for('adminips'))
 
-    network = db.getnetworkbyid(networkid)
+    network = db.getnetworkbyid(networkid, network_type=network_type)
     if not network:
         flash("Network not found.", "error")
         return redirect(url_for('adminips'))
 
     isipv6 = ":" in baseip
-    generated = db.generateipsfornetwork(networkid, baseip, count, isipv6=isipv6)
+    generated = db.generateipsfornetwork(networkid, baseip, count, network_type=network_type, isipv6=isipv6)
     flash(f"Generated {len(generated)} IP(s) on {network['name']}.", "success")
     return redirect(url_for('adminips'))
 
@@ -1370,19 +1566,21 @@ def adminipdelete(ipUuid):
 @loginrequired
 @adminrequired
 def adminnetworkips(netUuid):
-    network = db.getnetwork(netUuid)
+    network_type = request.args.get('type', 'docker')
+    network = db.getnetwork(netUuid, network_type=network_type)
     if not network:
         flash("Network not found.", "error")
         return redirect(url_for('adminnetworks'))
 
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    ipsData = db.listnetworkips(network['id'], page=page, perpage=50, search=q)
-    ipStats = db.countips(network['id'])
+    ipsData = db.listnetworkips(network['id'], network_type=network_type, page=page, perpage=50, search=q)
+    ipStats = db.countips(network['id'], network_type=network_type)
 
     return render_template(
         "adminnetworkips.html",
         network=network,
+        network_type=network_type,
         ipsList=ipsData['ips'],
         pagination=ipsData,
         ipStats=ipStats,
@@ -1395,7 +1593,8 @@ def adminnetworkips(netUuid):
 @loginrequired
 @adminrequired
 def adminnetworkipsgenerate(netUuid):
-    network = db.getnetwork(netUuid)
+    network_type = request.form.get("network_type", "docker")
+    network = db.getnetwork(netUuid, network_type=network_type)
     if not network:
         flash("Network not found.", "error")
         return redirect(url_for('adminnetworks'))
@@ -1405,24 +1604,25 @@ def adminnetworkipsgenerate(netUuid):
 
     if not baseip or not count or count < 1:
         flash("Base IP and count required.", "error")
-        return redirect(url_for('adminnetworkips', netUuid=netUuid))
+        return redirect(url_for('adminnetworkips', netUuid=netUuid, type=network_type))
 
     isipv6 = ":" in baseip
-    generated = db.generateipsfornetwork(network['id'], baseip, count, isipv6=isipv6)
+    generated = db.generateipsfornetwork(network['id'], baseip, count, network_type=network_type, isipv6=isipv6)
     flash(f"Generated {len(generated)} IP(s).", "success")
-    return redirect(url_for('adminnetworkips', netUuid=netUuid))
+    return redirect(url_for('adminnetworkips', netUuid=netUuid, type=network_type))
 
 @app.route("/dashboard/admin/networks/<string:netUuid>/ips/delete/<string:ipUuid>", methods=["POST"])
 @loginrequired
 @adminrequired
 def adminnetworkipdelete(netUuid, ipUuid):
+    network_type = request.form.get("network_type", "docker")
     ip = db.getnetworkip(ipUuid)
     if ip and ip['assigned']:
         flash("Cannot delete an assigned IP. Unassign it first.", "error")
     else:
         db.removenetworkip(ipUuid)
         flash("IP removed.", "warning")
-    return redirect(url_for('adminnetworkips', netUuid=netUuid))
+    return redirect(url_for('adminnetworkips', netUuid=netUuid, type=network_type))
 
 @app.route("/dashboard/admin/paymentmethods")
 @loginrequired

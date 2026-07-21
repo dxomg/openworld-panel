@@ -137,7 +137,7 @@
             </span>
             <div class="vps-meta">
                 <div>Owner: <span style="color: var(--text-dim);">{{ instance.owner_name }}</span></div>
-                <div>{{ instance.ipv6 or 'Assigning Network...' }}</div>
+                <div>{{ instance.ipv6 or instance.ipv4 or 'No IP assigned' }}</div>
             </div>
         </div>
         
@@ -220,10 +220,10 @@
                 </div>
                 <div class="field">
                     <label>Operating System</label>
-                    <select name="imageid" required>
+                    <select name="imageid" id="adminVpsImageSelect" required>
                         <option value="" disabled selected>Select image...</option>
                         {% for image in images %}
-                        <option value="{{ image.id }}">{{ image.name }}</option>
+                        <option value="{{ image.id }}" data-type="{{ image.node_type|default('docker') }}">{{ image.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -231,12 +231,19 @@
             <div style="display: flex; flex-direction: column; gap: 16px;">
                 <div class="field">
                     <label>Target Node</label>
-                    <select name="nodeid" required>
+                    <select name="nodeid" id="adminVpsNodeSelect" required onchange="onNodeChange()">
                         <option value="" disabled selected>Select node...</option>
-                        {% for node in users %}
+                        {% for node in allNodes %}
+                        <option value="{{ node.id }}" data-type="{{ node.type|default('docker') }}">{{ node.name }} ({{ node.type|default('docker')|upper }})</option>
                         {% endfor %}
+                    </select>
+                </div>
+                <div class="field" id="adminVpsPoolField" style="display: none;">
+                    <label>Storage Pool (Proxmox)</label>
+                    <select name="storagepoolid" id="adminVpsPoolSelect">
+                        <option value="" selected>Default</option>
                         {% for pool in storagePools %}
-                        <option value="{{ pool.nodeid }}">{{ pool.node_name }} — {{ pool.name }}</option>
+                        <option value="{{ pool.id }}" data-nodeid="{{ pool.nodeid }}">{{ pool.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -253,21 +260,25 @@
                 </div>
                 <div class="field">
                     <label>Network</label>
-                    <select name="networkid" required>
+                    <select name="networkid" id="adminVpsNetSelect" required>
                         <option value="" disabled selected>Select a network...</option>
                         {% for net in networks %}
-                        <option value="{{ net.id }}">{{ net.name }} ({{ net.node_name }})</option>
+                        <option value="{{ net.id }}" data-type="{{ net.network_type }}">{{ net.name }} ({{ net.node_name }}) [{{ net.network_type|upper }}]</option>
                         {% endfor %}
                     </select>
+                    <input type="hidden" name="network_type" id="adminVpsNetType" value="docker">
                 </div>
                 <div class="field">
-                    <label>Storage Pool</label>
+                    <label>Storage Pool (Proxmox only)</label>
                     <select name="storagepoolid">
                         <option value="" selected>Default</option>
                         {% for pool in storagePools %}
+                        {% if pool.node_type == 'proxmox' %}
                         <option value="{{ pool.id }}">{{ pool.name }} ({{ pool.node_name }})</option>
+                        {% endif %}
                         {% endfor %}
                     </select>
+                    <span class="hint">Only applies to Proxmox nodes. Docker uses its configured storage path.</span>
                 </div>
                 <div class="field">
                     <label>Initial Status</label>
@@ -305,9 +316,47 @@
         document.getElementById('modalNodeId').value = option.value;
         document.getElementById('modalStorageId').value = option.getAttribute('data-storage');
     }
+
+    function onNodeChange() {
+        var sel = document.getElementById('adminVpsNodeSelect');
+        var opt = sel.options[sel.selectedIndex];
+        var nodeType = opt.dataset.type || 'docker';
+        var poolField = document.getElementById('adminVpsPoolField');
+        var poolSelect = document.getElementById('adminVpsPoolSelect');
+        var imageSelect = document.getElementById('adminVpsImageSelect');
+
+        // Show/hide storage pool (proxmox only)
+        if (nodeType === 'proxmox') {
+            poolField.style.display = '';
+            for (var i = 0; i < poolSelect.options.length; i++) {
+                var o = poolSelect.options[i];
+                if (!o.value) continue;
+                o.style.display = o.dataset.nodeid == sel.value ? '' : 'none';
+            }
+        } else {
+            poolField.style.display = 'none';
+            poolSelect.value = '';
+        }
+
+        // Filter images by node type
+        for (var i = 0; i < imageSelect.options.length; i++) {
+            var o = imageSelect.options[i];
+            if (!o.value) continue;
+            o.style.display = o.dataset.type === nodeType ? '' : 'none';
+        }
+        imageSelect.value = '';
+    }
     window.onclick = function(event) {
         let modal = document.getElementById('createModal');
         if (event.target == modal) toggleModal(false);
+    }
+
+    const adminNetSelect = document.getElementById('adminVpsNetSelect');
+    if (adminNetSelect) {
+        adminNetSelect.addEventListener('change', function() {
+            const opt = this.options[this.selectedIndex];
+            document.getElementById('adminVpsNetType').value = opt.dataset.type || 'docker';
+        });
     }
 </script>
 {% endblock %}

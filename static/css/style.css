@@ -1283,3 +1283,114 @@ a { color: inherit; text-decoration: none; }
     }
 }
 
+/* ===== Console Button ===== */
+.btn-console {
+    background: var(--bg-raise);
+    color: var(--accent);
+    border-color: var(--accent-dim);
+}
+.btn-console:hover {
+    background: var(--accent-glow);
+    border-color: var(--accent);
+}
+
+/* ===== Console Modal ===== */
+.console-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 9, 17, 0.85);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 200;
+    padding: 16px;
+}
+.console-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.console-dialog {
+    width: 100%;
+    max-width: 1100px;
+    height: 80vh;
+    min-height: 400px;
+    background: #0B1220;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+    transform: translateY(8px);
+    transition: transform 0.2s ease;
+}
+.console-backdrop.is-open .console-dialog {
+    transform: translateY(0);
+}
+
+.console-titlebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--bg-raise);
+    border-bottom: 1px solid var(--border-soft);
+    flex-shrink: 0;
+}
+.console-title {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 0.04em;
+}
+.console-close {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 2px 6px;
+    line-height: 1;
+    border-radius: var(--radius);
+    transition: color 0.15s, background 0.15s;
+}
+.console-close:hover {
+    color: var(--danger);
+    background: var(--danger-glow);
+}
+
+.console-body {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+}
+.console-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    display: block;
+}
+.console-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-dim);
+}
+.console-loading.error {
+    color: var(--danger);
+}
+
+@media (max-width: 768px) {
+    .console-backdrop { padding: 8px; }
+    .console-dialog { height: 90vh; max-width: 100%; }
+}
+

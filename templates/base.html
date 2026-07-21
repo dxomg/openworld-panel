@@ -184,20 +184,12 @@
         }
     });
 
-    // Copy-to-clipboard: add data-copy to any element, copies its textContent
+    // Copy-to-clipboard: add data-copy to any element, copies silently
     document.addEventListener('click', function(e) {
         var el = e.target.closest('[data-copy]');
         if (!el) return;
         var text = el.getAttribute('data-copy') || el.textContent;
-        navigator.clipboard.writeText(text.trim()).then(function() {
-            var original = el.textContent;
-            el.textContent = 'Copied!';
-            el.style.color = 'var(--accent)';
-            setTimeout(function() {
-                el.textContent = original;
-                el.style.color = '';
-            }, 1500);
-        });
+        navigator.clipboard.writeText(text.trim());
     });
 </script>
 </body>

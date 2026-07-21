@@ -244,26 +244,43 @@ def provisionondocker(vpsUuid):
         'apikey': vpsDetails.get('node_apikey', ''),
     }
 
-    # Get network info and assign IP from pool
+    # Get network info and assign IPs from pool
     networkName = "bridge"
     assignedIp = None
-    assignedIpId = None
+    assignedIpv4 = None
+    assignedIpv6 = None
+    assignedIpIds = []
     networkDns = ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111", "2001:4860:4860::8888"]
     if vps.get('networkid'):
+        netTable = "proxmox_networks" if vps.get('network_type') == 'proxmox' else "docker_networks"
         with db.getconnection() as conn:
-            net = conn.execute("SELECT * FROM networks WHERE id = ?", (vps['networkid'],)).fetchone()
+            net = conn.execute(f"SELECT * FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
         if net:
             net = dict(net)
             networkName = net['name']
             if net.get('dns'):
                 networkDns = [s.strip() for s in net['dns'].split(',') if s.strip()]
 
-        # Get an available IP from the pool
-        availIp = db.getavailableip(vps['networkid'])
-        if availIp:
-            assignedIp = availIp['ip']
-            assignedIpId = availIp['id']
-            db.assignip(availIp['id'], vps['id'])
+        netType = vps.get('network_type', 'docker')
+
+        # Assign IPv6 if network supports it
+        if net and net.get('ipv6'):
+            availIpv6 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv6')
+            if availIpv6:
+                assignedIpv6 = availIpv6['ip']
+                assignedIpIds.append(availIpv6['id'])
+                db.assignip(availIpv6['id'], vps['id'])
+
+        # Assign IPv4 if network supports it
+        if net and net.get('ipv4'):
+            availIpv4 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv4')
+            if availIpv4:
+                assignedIpv4 = availIpv4['ip']
+                assignedIpIds.append(availIpv4['id'])
+                db.assignip(availIpv4['id'], vps['id'])
+
+        # Primary IP for container config (prefer IPv6)
+        assignedIp = assignedIpv6 or assignedIpv4
 
     # Get storage pool name
     poolName = "default"
@@ -282,6 +299,8 @@ def provisionondocker(vpsUuid):
         "diskMb": vps.get('disk', 20) or 20,
         "network": networkName,
         "ip": assignedIp,
+        "ipv4": assignedIpv4,
+        "ipv6": assignedIpv6,
         "dns": networkDns,
         "image": vpsDetails['image_path'],
         "rootPassword": vps['password'],
@@ -290,24 +309,24 @@ def provisionondocker(vpsUuid):
 
     result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
     if not result:
-        if assignedIpId:
-            db.unassignip(assignedIpId)
+        for ipId in assignedIpIds:
+            db.unassignip(ipId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Node unreachable or failed to respond")
 
     if result.get("error"):
-        if assignedIpId:
-            db.unassignip(assignedIpId)
+        for ipId in assignedIpIds:
+            db.unassignip(ipId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError(f"Node error: {result['error']}")
 
     if not result.get("containerId"):
-        if assignedIpId:
-            db.unassignip(assignedIpId)
+        for ipId in assignedIpIds:
+            db.unassignip(ipId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Node did not return a container ID")
 
-    db.updatevps(vpsUuid, status='running', container=result["containerId"])
+    db.updatevps(vpsUuid, status='running', container=result["containerId"], ipv4=assignedIpv4, ipv6=assignedIpv6)
     return result
 
 def nodeapi(node, path, method="GET", data=None, timeout=10):
@@ -485,15 +504,45 @@ def provisiononproxmox(vpsUuid):
 
     node_name = node.get('proxmoxnode', 'pve')
 
-    # Get network info and assign IP
-    assignedIp = None
-    assignedIpId = None
+    # Get network info and assign IPs
+    assignedIpv4 = None
+    assignedIpv6 = None
+    assignedIpIds = []
+    bridgeName = "vmbr0"
+    ipv4Gateway = None
+    ipv6Gateway = None
+    networkDns = None
     if vps.get('networkid'):
-        availIp = db.getavailableip(vps['networkid'])
-        if availIp:
-            assignedIp = availIp['ip']
-            assignedIpId = availIp['id']
-            db.assignip(availIp['id'], vps['id'])
+        netType = vps.get('network_type', 'proxmox')
+
+        # Get network to check ipv4/ipv6 flags
+        netTable = "proxmox_networks" if netType == 'proxmox' else "docker_networks"
+        with db.getconnection() as conn:
+            net = conn.execute(f"SELECT * FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
+        net = dict(net) if net else {}
+
+        if net.get('name'):
+            bridgeName = net['name']
+        ipv4Gateway = net.get('ipv4_gateway')
+        ipv6Gateway = net.get('ipv6_gateway') or net.get('gateway')
+        if net.get('dns'):
+            networkDns = net['dns']
+
+        if net.get('ipv6'):
+            availIpv6 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv6')
+            if availIpv6:
+                assignedIpv6 = availIpv6['ip']
+                assignedIpIds.append(availIpv6['id'])
+                db.assignip(availIpv6['id'], vps['id'])
+
+        if net.get('ipv4'):
+            availIpv4 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv4')
+            if availIpv4:
+                assignedIpv4 = availIpv4['ip']
+                assignedIpIds.append(availIpv4['id'])
+                db.assignip(availIpv4['id'], vps['id'])
+
+    assignedIp = assignedIpv6 or assignedIpv4
 
     # Get Proxmox client
     pve = getproxmoxclient(node)
@@ -501,8 +550,8 @@ def provisiononproxmox(vpsUuid):
     # Get next VMID
     vmid = pveclient.nextvmid(pve)
     if not vmid:
-        if assignedIpId:
-            db.unassignip(assignedIpId)
+        for ipId in assignedIpIds:
+            db.unassignip(ipId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Failed to get VMID")
 
@@ -511,36 +560,54 @@ def provisiononproxmox(vpsUuid):
     cpu = int(vps['cpu'])
     disk_gb = max(1, int(vps.get('disk', 20)) // 1024)  # Convert MB to GB, min 1GB
     
-    # Image is expected to be a template name like "ubuntu-22.04-standard"
+    # Image: if it contains ":" use as-is (e.g. "local:vztmpl/ubuntu-24.04.tar.zst")
+    # Otherwise treat as a template name and prepend default storage
     template = vpsDetails.get('image_path', 'ubuntu-22.04-standard')
-    if not template.endswith('.tar.gz') and not template.endswith('.tar.xz'):
+    if ':' not in template and not template.endswith(('.tar.gz', '.tar.xz', '.tar.zst')):
         template = f"local:vztmpl/{template}.tar.gz"
+
+    # Get storage pool name for rootfs
+    storagePool = "local-lvm"
+    if vps.get('storagepoolid'):
+        with db.getconnection() as conn:
+            pool = conn.execute("SELECT name FROM storagepools WHERE id = ?", (vps['storagepoolid'],)).fetchone()
+        if pool:
+            storagePool = pool['name']
 
     lxc_params = {
         "hostname": vps['hostname'],
         "cores": cpu,
         "memory": ram,
-        "rootfs": f"local-lvm:{disk_gb}",
+        "rootfs": f"{storagePool}:{disk_gb}",
         "ostemplate": template,
         "password": vps['password'],
-        "net0": "name=eth0,bridge=vmbr0,ip=dhcp",
+        "net0": f"name=eth0,bridge={bridgeName},ip=dhcp",
         "onboot": 1,
         "swap": int(vps.get('swap', 0)),
     }
 
-    # If we have a specific IP, set it
-    if assignedIp:
-        if ':' in assignedIp:
-            lxc_params["net0"] = f"name=eth0,bridge=vmbr0,ip6={assignedIp}/64,ip=dhcp"
-        else:
-            lxc_params["net0"] = f"name=eth0,bridge=vmbr0,ip={assignedIp}/24,gw=auto"
+    # Set DNS if configured on network
+    if networkDns:
+        lxc_params["nameserver"] = networkDns
+
+    # If we have a specific IP, set it with gateway
+    if assignedIpv6 and assignedIpv4:
+        gw6 = f",gw6={ipv6Gateway}" if ipv6Gateway else ""
+        gw4 = f",gw={ipv4Gateway}" if ipv4Gateway else ""
+        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip6={assignedIpv6}/64{gw6},ip={assignedIpv4}/24{gw4}"
+    elif assignedIpv6:
+        gw = f",gw6={ipv6Gateway}" if ipv6Gateway else ""
+        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip6={assignedIpv6}/64{gw},ip=dhcp"
+    elif assignedIpv4:
+        gw = f",gw={ipv4Gateway}" if ipv4Gateway else ""
+        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip={assignedIpv4}/24{gw}"
 
     # Create LXC
     try:
         pveclient.createlxc(pve, node_name, vmid, lxc_params)
     except Exception as e:
-        if assignedIpId:
-            db.unassignip(assignedIpId)
+        for ipId in assignedIpIds:
+            db.unassignip(ipId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError(f"LXC creation failed: {e}")
 
@@ -549,46 +616,22 @@ def provisiononproxmox(vpsUuid):
     try:
         pveclient.startlxc(pve, node_name, vmid)
     except Exception as e:
-        if assignedIpId:
-            db.unassignip(assignedIpId)
+        for ipId in assignedIpIds:
+            db.unassignip(ipId)
         db.updatevps(vpsUuid, status='error')
         raise ValueError(f"LXC start failed: {e}")
 
-    # Store VMID mapping
-    setvmidmapping(vpsUuid, vmid)
-
-    db.updatevps(vpsUuid, status='running', container=str(vmid))
+    db.updatevps(vpsUuid, status='running', container=str(vmid), vmid=vmid, ipv4=assignedIpv4, ipv6=assignedIpv6)
     return {"containerId": str(vmid), "vmid": vmid, "status": "created"}
 
-# VMID mapping storage
-VMID_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "vmid_map.json")
-
-def loadvmidmap():
-    import json
-    if not os.path.exists(VMID_MAP_PATH):
-        return {}
-    try:
-        with open(VMID_MAP_PATH, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {}
-
-def savevmidmap(vmap):
-    import json
-    with open(VMID_MAP_PATH, "w") as f:
-        json.dump(vmap, f, indent=2)
+# VMID mapping - stored in vps.vmid column
 
 def setvmidmapping(uuid, vmid):
-    vmap = loadvmidmap()
-    vmap[uuid] = vmid
-    savevmidmap(vmap)
+    db.updatevps(uuid, vmid=vmid)
 
 def getvmidmapping(uuid):
-    vmap = loadvmidmap()
-    return vmap.get(uuid)
+    vps = db.getvps(uuid)
+    return vps.get('vmid') if vps else None
 
 def removevmidmapping(uuid):
-    vmap = loadvmidmap()
-    if uuid in vmap:
-        del vmap[uuid]
-        savevmidmap(vmap)
+    db.updatevps(uuid, vmid=None)

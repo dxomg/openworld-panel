@@ -4,72 +4,142 @@
 
 {% block content %}
 <style>
-    .vps-grid .vps-card {
+    .type-badge {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+    .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
+    .img-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 14px;
+    }
+    .img-card {
+        display: flex;
         flex-direction: column;
+        gap: 14px;
+        padding: 22px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        transition: border-color 0.15s ease;
+    }
+    .img-card:hover { border-color: var(--accent-dim); }
+    .img-card-head {
+        display: flex;
+        justify-content: space-between;
         align-items: flex-start;
     }
+    .img-card-name {
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text);
+    }
+    .img-card-tag {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-dim);
+        margin-top: 3px;
+    }
+    .img-card-desc {
+        font-size: 13px;
+        color: var(--text-dim);
+        line-height: 1.5;
+    }
+    .img-specs {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        padding-top: 14px;
+        border-top: 1px solid var(--border-soft);
+    }
+    .img-spec {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12.5px;
+        font-family: var(--font-mono);
+    }
+    .img-spec .k { color: var(--text-dim); }
+    .img-spec .v { color: var(--text); }
 </style>
+
 <div class="page">
     <section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>OS Images</h1>
-        <p>Manage operating system templates and container images available for deployment.</p>
+        <p>Manage operating system templates available for deployment.</p>
 
         <div class="hero-stats">
             <div class="hero-stat">
-                <div class="num accent">{{ allImages|length }}</div>
+                <div class="num accent">{{ pagination.totalCount }}</div>
                 <div class="label">Total Images</div>
             </div>
             <div class="hero-stat">
-                <div class="num">{{ active_images_count }}</div>
+                <div class="num">{{ activeImagesCount }}</div>
                 <div class="label">Active</div>
-            </div>
-            <div class="hero-stat">
-                <div class="num">
-                    {% set totalUsage = namespace(value=0) %}
-                    {% for img in allImages %}{% set totalUsage.value = totalUsage.value + img.vps_count %}{% endfor %}
-                    {{ totalUsage.value }}
-                </div>
-                <div class="label">Total Deployments</div>
             </div>
         </div>
     </section>
 
-    <div class="section-head" style="margin-top: 48px;">
-        <h2>Available OS Templates</h2>
+    <div class="section-head">
+        <h2>OS Templates</h2>
         <div style="display: flex; gap: 10px; align-items: center;">
             <form method="GET" action="{{ url_for('adminosimage') }}" style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search images...">
+                <input type="hidden" name="type" value="{{ nodeType }}">
             </form>
             <button onclick="openModal('addImageModal')" class="btn btn-primary btn-small">+ Add Image</button>
         </div>
     </div>
 
+    <!-- Type Tabs -->
+    <div style="display: flex; gap: 8px; margin-bottom: 24px;">
+        <a href="{{ url_for('adminosimage', q=search) }}" 
+           class="btn btn-small {% if not nodeType %}btn-primary{% endif %}">All</a>
+        <a href="{{ url_for('adminosimage', type='docker', q=search) }}" 
+           class="btn btn-small {% if nodeType == 'docker' %}btn-primary{% endif %}">Docker</a>
+        <a href="{{ url_for('adminosimage', type='proxmox', q=search) }}" 
+           class="btn btn-small {% if nodeType == 'proxmox' %}btn-primary{% endif %}">Proxmox</a>
+    </div>
+
     {% if allImages %}
-    <div class="vps-grid">
+    <div class="img-grid">
         {% for img in allImages %}
-        <div class="vps-card">
-            {% set sClass = 'status-running' if img.active else 'status-unknown' %}
-            <span class="status-pill {{ sClass }}">
-                <span class="dot"></span>{{ 'Public' if img.active else 'Hidden' }}
-            </span>
-
-            <div class="vps-id">
-                <div class="vps-hostname">{{ img.name }}</div>
-                <div class="vps-meta">Tag: {{ img.image }}</div>
+        <div class="img-card" style="opacity: {{ '1' if img.active else '0.6' }};">
+            <div class="img-card-head">
+                <div>
+                    <div class="img-card-name">{{ img.name }}</div>
+                    <div class="img-card-tag">{{ img.image }}</div>
+                </div>
+                <span class="type-badge type-{{ img.node_type|default('docker') }}">
+                    {{ img.node_type|default('docker')|upper }}
+                </span>
             </div>
 
-            <p style="font-size: 0.85rem; color: #888; margin: 8px 0;">{{ img.description or 'No description provided.' }}</p>
+            {% if img.description %}
+            <div class="img-card-desc">{{ img.description }}</div>
+            {% endif %}
 
-            <div class="vps-specs">
-                <span><span class="spec-val">{{ img.vps_count }}</span> active instances</span>
+            <div class="img-specs">
+                <div class="img-spec">
+                    <span class="k">Status</span>
+                    <span class="v" style="color: {{ 'var(--accent)' if img.active else 'var(--text-dim)' }};">{{ 'Active' if img.active else 'Hidden' }}</span>
+                </div>
+                <div class="img-spec">
+                    <span class="k">Instances</span>
+                    <span class="v">{{ img.vps_count }}</span>
+                </div>
             </div>
 
-            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
-                <button class="btn btn-small"
-                    onclick="openEditModal('{{ img|tojson|forceescape }}')">Edit</button>
-
-                <form action="{{ url_for('adminosimagedelete', imageUuid=img.uuid) }}" method="POST" onsubmit="return confirm('Delete this image? Existing VPS instances using this image will remain in the database but may face issues if reinstalled.');">
+            <div style="display: flex; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-soft);">
+                <button class="btn btn-small" onclick="openEditModal('{{ img|tojson|forceescape }}')">Edit</button>
+                <form action="{{ url_for('adminosimagedelete', imageUuid=img.uuid) }}" method="POST" onsubmit="return confirm('Delete this image?');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -80,7 +150,7 @@
     {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
         {% if pagination.hasPrev %}
-        <a href="{{ url_for('adminosimage', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
+        <a href="{{ url_for('adminosimage', page=pagination.currentPage - 1, q=search, type=nodeType) }}" class="btn btn-small">&larr; Previous</a>
         {% endif %}
         
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
@@ -88,16 +158,16 @@
         </span>
 
         {% if pagination.hasNext %}
-        <a href="{{ url_for('adminosimage', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
+        <a href="{{ url_for('adminosimage', page=pagination.currentPage + 1, q=search, type=nodeType) }}" class="btn btn-small">Next &rarr;</a>
         {% endif %}
     </div>
     {% endif %}
 
     {% else %}
     <div class="empty-state">
-        <div class="glyph">💿</div>
+        <div class="glyph">&#x1F4BF;</div>
         <h3>No OS Images Found</h3>
-        <p>Add your first OS image (e.g., Ubuntu, Debian) to allow users to deploy instances.</p>
+        <p>Add your first OS image to allow users to deploy instances.</p>
     </div>
     {% endif %}
 </div>
@@ -109,28 +179,38 @@
             <h3>Add OS Image</h3>
             <button type="button" class="modal-close" onclick="closeModal('addImageModal')">&times;</button>
         </div>
-        <form action="{{ url_for('adminosimagecreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <div class="field" style="grid-column: span 2;">
+        <form action="{{ url_for('adminosimagecreate') }}" method="POST">
+            <div class="field">
                 <label>Friendly Name</label>
-                <input type="text" name="name" required placeholder="Ubuntu 22.04 LTS">
+                <input type="text" name="name" required placeholder="Ubuntu 24.04 LTS">
             </div>
-            <div class="field" style="grid-column: span 2;">
+            <div class="field">
                 <label>Image Tag / Path</label>
-                <input type="text" name="image" required placeholder="ubuntu-22.04">
+                <input type="text" name="image" required placeholder="ubuntu-22.04 or local:vztmpl/ubuntu-24.04-standard.tar.zst">
+                <span class="hint">Docker: image tag. Proxmox: <code>storage:vztmpl/filename</code>.</span>
             </div>
-            <div class="field" style="grid-column: span 2;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div class="field">
+                    <label>Platform</label>
+                    <select name="node_type">
+                        <option value="docker">Docker</option>
+                        <option value="proxmox">Proxmox</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Status</label>
+                    <select name="active">
+                        <option value="1">Active</option>
+                        <option value="0">Hidden</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field">
                 <label>Description</label>
                 <textarea name="description" placeholder="Standard Ubuntu Jammy Jellyfish image..."></textarea>
             </div>
-            <div class="field" style="grid-column: span 2;">
-                <label>Status</label>
-                <select name="active">
-                    <option value="1">Active (Available for users)</option>
-                    <option value="0">Hidden</option>
-                </select>
-            </div>
 
-            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+            <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
                 <button type="button" onclick="closeModal('addImageModal')" class="btn">Cancel</button>
                 <button type="submit" class="btn btn-primary">Add OS Image</button>
             </div>
@@ -145,28 +225,37 @@
             <h3>Update OS Image</h3>
             <button type="button" class="modal-close" onclick="closeModal('editImageModal')">&times;</button>
         </div>
-        <form id="editImageForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <div class="field" style="grid-column: span 2;">
+        <form id="editImageForm" action="" method="POST">
+            <div class="field">
                 <label>Friendly Name</label>
                 <input type="text" name="name" id="edit_name" required>
             </div>
-            <div class="field" style="grid-column: span 2;">
+            <div class="field">
                 <label>Image Tag / Path</label>
                 <input type="text" name="image" id="edit_image" required>
             </div>
-            <div class="field" style="grid-column: span 2;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div class="field">
+                    <label>Platform</label>
+                    <select name="node_type" id="edit_node_type">
+                        <option value="docker">Docker</option>
+                        <option value="proxmox">Proxmox</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label>Status</label>
+                    <select name="active" id="edit_active">
+                        <option value="1">Active</option>
+                        <option value="0">Hidden</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field">
                 <label>Description</label>
                 <textarea name="description" id="edit_description"></textarea>
             </div>
-            <div class="field" style="grid-column: span 2;">
-                <label>Status</label>
-                <select name="active" id="edit_active">
-                    <option value="1">Active</option>
-                    <option value="0">Hidden</option>
-                </select>
-            </div>
 
-            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+            <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
                 <button type="button" onclick="closeModal('editImageModal')" class="btn">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </div>
@@ -189,6 +278,7 @@
         document.getElementById('edit_image').value = img.image;
         document.getElementById('edit_description').value = img.description || "";
         document.getElementById('edit_active').value = img.active ? "1" : "0";
+        document.getElementById('edit_node_type').value = img.node_type || "docker";
 
         openModal('editImageModal');
     }

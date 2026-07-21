@@ -136,7 +136,13 @@
     <div class="vps-card-header">
         <div class="vps-info-block">
             <span class="vps-hostname">{{ instance.hostname }}</span>
-            <span class="vps-meta" data-copy="{{ instance.ipv6 }}" title="Click to copy">{{ instance.ipv6 if instance.ipv6 else '0.0.0.0' }}</span>
+            {% if instance.ipv6 %}
+            <span class="vps-meta" data-copy="{{ instance.ipv6 }}" title="Click to copy">{{ instance.ipv6 }}</span>
+            {% elif instance.ipv4 %}
+            <span class="vps-meta" data-copy="{{ instance.ipv4 }}" title="Click to copy">{{ instance.ipv4 }}</span>
+            {% else %}
+            <span class="vps-meta">No IP assigned</span>
+            {% endif %}
         </div>
         
         <span class="status-pill {{ statusClass }}">

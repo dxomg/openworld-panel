@@ -31,6 +31,7 @@
             <form method="GET" action="{{ url_for('adminips') }}" style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search IPs, networks, nodes...">
             </form>
+            <button onclick="openModal('addIpModal')" class="btn btn-small">+ Add IP</button>
             <button onclick="openModal('generateModal')" class="btn btn-primary btn-small">+ Generate IPs</button>
         </div>
     </div>
@@ -86,6 +87,36 @@
     {% endif %}
 </div>
 
+<!-- Add Single IP Modal -->
+<div id="addIpModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Single IP</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addIpModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminipadd') }}" method="POST">
+            <div class="field">
+                <label>Network</label>
+                <select name="networkid" required>
+                    <option value="" disabled selected>Select a network...</option>
+                    {% for net in allNetworks %}
+                    <option value="{{ net.id }}" data-type="{{ net.network_type }}">{{ net.name }} ({{ net.node_name }}) [{{ net.network_type|upper }}]</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <input type="hidden" name="network_type" id="addIp_network_type" value="docker">
+            <div class="field">
+                <label>IP Address</label>
+                <input type="text" name="ip" required placeholder="2a11:6c7:2200:b101::10 or 172.20.0.10">
+            </div>
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeModal('addIpModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add IP</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Generate IPs Modal -->
 <div id="generateModal" class="modal-backdrop">
     <div class="modal-panel">
@@ -99,10 +130,11 @@
                 <select name="networkid" required>
                     <option value="" disabled selected>Select a network...</option>
                     {% for net in allNetworks %}
-                    <option value="{{ net.id }}">{{ net.name }} ({{ net.node_name }})</option>
+                    <option value="{{ net.id }}" data-type="{{ net.network_type }}">{{ net.name }} ({{ net.node_name }}) [{{ net.network_type|upper }}]</option>
                     {% endfor %}
                 </select>
             </div>
+            <input type="hidden" name="network_type" id="generate_network_type" value="docker">
             <div class="field">
                 <label>Starting IP</label>
                 <input type="text" name="baseip" required placeholder="2a11:6c7:2200:b101::10">
@@ -124,5 +156,14 @@
 <script>
     function openModal(id) { document.getElementById(id).classList.add('is-open'); }
     function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+
+    document.querySelectorAll('select[name="networkid"]').forEach(function(sel) {
+        sel.addEventListener('change', function() {
+            var opt = this.options[this.selectedIndex];
+            var type = opt.dataset.type || 'docker';
+            var hidden = this.closest('form').querySelector('input[name="network_type"]');
+            if (hidden) hidden.value = type;
+        });
+    });
 </script>
 {% endblock %}

@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="page">
-    <a href="{{ url_for('adminnetworks') }}" class="back-link">&larr; Back to Networks</a>
+    <a href="{{ url_for('adminnetworks', type=network_type) }}" class="back-link">&larr; Back to Networks</a>
 
     <section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> {{ network.name }}</div>
@@ -30,9 +30,10 @@
     <div class="section-head" style="margin-top: 48px;">
         <h2>Addresses</h2>
         <div style="display: flex; gap: 10px; align-items: center;">
-            <form method="GET" action="{{ url_for('adminnetworkips', netUuid=network.uuid) }}" style="display: flex; gap: 8px; align-items: center;">
+            <form method="GET" action="{{ url_for('adminnetworkips', netUuid=network.uuid, type=network_type) }}" style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search IPs...">
             </form>
+            <button onclick="openModal('addIpModal')" class="btn btn-small">+ Add IP</button>
             <button onclick="openModal('generateModal')" class="btn btn-primary btn-small">+ Generate IPs</button>
         </div>
     </div>
@@ -59,6 +60,7 @@
 
             {% if not ip.assigned %}
             <form action="{{ url_for('adminnetworkipdelete', netUuid=network.uuid, ipUuid=ip.uuid) }}" method="POST" style="margin-top: 10px;" onsubmit="return confirm('Delete this IP?');">
+                <input type="hidden" name="network_type" value="{{ network_type }}">
                 <button type="submit" class="btn btn-small btn-danger">Delete</button>
             </form>
             {% endif %}
@@ -69,13 +71,13 @@
     {% if pagination.totalPages > 1 %}
     <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
         {% if pagination.hasPrev %}
-        <a href="{{ url_for('adminnetworkips', netUuid=network.uuid, page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&larr; Previous</a>
+        <a href="{{ url_for('adminnetworkips', netUuid=network.uuid, type=network_type, page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&larr; Previous</a>
         {% endif %}
         <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
             PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
         </span>
         {% if pagination.hasNext %}
-        <a href="{{ url_for('adminnetworkips', netUuid=network.uuid, page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &rarr;</a>
+        <a href="{{ url_for('adminnetworkips', netUuid=network.uuid, type=network_type, page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &rarr;</a>
         {% endif %}
     </div>
     {% endif %}
@@ -89,6 +91,28 @@
     {% endif %}
 </div>
 
+<!-- Add Single IP Modal -->
+<div id="addIpModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Single IP</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addIpModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminipadd') }}" method="POST">
+            <input type="hidden" name="networkid" value="{{ network.id }}">
+            <input type="hidden" name="network_type" value="{{ network_type }}">
+            <div class="field">
+                <label>IP Address</label>
+                <input type="text" name="ip" required placeholder="2a11:6c7:2200:b101::10 or 172.20.0.10">
+            </div>
+            <div class="modal-actions btn-row">
+                <button type="button" onclick="closeModal('addIpModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add IP</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Generate IPs Modal -->
 <div id="generateModal" class="modal-backdrop">
     <div class="modal-panel">
@@ -97,6 +121,7 @@
             <button type="button" class="modal-close" onclick="closeModal('generateModal')">&times;</button>
         </div>
         <form action="{{ url_for('adminnetworkipsgenerate', netUuid=network.uuid) }}" method="POST">
+            <input type="hidden" name="network_type" value="{{ network_type }}">
             <div class="field">
                 <label>Starting IP</label>
                 <input type="text" name="baseip" required placeholder="{{ network.gateway or '2a11:6c7:2200:b101::10' }}">

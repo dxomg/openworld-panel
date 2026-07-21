@@ -81,6 +81,9 @@ CREATE TABLE IF NOT EXISTS images (
     image TEXT NOT NULL,
     description TEXT,
 
+    node_type TEXT NOT NULL DEFAULT 'docker'
+        CHECK(node_type IN ('docker', 'proxmox')),
+
     active INTEGER NOT NULL DEFAULT 1
         CHECK(active IN (0,1)),
 
@@ -113,7 +116,6 @@ CREATE TABLE IF NOT EXISTS nodes (
     ram INTEGER NOT NULL,
     disk INTEGER NOT NULL,
 
-    -- Proxmox-specific fields (NULL for docker nodes)
     proxmoxhost TEXT,
     proxmoxuser TEXT,
     proxmoxpassword TEXT,
@@ -132,11 +134,11 @@ CREATE TABLE IF NOT EXISTS storagepools (
 
     nodeid INTEGER NOT NULL,
     name TEXT NOT NULL,
-    driver TEXT NOT NULL DEFAULT 'dir',
     source TEXT,
     size INTEGER NOT NULL DEFAULT 0,
+    used INTEGER NOT NULL DEFAULT 0,
 
-    node_type TEXT NOT NULL DEFAULT 'docker'
+    node_type TEXT NOT NULL DEFAULT 'proxmox'
         CHECK(node_type IN ('docker', 'proxmox')),
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -145,7 +147,7 @@ CREATE TABLE IF NOT EXISTS storagepools (
     FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS networks (
+CREATE TABLE IF NOT EXISTS docker_networks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL,
 
@@ -154,13 +156,40 @@ CREATE TABLE IF NOT EXISTS networks (
     name TEXT NOT NULL,
     subnet TEXT,
     gateway TEXT,
+    ipv4 INTEGER NOT NULL DEFAULT 0
+        CHECK(ipv4 IN (0,1)),
     ipv6 INTEGER NOT NULL DEFAULT 1
         CHECK(ipv6 IN (0,1)),
 
+    ipv4_subnet TEXT,
+    ipv4_gateway TEXT,
+
     dns TEXT DEFAULT '1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888',
 
-    node_type TEXT NOT NULL DEFAULT 'docker'
-        CHECK(node_type IN ('docker', 'proxmox')),
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS proxmox_networks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    nodeid INTEGER NOT NULL,
+
+    name TEXT NOT NULL,
+    subnet TEXT,
+    gateway TEXT,
+    ipv4 INTEGER NOT NULL DEFAULT 0
+        CHECK(ipv4 IN (0,1)),
+    ipv6 INTEGER NOT NULL DEFAULT 1
+        CHECK(ipv6 IN (0,1)),
+
+    ipv4_subnet TEXT,
+    ipv4_gateway TEXT,
+
+    dns TEXT DEFAULT '1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888',
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -173,6 +202,9 @@ CREATE TABLE IF NOT EXISTS networkips (
     uuid TEXT UNIQUE NOT NULL,
 
     networkid INTEGER NOT NULL,
+    network_type TEXT NOT NULL DEFAULT 'docker'
+        CHECK(network_type IN ('docker', 'proxmox')),
+
     ip TEXT NOT NULL,
 
     assigned INTEGER NOT NULL DEFAULT 0
@@ -182,30 +214,8 @@ CREATE TABLE IF NOT EXISTS networkips (
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    FOREIGN KEY(networkid) REFERENCES networks(id) ON DELETE CASCADE,
     FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE SET NULL,
-    UNIQUE(networkid, ip)
-);
-
-CREATE TABLE IF NOT EXISTS nodestorage (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    uuid TEXT UNIQUE NOT NULL,
-
-    nodeid INTEGER NOT NULL,
-
-    name TEXT NOT NULL,
-    path TEXT NOT NULL,
-
-    type TEXT NOT NULL
-        CHECK(type IN ('ssd','nvme','hdd')),
-
-    size INTEGER NOT NULL,
-    used INTEGER NOT NULL DEFAULT 0,
-
-    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
+    UNIQUE(networkid, network_type, ip)
 );
 
 CREATE TABLE IF NOT EXISTS vps (
@@ -216,14 +226,17 @@ CREATE TABLE IF NOT EXISTS vps (
     planid INTEGER NOT NULL,
     imageid INTEGER NOT NULL,
     nodeid INTEGER NOT NULL,
-    storageid INTEGER NOT NULL,
+    storageid INTEGER,
     networkid INTEGER,
+    network_type TEXT DEFAULT 'docker'
+        CHECK(network_type IN ('docker', 'proxmox')),
     storagepoolid INTEGER,
 
     hostname TEXT NOT NULL,
     password TEXT NOT NULL,
 
     container TEXT,
+    vmid INTEGER,
 
     status TEXT NOT NULL DEFAULT 'creating'
         CHECK(status IN (
@@ -242,6 +255,7 @@ CREATE TABLE IF NOT EXISTS vps (
     swap INTEGER NOT NULL,
     disk INTEGER NOT NULL,
 
+    ipv4 TEXT,
     ipv6 TEXT,
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -251,7 +265,7 @@ CREATE TABLE IF NOT EXISTS vps (
     FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE RESTRICT,
     FOREIGN KEY(imageid) REFERENCES images(id) ON DELETE RESTRICT,
     FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE RESTRICT,
-    FOREIGN KEY(storageid) REFERENCES storagepools(id) ON DELETE RESTRICT
+    FOREIGN KEY(storageid) REFERENCES storagepools(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS vpssuspensions (
@@ -359,24 +373,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    uuid TEXT UNIQUE NOT NULL,
-
-    userid INTEGER,
-
-    action TEXT NOT NULL,
-    target TEXT,
-    targetuuid TEXT,
-
-    details TEXT,
-    ip TEXT,
-
-    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE SET NULL
-);
-
 CREATE INDEX IF NOT EXISTS idxusersuuid ON users(uuid);
 CREATE INDEX IF NOT EXISTS idxusersdiscord ON users(discordid);
 
@@ -387,10 +383,16 @@ CREATE INDEX IF NOT EXISTS idxplansuuid ON plans(uuid);
 CREATE INDEX IF NOT EXISTS idximagesuuid ON images(uuid);
 
 CREATE INDEX IF NOT EXISTS idxnodesuuid ON nodes(uuid);
-CREATE INDEX IF NOT EXISTS idxnodestier ON nodes(tier); -- NEW INDEX
+CREATE INDEX IF NOT EXISTS idxnodestier ON nodes(tier);
 
-CREATE INDEX IF NOT EXISTS idxstorageuuid ON nodestorage(uuid);
-CREATE INDEX IF NOT EXISTS idxstoragenode ON nodestorage(nodeid);
+CREATE INDEX IF NOT EXISTS idxdockernetuuid ON docker_networks(uuid);
+CREATE INDEX IF NOT EXISTS idxdockernetnode ON docker_networks(nodeid);
+
+CREATE INDEX IF NOT EXISTS idxproxnetuuid ON proxmox_networks(uuid);
+CREATE INDEX IF NOT EXISTS idxproxnetnode ON proxmox_networks(nodeid);
+
+CREATE INDEX IF NOT EXISTS idxnetworkipuuid ON networkips(uuid);
+CREATE INDEX IF NOT EXISTS idxnetworkipnet ON networkips(networkid, network_type);
 
 CREATE INDEX IF NOT EXISTS idxvpsuuid ON vps(uuid);
 CREATE INDEX IF NOT EXISTS idxvpsuser ON vps(userid);
@@ -419,139 +421,9 @@ CREATE INDEX IF NOT EXISTS idxreceiptsuser ON receipts(userid);
 CREATE INDEX IF NOT EXISTS idxsessionuser ON sessions(userid);
 CREATE INDEX IF NOT EXISTS idxsessiontoken ON sessions(token);
 
-CREATE INDEX IF NOT EXISTS idxlogsuser ON logs(userid);
-CREATE INDEX IF NOT EXISTS idxlogstarget ON logs(target);
-
 """)
-
-# Migrations: add columns to existing tables if missing
-try:
-    cursor.execute("ALTER TABLE vps ADD COLUMN networkid INTEGER")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE vps ADD COLUMN networkid INTEGER")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE vps ADD COLUMN storagepoolid INTEGER")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE plans ADD COLUMN writebps INTEGER NOT NULL DEFAULT 0")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS networkips (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid TEXT UNIQUE NOT NULL,
-            networkid INTEGER NOT NULL,
-            ip TEXT NOT NULL,
-            assigned INTEGER NOT NULL DEFAULT 0,
-            vpsid INTEGER,
-            created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(networkid) REFERENCES networks(id) ON DELETE CASCADE,
-            FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE SET NULL,
-            UNIQUE(networkid, ip)
-        )
-    """)
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE networks ADD COLUMN dns TEXT DEFAULT '1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888'")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE networks ADD COLUMN node_type TEXT NOT NULL DEFAULT 'docker'")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS storagepools (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid TEXT UNIQUE NOT NULL,
-            nodeid INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            driver TEXT NOT NULL DEFAULT 'dir',
-            source TEXT,
-            size INTEGER NOT NULL DEFAULT 0,
-            created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
-        )
-    """)
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE storagepools ADD COLUMN size INTEGER NOT NULL DEFAULT 0")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE storagepools ADD COLUMN node_type TEXT NOT NULL DEFAULT 'docker'")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN url TEXT NOT NULL DEFAULT ''")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE vps ADD COLUMN networkid INTEGER")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE vps ADD COLUMN networkid INTEGER")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN type TEXT NOT NULL DEFAULT 'docker'")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN proxmoxhost TEXT")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN proxmoxuser TEXT")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN proxmoxpassword TEXT")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN proxmoxnode TEXT DEFAULT 'pve'")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN proxmoxport INTEGER DEFAULT 8006")
-except sqlite3.OperationalError:
-    pass
-
-try:
-    cursor.execute("ALTER TABLE nodes ADD COLUMN proxmoxssl INTEGER DEFAULT 0")
-except sqlite3.OperationalError:
-    pass
 
 conn.commit()
 conn.close()
 
-print("database.db created successfully with node tiers.")
+print("database.db created successfully.")

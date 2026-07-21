@@ -15,7 +15,6 @@ def getproxmoxclient(node):
         host,
         user=node.get('proxmoxuser', 'root@pam'),
         password=node.get('proxmoxpassword', ''),
-        node=node.get('proxmoxnode', 'pve'),
         verify_ssl=bool(node.get('proxmoxssl', 0)),
         port=int(node.get('proxmoxport', 8006))
     )

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Console - {{ hostname_display }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/xterm.min.css') }}">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { width: 100%; height: 100%; background: #0B1220; overflow: hidden; }
+        #terminal { width: 100%; height: 100%; }
+        #terminal .xterm { padding: 8px; }
+        #status {
+            position: absolute; bottom: 12px; right: 16px;
+            font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+            color: #7C8CA6; z-index: 10; pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        #status.error { color: #E2574C; }
+        #status.connecting { color: #E8A33D; }
+        #status.connected { color: #4FD1C5; }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+    <div id="status" class="connecting">Connecting...</div>
+
+    <script src="{{ url_for('static', filename='js/xterm.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/xterm-addon-fit.min.js') }}"></script>
+    <script>
+    (function() {
+        var hostname = {{ hostname | tojson }};
+        var port = {{ port | tojson }};
+        var username = {{ username | tojson }};
+        var password = {{ password | tojson }};
+        var statusEl = document.getElementById('status');
+        var terminalEl = document.getElementById('terminal');
+        var term = null;
+        var sock = null;
+        var fitAddon = null;
+
+        function setStatus(text, cls) {
+            statusEl.textContent = text;
+            statusEl.className = cls || '';
+        }
+
+        function initTerminal() {
+            term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: "'IBM Plex Mono', monospace",
+                theme: {
+                    background: '#0B1220',
+                    foreground: '#DCE6F5',
+                    cursor: '#4FD1C5',
+                    selectionBackground: 'rgba(79, 209, 197, 0.3)',
+                    black: '#0B1220',
+                    red: '#E2574C',
+                    green: '#4FD1C5',
+                    yellow: '#E8A33D',
+                    blue: '#6C8EBF',
+                    magenta: '#C678DD',
+                    cyan: '#56B6C2',
+                    white: '#DCE6F5',
+                    brightBlack: '#4C5C78',
+                    brightRed: '#FF6B6B',
+                    brightGreen: '#5FE0D3',
+                    brightYellow: '#FFD93D',
+                    brightBlue: '#7EB8DA',
+                    brightMagenta: '#D9A0F0',
+                    brightCyan: '#7FDBDA',
+                    brightWhite: '#FFFFFF'
+                }
+            });
+
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            term.open(terminalEl);
+            fitAddon.fit();
+
+            term.onData(function(data) {
+                if (sock && sock.readyState === WebSocket.OPEN) {
+                    sock.send(JSON.stringify({data: data}));
+                }
+            });
+
+            term.onResize(function(size) {
+                if (sock && sock.readyState === WebSocket.OPEN) {
+                    sock.send(JSON.stringify({resize: [size.cols, size.rows]}));
+                }
+            });
+
+            window.addEventListener('resize', function() {
+                if (fitAddon) fitAddon.fit();
+            });
+        }
+
+        function connect() {
+            setStatus('Connecting...', 'connecting');
+
+            var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var wsUrl = wsProto + '//' + location.host + '/ws/ssh'
+                + '?host=' + encodeURIComponent(hostname)
+                + '&port=' + encodeURIComponent(port)
+                + '&user=' + encodeURIComponent(username)
+                + '&pass=' + encodeURIComponent(password);
+
+            sock = new WebSocket(wsUrl);
+
+            sock.binaryType = 'arraybuffer';
+
+            sock.onopen = function() {
+                setStatus('Connected', 'connected');
+                term.focus();
+                sock.send(JSON.stringify({resize: [term.cols, term.rows]}));
+                setTimeout(function() { statusEl.style.opacity = '0'; }, 2000);
+            };
+
+            sock.onmessage = function(ev) {
+                if (ev.data instanceof ArrayBuffer) {
+                    term.write(new Uint8Array(ev.data));
+                } else {
+                    term.write(ev.data);
+                }
+            };
+
+            sock.onerror = function() {
+                setStatus('Connection error', 'error');
+            };
+
+            sock.onclose = function(e) {
+                var reason = e.reason || 'Connection closed';
+                setStatus(reason, 'error');
+                sock = null;
+            };
+        }
+
+        initTerminal();
+        connect();
+    })();
+    </script>
+</body>
+</html>
