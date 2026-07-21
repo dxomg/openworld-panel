@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS users (
     verified INTEGER NOT NULL DEFAULT 0
         CHECK(verified IN (0,1)),
 
+    theme TEXT DEFAULT NULL,
+
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -84,11 +86,15 @@ CREATE TABLE IF NOT EXISTS images (
     node_type TEXT NOT NULL DEFAULT 'docker'
         CHECK(node_type IN ('docker', 'proxmox')),
 
+    imagestorageid INTEGER,
+
     active INTEGER NOT NULL DEFAULT 1
         CHECK(active IN (0,1)),
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(imagestorageid) REFERENCES imagestorage(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS nodes (
@@ -140,6 +146,21 @@ CREATE TABLE IF NOT EXISTS storagepools (
 
     node_type TEXT NOT NULL DEFAULT 'proxmox'
         CHECK(node_type IN ('docker', 'proxmox')),
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS imagestorage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    nodeid INTEGER NOT NULL,
+
+    name TEXT NOT NULL,
+    description TEXT,
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -385,6 +406,9 @@ CREATE INDEX IF NOT EXISTS idximagesuuid ON images(uuid);
 CREATE INDEX IF NOT EXISTS idxnodesuuid ON nodes(uuid);
 CREATE INDEX IF NOT EXISTS idxnodestier ON nodes(tier);
 
+CREATE INDEX IF NOT EXISTS idximagestorageuuid ON imagestorage(uuid);
+CREATE INDEX IF NOT EXISTS idximagestoragenode ON imagestorage(nodeid);
+
 CREATE INDEX IF NOT EXISTS idxdockernetuuid ON docker_networks(uuid);
 CREATE INDEX IF NOT EXISTS idxdockernetnode ON docker_networks(nodeid);
 
@@ -420,6 +444,38 @@ CREATE INDEX IF NOT EXISTS idxreceiptsuser ON receipts(userid);
 
 CREATE INDEX IF NOT EXISTS idxsessionuser ON sessions(userid);
 CREATE INDEX IF NOT EXISTS idxsessiontoken ON sessions(token);
+
+CREATE TABLE IF NOT EXISTS auditlog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    userid INTEGER,
+    username TEXT,
+    role TEXT,
+
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    details TEXT,
+
+    ip TEXT,
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idxauditloguuid ON auditlog(uuid);
+CREATE INDEX IF NOT EXISTS idxauditloguser ON auditlog(userid);
+CREATE INDEX IF NOT EXISTS idxauditlogaction ON auditlog(action);
+CREATE INDEX IF NOT EXISTS idxauditlogcreated ON auditlog(created);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    description TEXT,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 """)
 

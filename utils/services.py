@@ -198,11 +198,13 @@ def getvpsdetails(vpsId):
         query = """
             SELECT v.*, p.name as plan_name, p.readbps, p.writebps,
                    n.address as node_ip, n.url as node_url, n.apikey as node_apikey,
-                   i.name as image_name, i.image as image_path
+                   i.name as image_name, i.image as image_path, i.imagestorageid,
+                   ist.name as image_storage_name
             FROM vps v
             JOIN plans p ON v.planid = p.id
             JOIN nodes n ON v.nodeid = n.id
             JOIN images i ON v.imageid = i.id
+            LEFT JOIN imagestorage ist ON i.imagestorageid = ist.id
             WHERE v.id = ?
         """
         row = conn.execute(query, (vpsId,)).fetchone()
@@ -560,11 +562,17 @@ def provisiononproxmox(vpsUuid):
     cpu = int(vps['cpu'])
     disk_gb = max(1, int(vps.get('disk', 20)) // 1024)  # Convert MB to GB, min 1GB
     
-    # Image: if it contains ":" use as-is (e.g. "local:vztmpl/ubuntu-24.04.tar.zst")
-    # Otherwise treat as a template name and prepend default storage
+    # Image: if it contains ":" use as-is (e.g. "custom:vztmpl/ubuntu-24.04.tar.zst")
+    # Otherwise build from image's linked storage, or node's default storage, + filename
     template = vpsDetails.get('image_path', 'ubuntu-22.04-standard')
-    if ':' not in template and not template.endswith(('.tar.gz', '.tar.xz', '.tar.zst')):
-        template = f"local:vztmpl/{template}.tar.gz"
+    if ':' not in template:
+        storageName = vpsDetails.get('image_storage_name')
+        if not storageName:
+            imgStorage = db.getdefaultimagestorage(vps['nodeid'])
+            storageName = imgStorage['name'] if imgStorage else 'local'
+        if not template.endswith(('.tar.gz', '.tar.xz', '.tar.zst')):
+            template = f"{template}.tar.gz"
+        template = f"{storageName}:vztmpl/{template}"
 
     # Get storage pool name for rootfs
     storagePool = "local-lvm"

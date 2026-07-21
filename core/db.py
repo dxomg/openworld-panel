@@ -2,6 +2,7 @@ import sqlite3
 import math
 import uuid
 import random
+import json
 
 def getconnection():
     conn = sqlite3.connect("database.db")
@@ -140,10 +141,10 @@ def userhasfreevps(userid):
 
 # --- IMAGE FUNCTIONS ---
 
-def addimage(uuid, name, image, description=None, active=1, node_type='docker'):
+def addimage(uuid, name, image, description=None, active=1, node_type='docker', imagestorageid=None):
     with getconnection() as conn:
-        conn.execute("INSERT INTO images (uuid, name, image, description, active, node_type) VALUES (?, ?, ?, ?, ?, ?)", 
-                     (uuid, name, image, description, active, node_type))
+        conn.execute("INSERT INTO images (uuid, name, image, description, active, node_type, imagestorageid) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+                     (uuid, name, image, description, active, node_type, imagestorageid))
 
 def getimage(uuid):
     with getconnection() as conn:
@@ -294,6 +295,72 @@ def increasestorageavailable(poolid, diskmb):
     """Increase available storage when a VPS is deleted (diskmb in MB)."""
     with getconnection() as conn:
         conn.execute("UPDATE storagepools SET used = MAX(0, used - ?), updated = CURRENT_TIMESTAMP WHERE id = ?", (diskmb, poolid))
+
+# --- IMAGE STORAGE FUNCTIONS ---
+
+def addimagestorage(uuid, nodeid, name, description=None):
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO imagestorage (uuid, nodeid, name, description)
+            VALUES (?, ?, ?, ?)
+        """, (uuid, nodeid, name, description))
+
+def getimagestorage(uuid):
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT ist.*, nd.name as node_name
+            FROM imagestorage ist
+            JOIN nodes nd ON ist.nodeid = nd.id
+            WHERE ist.uuid = ?
+        """, (uuid,)).fetchone()
+        return dict(row) if row else None
+
+def getimagestoragebyid(storageid):
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT ist.*, nd.name as node_name
+            FROM imagestorage ist
+            JOIN nodes nd ON ist.nodeid = nd.id
+            WHERE ist.id = ?
+        """, (storageid,)).fetchone()
+        return dict(row) if row else None
+
+def removeimagestorage(uuid):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM imagestorage WHERE uuid = ?", (uuid,))
+
+def updateimagestorage(uuid, **kwargs):
+    with getconnection() as conn:
+        keys = [f"{k} = ?" for k in kwargs.keys()]
+        values = list(kwargs.values()) + [uuid]
+        conn.execute(f"UPDATE imagestorage SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
+
+def listimagestorage(nodeid=None):
+    with getconnection() as conn:
+        if nodeid:
+            rows = conn.execute("""
+                SELECT ist.*, nd.name as node_name
+                FROM imagestorage ist
+                JOIN nodes nd ON ist.nodeid = nd.id
+                WHERE ist.nodeid = ?
+                ORDER BY ist.created DESC
+            """, (nodeid,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT ist.*, nd.name as node_name
+                FROM imagestorage ist
+                JOIN nodes nd ON ist.nodeid = nd.id
+                ORDER BY nd.name, ist.created DESC
+            """).fetchall()
+        return [dict(r) for r in rows]
+
+def getdefaultimagestorage(nodeid):
+    """Get the first image storage for a node (used during provisioning)."""
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT * FROM imagestorage WHERE nodeid = ? ORDER BY id ASC LIMIT 1
+        """, (nodeid,)).fetchone()
+        return dict(row) if row else None
 
 # --- NETWORK FUNCTIONS ---
 
@@ -1127,8 +1194,12 @@ def listimagespaginated(page=1, perpage=12, search=None, node_type=None):
         total = conn.execute(f"SELECT COUNT(*) FROM images i {where}", params).fetchone()[0]
         rows = conn.execute(f"""
             SELECT i.*, 
-            (SELECT COUNT(*) FROM vps WHERE imageid = i.id) as vps_count
+            (SELECT COUNT(*) FROM vps WHERE imageid = i.id) as vps_count,
+            ist.name as storage_name,
+            nd.name as storage_node_name
             FROM images i
+            LEFT JOIN imagestorage ist ON i.imagestorageid = ist.id
+            LEFT JOIN nodes nd ON ist.nodeid = nd.id
             {where}
             ORDER BY i.created DESC
             LIMIT ? OFFSET ?
@@ -1235,3 +1306,92 @@ def listreceiptspaginated(page=1, perpage=12, search=None):
             "hasPrev": page > 1,
             "hasNext": (page * perpage) < total,
         }
+
+# --- AUDIT LOG FUNCTIONS ---
+
+def addauditlog(uuid, userid, username, role, action, target_type=None, target_id=None, details=None, ip=None):
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO auditlog (uuid, userid, username, role, action, target_type, target_id, details, ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (uuid, userid, username, role, action, target_type, target_id, details, ip))
+
+def listauditlogspaginated(page=1, perpage=25, search=None, action_filter=None, user_filter=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+
+        if action_filter:
+            where = "WHERE al.action LIKE ?"
+            params.append(f"%{action_filter}%")
+        if user_filter:
+            where = ("WHERE " if not where else where + " AND ") + "al.username LIKE ?"
+            params.append(f"%{user_filter}%")
+        if search:
+            where = ("WHERE " if not where else where + " AND ") + "(al.action LIKE ? OR al.username LIKE ? OR al.details LIKE ? OR al.target_type LIKE ? OR al.target_id LIKE ?)"
+            s = f"%{search}%"
+            params.extend([s, s, s, s, s])
+
+        total = conn.execute(f"SELECT COUNT(*) FROM auditlog al {where}", params).fetchone()[0]
+        rows = conn.execute(f"""
+            SELECT al.*
+            FROM auditlog al
+            {where}
+            ORDER BY al.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "logs": [dict(r) for r in rows],
+            "totalCount": total,
+            "currentPage": page,
+            "perPage": perpage,
+            "totalPages": math.ceil(total / perpage) if perpage else 1,
+            "hasPrev": page > 1,
+            "hasNext": (page * perpage) < total,
+        }
+
+def getauditlogactions():
+    """Get distinct action types for filter dropdown."""
+    with getconnection() as conn:
+        rows = conn.execute("SELECT DISTINCT action FROM auditlog ORDER BY action").fetchall()
+        return [r['action'] for r in rows]
+
+# --- SETTINGS FUNCTIONS ---
+
+def getsetting(key, default=None):
+    with getconnection() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        if row:
+            try:
+                return json.loads(row['value'])
+            except (json.JSONDecodeError, TypeError):
+                return row['value']
+        return default
+
+def setsetting(key, value, description=None):
+    with getconnection() as conn:
+        if isinstance(value, (dict, list, bool)):
+            serialized = json.dumps(value)
+        else:
+            serialized = str(value)
+        conn.execute("""
+            INSERT INTO settings (key, value, description, updated)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = CURRENT_TIMESTAMP
+        """, (key, serialized, description))
+
+def getallsettings():
+    with getconnection() as conn:
+        rows = conn.execute("SELECT key, value, description FROM settings ORDER BY key").fetchall()
+        result = {}
+        for r in rows:
+            try:
+                result[r['key']] = json.loads(r['value'])
+            except (json.JSONDecodeError, TypeError):
+                result[r['key']] = r['value']
+        return result
+
+def removesetting(key):
+    with getconnection() as conn:
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))

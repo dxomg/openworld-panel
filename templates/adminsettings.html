@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - {{ projectname }}{% endblock %}
+
+{% block content %}
+<style>
+    .theme-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 10px;
+    }
+    .theme-card {
+        position: relative;
+        padding: 14px;
+        border-radius: var(--radius);
+        border: 2px solid var(--border);
+        cursor: pointer;
+        transition: border-color 0.15s, transform 0.1s;
+        background: var(--bg-raise);
+    }
+    .theme-card:hover {
+        border-color: var(--accent-dim);
+        transform: translateY(-1px);
+    }
+    .theme-card.selected {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .theme-card input[type="radio"] {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+    }
+    .theme-swatch {
+        display: flex;
+        gap: 4px;
+        margin-bottom: 10px;
+    }
+    .theme-swatch span {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1px solid var(--border-soft);
+    }
+    .theme-card-name {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+    }
+</style>
+
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Settings</h1>
+        <p>Global configuration for the panel. Changes take effect immediately after saving.</p>
+    </section>
+
+    <div class="section-head">
+        <h2>Configuration</h2>
+    </div>
+
+    <div class="vps-grid">
+        {% for section, fields in schema.items() %}
+        <div class="vps-card" style="flex-direction: column; align-items: stretch;">
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <span style="font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.06em;">{{ section }}</span>
+            </div>
+
+            <form method="POST" action="{{ url_for('adminsettings') }}">
+                <input type="hidden" name="section" value="{{ section }}">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+
+                <div class="form-grid" style="grid-template-columns: 1fr; gap: 16px;">
+                    {% for key, meta in fields.items() %}
+                    {% set current = config.get(section, {}).get(key, '') %}
+                    {% set default = defaults.get(section, {}).get(key, '') %}
+
+                    {% if meta.type == 'bool' %}
+                    <div style="display: flex; align-items: center; gap: 10px; background: var(--bg-raise); padding: 10px 14px; border-radius: var(--radius); border: 1px solid var(--border-soft);">
+                        <input type="checkbox" name="{{ key }}" id="{{ section }}_{{ key }}"
+                            {% if current %}checked{% endif %}
+                            style="accent-color: var(--accent); width: 16px; height: 16px;">
+                        <label for="{{ section }}_{{ key }}" style="cursor: pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text); margin: 0;">{{ meta.label }}</label>
+                        <span style="margin-left: auto; font-size: 11px; color: var(--text-dim); font-family: var(--font-mono);">{{ meta.desc }}</span>
+                    </div>
+
+                    {% elif meta.type == 'theme' %}
+                    <div class="field">
+                        <label>{{ meta.label }}</label>
+                        <div class="theme-grid">
+                            {% for theme in themes %}
+                            <label class="theme-card {% if current_theme_global == theme.id %}selected{% endif %}"
+                                   onclick="selectTheme(this, '{{ theme.id }}')">
+                                <input type="radio" name="{{ key }}" value="{{ theme.id }}"
+                                    {% if current_theme_global == theme.id %}checked{% endif %}>
+                                <div class="theme-swatch">
+                                    {% if theme.id == 'midnight' %}
+                                    <span style="background: #0B1220;"></span>
+                                    <span style="background: #4FD1C5;"></span>
+                                    <span style="background: #E2574C;"></span>
+                                    <span style="background: #DCE6F5;"></span>
+                                    {% elif theme.id == 'catppuccin' %}
+                                    <span style="background: #1e1e2e;"></span>
+                                    <span style="background: #cba6f7;"></span>
+                                    <span style="background: #f38ba8;"></span>
+                                    <span style="background: #cdd6f4;"></span>
+                                    {% elif theme.id == 'dracula' %}
+                                    <span style="background: #282a36;"></span>
+                                    <span style="background: #50fa7b;"></span>
+                                    <span style="background: #ff5555;"></span>
+                                    <span style="background: #f8f8f2;"></span>
+                                    {% elif theme.id == 'nord' %}
+                                    <span style="background: #2e3440;"></span>
+                                    <span style="background: #88c0d0;"></span>
+                                    <span style="background: #bf616a;"></span>
+                                    <span style="background: #eceff4;"></span>
+                                    {% elif theme.id == 'gruvbox' %}
+                                    <span style="background: #282828;"></span>
+                                    <span style="background: #b8bb26;"></span>
+                                    <span style="background: #fb4934;"></span>
+                                    <span style="background: #ebdbb2;"></span>
+                                    {% elif theme.id == 'tokyonight' %}
+                                    <span style="background: #1a1b26;"></span>
+                                    <span style="background: #7aa2f7;"></span>
+                                    <span style="background: #f7768e;"></span>
+                                    <span style="background: #c0caf5;"></span>
+                                    {% elif theme.id == 'solarized' %}
+                                    <span style="background: #002b36;"></span>
+                                    <span style="background: #2aa198;"></span>
+                                    <span style="background: #dc322f;"></span>
+                                    <span style="background: #839496;"></span>
+                                    {% endif %}
+                                </div>
+                                <div class="theme-card-name">{{ theme.name }}</div>
+                            </label>
+                            {% endfor %}
+                        </div>
+                        <span class="hint">{{ meta.desc }}</span>
+                    </div>
+
+                    {% elif meta.type == 'select' %}
+                    <div class="field">
+                        <label>{{ meta.label }}</label>
+                        <select name="{{ key }}" id="{{ section }}_{{ key }}">
+                            {% for opt in meta.options %}
+                            <option value="{{ opt }}" {% if current == opt %}selected{% endif %}>{{ opt }}</option>
+                            {% endfor %}
+                        </select>
+                        <span class="hint">{{ meta.desc }}</span>
+                    </div>
+
+                    {% elif meta.type == 'password' %}
+                    <div class="field">
+                        <label>{{ meta.label }}</label>
+                        <input type="password" name="{{ key }}" id="{{ section }}_{{ key }}"
+                            value="{{ current }}" placeholder="{{ default }}">
+                        <span class="hint">{{ meta.desc }}</span>
+                    </div>
+
+                    {% elif meta.type == 'number' %}
+                    <div class="field">
+                        <label>{{ meta.label }}</label>
+                        <input type="number" name="{{ key }}" id="{{ section }}_{{ key }}"
+                            value="{{ current }}">
+                        <span class="hint">{{ meta.desc }}</span>
+                    </div>
+
+                    {% else %}
+                    <div class="field">
+                        <label>{{ meta.label }}</label>
+                        <input type="text" name="{{ key }}" id="{{ section }}_{{ key }}"
+                            value="{{ current }}" placeholder="{{ default }}">
+                        <span class="hint">{{ meta.desc }}</span>
+                    </div>
+                    {% endif %}
+
+                    {% endfor %}
+                </div>
+
+                <div class="btn-row" style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft); justify-content: flex-end;">
+                    <button type="submit" class="btn btn-primary btn-small">Save {{ section|title }}</button>
+                </div>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+    function selectTheme(card, themeId) {
+        document.querySelectorAll('.theme-card').forEach(function(c) {
+            c.classList.remove('selected');
+        });
+        card.classList.add('selected');
+        card.querySelector('input[type="radio"]').checked = true;
+    }
+</script>
+{% endblock %}

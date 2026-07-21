@@ -1,0 +1,33 @@
+<div class="theme-dropdown">
+    <button class="btn theme-dropdown-btn" onclick="toggleThemeDropdown(event)" title="Change theme">
+        <span class="theme-dropdown-dot" style="background:
+            {% if current_theme == 'midnight' %}#4FD1C5
+            {% elif current_theme == 'catppuccin' %}#cba6f7
+            {% elif current_theme == 'dracula' %}#50fa7b
+            {% elif current_theme == 'nord' %}#88c0d0
+            {% elif current_theme == 'gruvbox' %}#b8bb26
+            {% elif current_theme == 'tokyonight' %}#7aa2f7
+            {% elif current_theme == 'solarized' %}#2aa198
+            {% else %}var(--accent){% endif %};"></span>
+    </button>
+    <div class="theme-dropdown-menu" id="themeDropdown">
+        {% for theme in themes %}
+        <form method="POST" action="{{ url_for('settheme') }}" style="margin: 0;">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="theme" value="{{ theme.id }}">
+            <button type="submit" class="theme-dropdown-item {% if current_theme == theme.id %}active{% endif %}">
+                <span class="theme-dropdown-swatch" style="background:
+                    {% if theme.id == 'midnight' %}#4FD1C5
+                    {% elif theme.id == 'catppuccin' %}#cba6f7
+                    {% elif theme.id == 'dracula' %}#50fa7b
+                    {% elif theme.id == 'nord' %}#88c0d0
+                    {% elif theme.id == 'gruvbox' %}#b8bb26
+                    {% elif theme.id == 'tokyonight' %}#7aa2f7
+                    {% elif theme.id == 'solarized' %}#2aa198
+                    {% endif %};"></span>
+                {{ theme.name }}
+            </button>
+        </form>
+        {% endfor %}
+    </div>
+</div>

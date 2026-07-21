@@ -67,6 +67,8 @@
     }
     .img-spec .k { color: var(--text-dim); }
     .img-spec .v { color: var(--text); }
+    .proxmox-storage-field { display: none; }
+    .proxmox-storage-field.visible { display: block; }
 </style>
 
 <div class="page">
@@ -131,6 +133,12 @@
                     <span class="k">Status</span>
                     <span class="v" style="color: {{ 'var(--accent)' if img.active else 'var(--text-dim)' }};">{{ 'Active' if img.active else 'Hidden' }}</span>
                 </div>
+                {% if img.storage_name %}
+                <div class="img-spec">
+                    <span class="k">Image Storage</span>
+                    <span class="v" style="color: var(--accent);">{{ img.storage_name }}{% if img.storage_node_name %} ({{ img.storage_node_name }}){% endif %}</span>
+                </div>
+                {% endif %}
                 <div class="img-spec">
                     <span class="k">Instances</span>
                     <span class="v">{{ img.vps_count }}</span>
@@ -186,13 +194,13 @@
             </div>
             <div class="field">
                 <label>Image Tag / Path</label>
-                <input type="text" name="image" required placeholder="ubuntu-22.04 or local:vztmpl/ubuntu-24.04-standard.tar.zst">
-                <span class="hint">Docker: image tag. Proxmox: <code>storage:vztmpl/filename</code>.</span>
+                <input type="text" name="image" required placeholder="ubuntu-22.04 or ubuntu-24.04-standard.tar.zst">
+                <span class="hint">Docker: image tag. Proxmox: template filename.</span>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div class="field">
                     <label>Platform</label>
-                    <select name="node_type">
+                    <select name="node_type" onchange="toggleStorageField(this, 'add')">
                         <option value="docker">Docker</option>
                         <option value="proxmox">Proxmox</option>
                     </select>
@@ -204,6 +212,16 @@
                         <option value="0">Hidden</option>
                     </select>
                 </div>
+            </div>
+            <div class="field proxmox-storage-field" id="add_storage_field">
+                <label>Image Storage</label>
+                <select name="imagestorageid">
+                    <option value="">None (use node default)</option>
+                    {% for store in allImageStorages %}
+                    <option value="{{ store.id }}">{{ store.name }} ({{ store.node_name }})</option>
+                    {% endfor %}
+                </select>
+                <span class="hint">Which Proxmox storage holds this template file.</span>
             </div>
             <div class="field">
                 <label>Description</label>
@@ -237,7 +255,7 @@
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                 <div class="field">
                     <label>Platform</label>
-                    <select name="node_type" id="edit_node_type">
+                    <select name="node_type" id="edit_node_type" onchange="toggleStorageField(this, 'edit')">
                         <option value="docker">Docker</option>
                         <option value="proxmox">Proxmox</option>
                     </select>
@@ -249,6 +267,16 @@
                         <option value="0">Hidden</option>
                     </select>
                 </div>
+            </div>
+            <div class="field proxmox-storage-field" id="edit_storage_field">
+                <label>Image Storage</label>
+                <select name="imagestorageid" id="edit_imagestorageid">
+                    <option value="">None (use node default)</option>
+                    {% for store in allImageStorages %}
+                    <option value="{{ store.id }}">{{ store.name }} ({{ store.node_name }})</option>
+                    {% endfor %}
+                </select>
+                <span class="hint">Which Proxmox storage holds this template file.</span>
             </div>
             <div class="field">
                 <label>Description</label>
@@ -267,6 +295,15 @@
     function openModal(id) { document.getElementById(id).classList.add('is-open'); }
     function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
 
+    function toggleStorageField(selectEl, prefix) {
+        var field = document.getElementById(prefix + '_storage_field');
+        if (selectEl.value === 'proxmox') {
+            field.classList.add('visible');
+        } else {
+            field.classList.remove('visible');
+        }
+    }
+
     function openEditModal(imgData) {
         const img = JSON.parse(imgData);
         const form = document.getElementById('editImageForm');
@@ -279,6 +316,9 @@
         document.getElementById('edit_description').value = img.description || "";
         document.getElementById('edit_active').value = img.active ? "1" : "0";
         document.getElementById('edit_node_type').value = img.node_type || "docker";
+        document.getElementById('edit_imagestorageid').value = img.imagestorageid || "";
+
+        toggleStorageField(document.getElementById('edit_node_type'), 'edit');
 
         openModal('editImageModal');
     }

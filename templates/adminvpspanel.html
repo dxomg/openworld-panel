@@ -275,7 +275,11 @@
             consoleBody.appendChild(consoleIframe);
         })
         .catch(function(err) {
-            consoleBody.innerHTML = '<div class="console-loading error">' + err.message + '</div>';
+            consoleBody.innerHTML = '';
+            var div = document.createElement('div');
+            div.className = 'console-loading error';
+            div.textContent = err.message || 'Connection failed';
+            consoleBody.appendChild(div);
         });
     };
 

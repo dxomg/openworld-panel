@@ -8,6 +8,9 @@ import uuid
 import math
 import json
 import socket
+import hmac
+import time
+import threading
 import paramiko
 from urllib.parse import urlencode
 from datetime import datetime
@@ -56,19 +59,70 @@ DEFAULT_CONFIG = {
 
 
 def loadorcreateconfig():
-    if not os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "w") as f:
-            toml.dump(DEFAULT_CONFIG, f)
-        print(f"[init] generated client config at {CONFIG_PATH}")
-        return DEFAULT_CONFIG
-    with open(CONFIG_PATH, "r") as f:
-        return toml.load(f)
+    """Load config from DB, fall back to config.toml, then to defaults."""
+    dbSettings = db.getallsettings()
+
+    # If DB has settings, use them
+    if dbSettings:
+        nested = {}
+        for flatkey, val in dbSettings.items():
+            parts = flatkey.split('.', 1)
+            if len(parts) == 2:
+                section, key = parts
+                if section not in nested:
+                    nested[section] = {}
+                nested[section][key] = val
+            else:
+                nested[flatkey] = val
+
+        # Merge with defaults (DB takes priority)
+        merged = {}
+        for section, defaults in DEFAULT_CONFIG.items():
+            merged[section] = {**defaults, **nested.get(section, {})}
+        for section in nested:
+            if section not in merged:
+                merged[section] = nested[section]
+        return merged
+
+    # Fall back to config.toml
+    if os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, "r") as f:
+            fileConfig = toml.load(f)
+        # Migrate file config to DB
+        _migrateconfigtodb(fileConfig, DEFAULT_CONFIG)
+        return fileConfig
+
+    # No config.toml, use defaults and save to DB
+    _migrateconfigtodb(DEFAULT_CONFIG, DEFAULT_CONFIG)
+    return DEFAULT_CONFIG
+
+
+def _migrateconfigtodb(cfg, defaults):
+    """Write a nested config dict into the DB as flat keys."""
+    for section, values in defaults.items():
+        if isinstance(values, dict):
+            for key, defaultval in values.items():
+                flatkey = f"{section}.{key}"
+                actual = cfg.get(section, {}).get(key, defaultval)
+                db.setsetting(flatkey, actual, f"{section} → {key}")
+        else:
+            db.setsetting(section, values, section)
+
+
+def reloadconfig():
+    """Reload config from DB into the global dict."""
+    global config
+    config = loadorcreateconfig()
 
 
 config = loadorcreateconfig()
 
-PAYPAL_URL = "https://www.sandbox.paypal.com/cgi-bin/webscr" if config['paypal']['sandbox'] else "https://www.paypal.com/cgi-bin/webscr"
-VERIFY_URL = "https://ipnpb.sandbox.paypal.com/cgi-bin/webscr" if config['paypal']['sandbox'] else "https://ipnpb.paypal.com/cgi-bin/webscr"
+
+def getpaypalurl():
+    return "https://www.sandbox.paypal.com/cgi-bin/webscr" if config['paypal']['sandbox'] else "https://www.paypal.com/cgi-bin/webscr"
+
+def getverifyurl():
+    return "https://ipnpb.sandbox.paypal.com/cgi-bin/webscr" if config['paypal']['sandbox'] else "https://ipnpb.paypal.com/cgi-bin/webscr"
 
 
 
@@ -77,13 +131,30 @@ def daystoseconds(days: int) -> int:
     return int(days) * 86400
 
 
+def auditlog(action, target_type=None, target_id=None, details=None):
+    """Log an action to the audit trail."""
+    user = getattr(g, 'userinfo', None)
+    db.addauditlog(
+        uuid=str(uuid.uuid4()),
+        userid=user['id'] if user else None,
+        username=user.get('username', 'system') if user else 'system',
+        role=user.get('role', 'system') if user else 'system',
+        action=action,
+        target_type=target_type,
+        target_id=str(target_id) if target_id else None,
+        details=details,
+        ip=request.remote_addr if request else None,
+    )
+
+
 app = Flask(__name__)
 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 sock = Sock(app)
 
-# One-time console tokens: {token: {"vpsUuid", "hostname", "ip", "port", "username", "password", "used"}}
+# One-time console tokens: {token: {"vpsUuid", "hostname", "ip", "port", "username", "password", "used", "created"}}
 _console_tokens = {}
+_CONSOLE_TOKEN_TTL = 300  # 5 minutes
 
 COOKIE_NAME = "sessioncookie"
 SESSION_TTL_DAYS = config["general"]["defaultcookiettl"]
@@ -97,7 +168,7 @@ def csrfprotect():
             return
         token = request.form.get('_csrf_token') or request.headers.get('X-CSRFToken')
         sessionToken = request.cookies.get('csrf_token')
-        if not token or not sessionToken or token != sessionToken:
+        if not token or not sessionToken or not hmac.compare_digest(token, sessionToken):
             return "CSRF validation failed", 403
 
 @app.after_request
@@ -137,12 +208,42 @@ def adminrequired(f):
         return f(*args, **kwargs)
     return decorated
 
+THEMES = [
+    {"id": "midnight", "name": "Midnight", "class": ""},
+    {"id": "catppuccin", "name": "Catppuccin Mocha", "class": "theme-catppuccin"},
+    {"id": "dracula", "name": "Dracula", "class": "theme-dracula"},
+    {"id": "nord", "name": "Nord", "class": "theme-nord"},
+    {"id": "gruvbox", "name": "Gruvbox", "class": "theme-gruvbox"},
+    {"id": "tokyonight", "name": "Tokyo Night", "class": "theme-tokyonight"},
+    {"id": "solarized", "name": "Solarized Dark", "class": "theme-solarized"},
+]
+
+def get_theme_class(user=None):
+    # User's personal theme takes priority
+    theme_id = None
+    if user:
+        theme_id = user.get('theme')
+    # Cookie for guests (or if user has no theme set)
+    if not theme_id and request:
+        theme_id = request.cookies.get("theme")
+    # Fall back to global default
+    if not theme_id:
+        theme_id = db.getsetting("general.theme", "catppuccin")
+    for t in THEMES:
+        if t["id"] == theme_id:
+            return t["class"]
+    return ""
+
 def guestuserinfo():
+    cookie_theme = request.cookies.get("theme") if request else None
     return {
         "favicon": config["general"]["favicon"],
         "logo": config["general"]["logo"],
         "projectname": config["general"]["projectname"],
         "globaltotalvps": db.countvps(),
+        "theme_class": get_theme_class(),
+        "themes": THEMES,
+        "current_theme": cookie_theme or db.getsetting("general.theme", "catppuccin"),
     }
 
 def paneluserinfo(user, ban=None):
@@ -164,6 +265,9 @@ def paneluserinfo(user, ban=None):
         "globaltotalvps": db.countvps(),
         "discordserver": config["general"]["discord"],
         "banreason": ban["reason"] if ban else None,
+        "theme_class": get_theme_class(user),
+        "themes": THEMES,
+        "current_theme": user.get('theme') or (request.cookies.get("theme") if request else None) or db.getsetting("general.theme", "catppuccin"),
     }
 
 def paneladmininfo(user, ban=None):
@@ -276,6 +380,8 @@ def createvps():
             if storagePoolId:
                 db.decreasestorageavailable(storagePoolId, plan['disk'])
             
+            auditlog("vps.create", "vps", vpsUuid, f"Created VPS {hostname} with plan '{plan['name']}'")
+
             if isPaid:
                 return redirect(url_for('checkout', vpsUuid=vpsUuid))
             
@@ -352,7 +458,7 @@ def processpayment():
             "cancel_return": f"{config['paypal']['base_url']}/checkout/{vpsUuid}",
             "custom": vpsUuid
         }
-        paypalRedirect = PAYPAL_URL + "?" + urlencode(params)
+        paypalRedirect = getpaypalurl() + "?" + urlencode(params)
         return redirect(paypalRedirect)
 
     # Manual / Balance activation
@@ -371,6 +477,8 @@ def processpayment():
         planid=vps['planid']
     )
 
+    auditlog("payment.manual", "vps", vpsUuid, f"Manual payment of ${plan['price']:.2f} via {methodSlug}")
+
     try:
         services.provisiononnode(vpsUuid)
         flash("Payment confirmed. VPS is being created!", "success")
@@ -384,7 +492,7 @@ def paypalipn():
     # 1. Verify with PayPal
     verifyData = request.form.to_dict(flat=True)
     verifyData["cmd"] = "_notify-validate"
-    r = requests.post(VERIFY_URL, data=verifyData, headers={"Connection": "close"})
+    r = requests.post(getverifyurl(), data=verifyData, headers={"Connection": "close"})
 
     if r.text != "VERIFIED":
         return "INVALID", 400
@@ -431,6 +539,8 @@ def paypalipn():
             vpsid=vps['id'],
             planid=vps['planid']
         )
+
+        auditlog("payment.paypal", "vps", vpsUuid, f"PayPal payment of ${amount} (txn: {txnId})")
 
         try:
             services.provisiononnode(vpsUuid)
@@ -505,6 +615,7 @@ def vpsaction(vpsUuid, action):
 
     try:
         services.performvpsaction(vps["id"], action, actorUserId=g.userinfo["id"])
+        auditlog(f"vps.{action}", "vps", vpsUuid, f"VPS {action} on {vps['hostname']}")
         flash(f"VPS {action} successful.", "success")
     except ValueError as e:
         flash(f"Action failed: {e}", "error")
@@ -549,6 +660,7 @@ def vpsconsoletoken(vpsUuid):
         "username": "root",
         "password": vps["password"],
         "used": False,
+        "created": time.time(),
     }
     return jsonify({"token": token})
 
@@ -556,6 +668,12 @@ def vpsconsoletoken(vpsUuid):
 @app.route("/vps/<vpsUuid>/console")
 @loginrequired
 def vpsconsole(vpsUuid):
+    # Purge expired tokens
+    now = time.time()
+    expired = [t for t, v in _console_tokens.items() if now - v.get("created", 0) > _CONSOLE_TOKEN_TTL]
+    for t in expired:
+        del _console_tokens[t]
+
     token = request.args.get("t")
     if not token or token not in _console_tokens:
         return "Invalid or expired console token", 403
@@ -584,73 +702,109 @@ def vpsconsole(vpsUuid):
 
 @sock.route("/ws/ssh")
 def ws_ssh(ws):
+    # Authenticate via session cookie
+    token = request.cookies.get(COOKIE_NAME)
+    user = services.validatesession(token) if token else None
+    if not user:
+        try:
+            ws.close(1008, "Unauthorized")
+        except Exception:
+            pass
+        return
+
     host = request.args.get("host", "")
     port = int(request.args.get("port", 22))
     username = request.args.get("user", "root")
     password = request.args.get("pass", "")
 
     if not host:
-        ws.close(1008, "Missing host")
+        try:
+            ws.close(1008, "Missing host")
+        except Exception:
+            pass
         return
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     try:
-        ssh.connect(host, port=port, username=username, password=password, timeout=config.get("console", {}).get("timeout", 10))
+        ssh.connect(host, port=port, username=username, password=password,
+                    timeout=config.get("console", {}).get("timeout", 10),
+                    banner_timeout=15, auth_timeout=15, look_for_keys=False)
     except Exception as e:
-        ws.close(1011, f"SSH connect failed: {e}")
+        try:
+            ws.close(1011, f"SSH connect failed: {e}")
+        except Exception:
+            pass
         return
 
     try:
+        transport = ssh.get_transport()
+        if transport:
+            transport.set_keepalive(15)
         chan = ssh.invoke_shell(term="xterm-256color", width=120, height=40)
     except Exception:
         try:
             chan = ssh.invoke_shell(term="xterm", width=120, height=40)
         except Exception as e:
             ssh.close()
-            ws.close(1011, f"Shell failed: {e}")
+            try:
+                ws.close(1011, f"Shell failed: {e}")
+            except Exception:
+                pass
             return
 
-    chan.settimeout(0.0)
+    chan.settimeout(0.1)
 
-    try:
-        while True:
-            while True:
+    closed = threading.Event()
+
+    def ssh_to_ws():
+        """Read from SSH channel, send to WebSocket."""
+        try:
+            while not closed.is_set():
                 try:
                     data = chan.recv(4096)
                 except socket.timeout:
-                    data = None
+                    continue
                 except OSError:
-                    data = b""
+                    break
                 if not data:
                     break
                 try:
-                    ws.send(data)
+                    ws.send(bytes(data))
                 except Exception:
-                    data = b""
                     break
-            if data == b"":
-                break
+        finally:
+            closed.set()
 
-            msg = ws.receive(timeout=0.02)
-            if msg is not None:
-                try:
-                    d = json.loads(msg)
-                except (json.JSONDecodeError, TypeError):
-                    d = None
-                if d:
-                    if "data" in d:
-                        try:
-                            chan.send(d["data"])
-                        except Exception:
-                            break
-                    if "resize" in d and len(d["resize"]) == 2:
-                        try:
-                            chan.resize_pty(width=d["resize"][0], height=d["resize"][1])
-                        except Exception:
-                            pass
+    reader = threading.Thread(target=ssh_to_ws, daemon=True)
+    reader.start()
+
+    try:
+        while not closed.is_set():
+            try:
+                msg = ws.receive(timeout=0.5)
+            except Exception:
+                break
+            if msg is None:
+                continue
+            try:
+                d = json.loads(msg)
+            except (json.JSONDecodeError, TypeError):
+                d = None
+            if d:
+                if "data" in d:
+                    try:
+                        chan.send(d["data"])
+                    except Exception:
+                        break
+                if "resize" in d and len(d["resize"]) == 2:
+                    try:
+                        chan.resize_pty(width=d["resize"][0], height=d["resize"][1])
+                    except Exception:
+                        pass
     finally:
+        closed.set()
         try:
             chan.close()
         except Exception:
@@ -683,6 +837,7 @@ def adminusers():
             role = 'admin' if db.countusers() == 0 else 'user'
             try:
                 db.adduser(uuid=userUuid, username=username, email=email, password=hashedPw, role=role)
+                auditlog("user.create", "user", userUuid, f"Created user '{username}' (role={role})")
                 flash("User created.", "success")
             except Exception:
                 flash("Error creating user.", "error")
@@ -729,6 +884,7 @@ def adminupdateusers(userUuid):
         role=role
     )
     
+    auditlog("user.update", "user", userUuid, f"Updated user: username={username}, role={role}")
     flash("User updated successfully!", "success")
     return redirect(url_for('adminusers'))
 
@@ -750,8 +906,13 @@ def adminbanuser(userId):
     adminId = g.userinfo["id"] 
     
     db.addban(banUuid, userId, adminId, reason, expires=None)
-    db.updateuser(userId, status="banned") 
+    db.updateuser(userId, status="banned")
+
+    # Invalidate all sessions for the banned user
+    with db.getconnection() as conn:
+        conn.execute("DELETE FROM sessions WHERE userid = ?", (userId,))
     
+    auditlog("user.ban", "user", userId, f"Banned user '{target['username']}': {reason}")
     flash("User has been banned.", "success")
     return redirect(url_for('adminusers'))
 
@@ -768,6 +929,7 @@ def adminunbanuser(userId):
     # Restore the user's STATUS column to "active"
     db.updateuser(userId, status="active")
     
+    auditlog("user.unban", "user", userId, f"Unbanned user")
     flash("User has been unbanned.", "success")
     return redirect(url_for('adminusers'))
 
@@ -897,6 +1059,7 @@ def adminvpsdelete(vpsUuid):
     with db.getconnection() as conn:
         conn.execute("DELETE FROM vps WHERE id = ?", (vps['id'],))
 
+    auditlog("vps.delete", "vps", vpsUuid, f"Deleted VPS {vps['hostname']} (force={force}, node_error={nodeError})")
     if nodeError:
         flash(f"VPS removed from DB (node delete failed: {nodeError}).", "warning")
     else:
@@ -996,6 +1159,7 @@ def admincreatevps():
             db.decrementplanstock(plan['id'])
             if storagepoolid:
                 db.decreasestorageavailable(storagepoolid, plan['disk'])
+            auditlog("vps.admin_create", "vps", vpsUuid, f"Admin created VPS {hostname} for user {userid}")
             flash(f"Instance {hostname} created successfully with {plan['name']} resources.", "success")
             return redirect(url_for('adminvps'))
             
@@ -1024,6 +1188,7 @@ def adminplans():
             readbps=int(request.form.get("readbps", 0)),
             writebps=int(request.form.get("writebps", 0))
         )
+        auditlog("plan.create", "plan", None, f"Created plan '{request.form.get('name')}'")
         return redirect(url_for('adminplans'))
 
     page = request.args.get('page', 1, type=int)
@@ -1064,6 +1229,7 @@ def adminupdateplans(planUuid):
         writebps=int(request.form.get("writebps", 0))
     )
     
+    auditlog("plan.update", "plan", planUuid, f"Updated plan '{request.form.get('name')}'")
     return redirect(url_for('adminplans'))
 
 @app.route("/dashboard/admin/plans/delete/<string:planUuid>", methods=["POST"])
@@ -1071,6 +1237,7 @@ def adminupdateplans(planUuid):
 @adminrequired
 def admindeleteplans(planUuid):
     db.removeplan(uuid=planUuid)
+    auditlog("plan.delete", "plan", planUuid, "Deleted plan")
     return redirect(url_for('adminplans'))
 
 @app.route("/dashboard/admin/nodes")
@@ -1118,6 +1285,7 @@ def adminnodescreate():
             proxmoxport=int(request.form.get("proxmoxport", 8006)) if nodeType == "proxmox" else 8006,
             proxmoxssl=1 if request.form.get("proxmoxssl") == "1" else 0
         )
+        auditlog("node.create", "node", nodeUuid, f"Registered {nodeType} node '{request.form.get('name')}'")
         flash(f"Node '{request.form.get('name')}' registered successfully.", "success")
     except Exception as e:
         flash("Error creating node.", "danger")
@@ -1157,6 +1325,7 @@ def adminnodesupdate(nodeUuid):
             updateData["proxmoxssl"] = 1 if request.form.get("proxmoxssl") == "1" else 0
 
         db.updatenode(nodeUuid, **updateData)
+        auditlog("node.update", "node", nodeUuid, f"Updated node '{request.form.get('name')}'")
         flash("Node configuration updated.", "success")
     except Exception as e:
         flash("Error updating node.", "danger")
@@ -1169,6 +1338,7 @@ def adminnodesupdate(nodeUuid):
 def adminnodesdelete(nodeUuid):
     try:
         db.removenode(nodeUuid)
+        auditlog("node.delete", "node", nodeUuid, "Deleted node")
         flash("Node removed successfully.", "warning")
     except Exception as e:
         flash("Error deleting node.", "danger")
@@ -1183,12 +1353,14 @@ def adminosimage():
     q = request.args.get('q', '').strip() or None
     nodeType = request.args.get('type', '').strip() or None
     imagesData = db.listimagespaginated(page=page, perpage=12, search=q, node_type=nodeType)
+    allImageStorages = db.listimagestorage()
     
     return render_template(
         "adminosimage.html",
         allImages=imagesData['images'],
         pagination=imagesData,
         activeImagesCount=sum(1 for i in imagesData['images'] if i['active']),
+        allImageStorages=allImageStorages,
         search=q or '',
         nodeType=nodeType or '',
         **paneluserinfo(g.userinfo), 
@@ -1200,14 +1372,17 @@ def adminosimage():
 @adminrequired
 def adminosimagecreate():
     try:
+        imagestorageid = request.form.get("imagestorageid", type=int) or None
         db.addimage(
             uuid=str(uuid.uuid4()),
             name=request.form.get("name"),
             image=request.form.get("image"),
             description=request.form.get("description"),
             active=int(request.form.get("active", 1)),
-            node_type=request.form.get("node_type", "docker")
+            node_type=request.form.get("node_type", "docker"),
+            imagestorageid=imagestorageid
         )
+        auditlog("image.create", "image", None, f"Added OS image '{request.form.get('name')}'")
         flash("OS Image added successfully.", "success")
     except Exception as e:
         flash("Error adding image.", "danger")
@@ -1218,14 +1393,17 @@ def adminosimagecreate():
 @adminrequired
 def adminosimageupdate(imageUuid):
     try:
+        imagestorageid = request.form.get("imagestorageid", type=int) or None
         updateData = {
             "name": request.form.get("name"),
             "image": request.form.get("image"),
             "description": request.form.get("description"),
             "active": int(request.form.get("active")),
-            "node_type": request.form.get("node_type", "docker")
+            "node_type": request.form.get("node_type", "docker"),
+            "imagestorageid": imagestorageid
         }
         db.updateimage(imageUuid, **updateData)
+        auditlog("image.update", "image", imageUuid, f"Updated OS image '{request.form.get('name')}'")
         flash("OS Image updated.", "success")
     except Exception as e:
         flash("Error updating image.", "danger")
@@ -1237,6 +1415,7 @@ def adminosimageupdate(imageUuid):
 def adminosimagedelete(imageUuid):
     try:
         db.removeimage(imageUuid)
+        auditlog("image.delete", "image", imageUuid, "Deleted OS image")
         flash("OS Image removed.", "warning")
     except Exception as e:
         flash("Error deleting image.", "danger")
@@ -1289,6 +1468,7 @@ def adminstoragepoolscreate():
 
     poolUuid = str(uuid.uuid4())
     db.addstoragepool(uuid=poolUuid, nodeid=nodeid, name=name, size=size, nodeType='proxmox')
+    auditlog("storage.create", "storage", poolUuid, f"Created storage pool '{name}' on node '{node['name']}'")
     flash(f"Storage pool '{name}' created.", "success")
     return redirect(url_for('adminstoragepools'))
 
@@ -1302,6 +1482,7 @@ def adminstoragepoolsdelete(poolUuid):
         return redirect(url_for('adminstoragepools'))
 
     db.removestoragepool(poolUuid)
+    auditlog("storage.delete", "storage", poolUuid, f"Deleted storage pool '{pool['name']}'")
     flash("Storage pool removed.", "warning")
     return redirect(url_for('adminstoragepools'))
 
@@ -1318,8 +1499,119 @@ def adminstoragepoolsupdate(poolUuid):
     size = int(request.form.get("size", 0))
 
     db.updatestoragepool(poolUuid, name=name, size=size)
+    auditlog("storage.update", "storage", poolUuid, f"Updated storage pool '{name}'")
     flash("Storage pool updated.", "success")
     return redirect(url_for('adminstoragepools'))
+
+# --- Image Storage Management ---
+
+@app.route("/dashboard/admin/imagestorage")
+@loginrequired
+@adminrequired
+def adminimagestorage():
+    allStorages = db.listimagestorage()
+    allNodes = db.listallnodes()
+    proxmoxNodes = [n for n in allNodes if n.get('type') == 'proxmox']
+    return render_template(
+        "adminimagestorage.html",
+        allStorages=allStorages,
+        proxmoxNodes=proxmoxNodes,
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
+
+@app.route("/dashboard/admin/imagestorage/create", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminimagestoragecreate():
+    nodeid = request.form.get("nodeid", type=int)
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip() or None
+
+    if not nodeid or not name:
+        flash("Node and storage name required.", "error")
+        return redirect(url_for('adminimagestorage'))
+
+    node = db.getnodebyid(nodeid)
+    if not node or node.get('type') != 'proxmox':
+        flash("Invalid Proxmox node.", "error")
+        return redirect(url_for('adminimagestorage'))
+
+    storageUuid = str(uuid.uuid4())
+    db.addimagestorage(uuid=storageUuid, nodeid=nodeid, name=name, description=description)
+    auditlog("imagestorage.create", "imagestorage", storageUuid, f"Added image storage '{name}' to node '{node['name']}'")
+    flash(f"Image storage '{name}' added to '{node['name']}'.", "success")
+    return redirect(url_for('adminimagestorage'))
+
+@app.route("/dashboard/admin/imagestorage/update/<string:storageUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminimagestorageupdate(storageUuid):
+    storage = db.getimagestorage(storageUuid)
+    if not storage:
+        flash("Image storage not found.", "error")
+        return redirect(url_for('adminimagestorage'))
+
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip() or None
+
+    if not name:
+        flash("Storage name cannot be empty.", "error")
+        return redirect(url_for('adminimagestorage'))
+
+    db.updateimagestorage(storageUuid, name=name, description=description)
+    auditlog("imagestorage.update", "imagestorage", storageUuid, f"Updated image storage '{name}'")
+    flash(f"Image storage updated.", "success")
+    return redirect(url_for('adminimagestorage'))
+
+@app.route("/dashboard/admin/imagestorage/delete/<string:storageUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminimagestoragedelete(storageUuid):
+    storage = db.getimagestorage(storageUuid)
+    if not storage:
+        flash("Image storage not found.", "error")
+        return redirect(url_for('adminimagestorage'))
+
+    db.removeimagestorage(storageUuid)
+    auditlog("imagestorage.delete", "imagestorage", storageUuid, f"Deleted image storage '{storage['name']}'")
+    flash(f"Image storage '{storage['name']}' removed.", "warning")
+    return redirect(url_for('adminimagestorage'))
+
+@app.route("/dashboard/admin/imagestorage/fetch/<int:nodeId>")
+@loginrequired
+@adminrequired
+def adminimagestoragefetch(nodeId):
+    node = db.getnodebyid(nodeId)
+    if not node:
+        return jsonify({"error": "Node not found"}), 404
+
+    if node.get('type') != 'proxmox':
+        return jsonify({"error": "Not a Proxmox node"}), 400
+
+    try:
+        pve = services.getproxmoxclient(node)
+        node_name = node.get('proxmoxnode', 'pve')
+        storageList = services.pveclient.liststorage(pve, node_name, content_type='vztmpl')
+
+        result = []
+        for s in storageList:
+            storageId = s.get('storage', '')
+            try:
+                templates = services.pveclient.listtemplates(pve, node_name, storageId)
+                for t in templates:
+                    result.append({
+                        "storage": storageId,
+                        "name": t.get('volid', '').replace(f"{storageId}:vztmpl/", ''),
+                        "size": t.get('size', 0),
+                        "format": t.get('format', ''),
+                    })
+            except Exception:
+                continue
+
+        return jsonify({"templates": result, "storages": [s.get('storage', '') for s in storageList]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # --- Network Management ---
 
@@ -1397,6 +1689,7 @@ def adminnetworkscreate():
     db.addnetwork(uuid=netUuid, nodeid=nodeid, name=name, network_type=network_type,
                   subnet=ipv6_subnet, gateway=ipv6_gateway, ipv4=ipv4, ipv6=ipv6,
                   ipv4_subnet=ipv4_subnet, ipv4_gateway=ipv4_gateway, dns=dns)
+    auditlog("network.create", "network", netUuid, f"Created {network_type} network '{name}'")
     flash(f"Network '{name}' created and registered.", "success")
     return redirect(url_for('adminnetworks'))
 
@@ -1430,6 +1723,7 @@ def adminnetworksdelete(netUuid):
             services.nodeapi(node, f"/networks/{network['name']}", method="DELETE")
 
     db.removenetwork(netUuid, network_type=network_type)
+    auditlog("network.delete", "network", netUuid, f"Deleted network '{network['name']}'")
     flash("Network removed.", "warning")
     return redirect(url_for('adminnetworks'))
 
@@ -1547,6 +1841,7 @@ def adminipsgenerate():
 
     isipv6 = ":" in baseip
     generated = db.generateipsfornetwork(networkid, baseip, count, network_type=network_type, isipv6=isipv6)
+    auditlog("ip.generate", "network", None, f"Generated {len(generated)} IP(s) on network {networkid}")
     flash(f"Generated {len(generated)} IP(s) on {network['name']}.", "success")
     return redirect(url_for('adminips'))
 
@@ -1559,6 +1854,7 @@ def adminipdelete(ipUuid):
         flash("Cannot delete an assigned IP. Unassign it first.", "error")
     else:
         db.removenetworkip(ipUuid)
+        auditlog("ip.delete", "ip", ipUuid, f"Deleted IP {ip['ip'] if ip else ipUuid}")
         flash("IP removed.", "warning")
     return redirect(url_for('adminips'))
 
@@ -1608,6 +1904,7 @@ def adminnetworkipsgenerate(netUuid):
 
     isipv6 = ":" in baseip
     generated = db.generateipsfornetwork(network['id'], baseip, count, network_type=network_type, isipv6=isipv6)
+    auditlog("ip.generate", "network", netUuid, f"Generated {len(generated)} IP(s) on network '{network['name']}'")
     flash(f"Generated {len(generated)} IP(s).", "success")
     return redirect(url_for('adminnetworkips', netUuid=netUuid, type=network_type))
 
@@ -1658,6 +1955,7 @@ def adminpaymentmethodscreate():
             slug=request.form.get("slug"),
             active=int(request.form.get("active", 1))
         )
+        auditlog("paymentmethod.create", "paymentmethod", paymentmethodUuid, f"Added payment method '{request.form.get('name')}'")
         flash(f"Payment method '{request.form.get('name')}' added successfully.", "success")
     except Exception:
         flash("Error adding payment method.", "danger")
@@ -1675,6 +1973,7 @@ def adminpaymentmethodsupdate(paymentmethodUuid):
             "active": int(request.form.get("active", 1))
         }
         db.updatepaymentmethods(paymentmethodUuid, **updateData)
+        auditlog("paymentmethod.update", "paymentmethod", paymentmethodUuid, f"Updated payment method '{request.form.get('name')}'")
         flash("Payment method updated.", "success")
     except Exception:
         flash("Error updating payment method.", "danger")
@@ -1687,6 +1986,7 @@ def adminpaymentmethodsupdate(paymentmethodUuid):
 def adminpaymentmethodsdelete(paymentmethodUuid):
     try:
         db.removepaymentmethods(paymentmethodUuid)
+        auditlog("paymentmethod.delete", "paymentmethod", paymentmethodUuid, "Deleted payment method")
         flash("Payment method removed.", "warning")
     except Exception:
         flash("Error deleting payment method.", "danger")
@@ -1748,6 +2048,7 @@ def adminreceiptscreate():
             "notes": request.form.get("notes")
         }
         db.addreceipt(data)
+        auditlog("receipt.create", "receipt", None, f"Created receipt {data['receiptnumber']}")
         flash("Receipt created.", "success")
     return redirect(url_for("adminreceipts"))
 
@@ -1769,6 +2070,7 @@ def adminreceiptsupdate(receiptUuid):
             "notes": request.form.get("notes")
         }
         db.updatereceipt(receiptUuid, data)
+        auditlog("receipt.update", "receipt", receiptUuid, f"Updated receipt {data.get('receiptnumber', receiptUuid)}")
         flash("Receipt updated.", "success")
     return redirect(url_for("adminreceipts"))
 
@@ -1777,8 +2079,100 @@ def adminreceiptsupdate(receiptUuid):
 @adminrequired
 def adminreceiptsdelete(receiptUuid):
     db.deletereceipt(receiptUuid)
+    auditlog("receipt.delete", "receipt", receiptUuid, "Deleted receipt")
     flash("Receipt deleted.", "success")
     return redirect(url_for("adminreceipts"))
+
+# --- Audit Log ---
+
+@app.route("/dashboard/admin/auditlog")
+@loginrequired
+@adminrequired
+def adminauditlog():
+    page = request.args.get('page', 1, type=int)
+    q = request.args.get('q', '').strip() or None
+    actionFilter = request.args.get('action', '').strip() or None
+    userFilter = request.args.get('user', '').strip() or None
+
+    logsData = db.listauditlogspaginated(page=page, perpage=50, search=q, action_filter=actionFilter, user_filter=userFilter)
+    actionTypes = db.getauditlogactions()
+
+    return render_template(
+        "adminauditlog.html",
+        logsData=logsData,
+        actionTypes=actionTypes,
+        search=q or '',
+        actionFilter=actionFilter or '',
+        userFilter=userFilter or '',
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
+
+# --- Settings ---
+
+SETTINGS_SCHEMA = {
+    "general": {
+        "projectname": {"label": "Project Name", "type": "text", "desc": "Displayed in the header and title."},
+        "theme": {"label": "Theme", "type": "theme", "desc": "Color theme for the entire UI."},
+        "passwordlength": {"label": "Password Length", "type": "number", "desc": "Generated password length."},
+        "cookielength": {"label": "Cookie Length", "type": "number", "desc": "Session cookie length."},
+        "defaultcookiettl": {"label": "Session TTL (days)", "type": "number", "desc": "Days before session expires."},
+        "favicon": {"label": "Favicon Path", "type": "text", "desc": "Path to favicon."},
+        "logo": {"label": "Logo Path", "type": "text", "desc": "Path to logo image."},
+        "discord": {"label": "Discord Invite URL", "type": "text", "desc": "Discord server invite link."},
+    },
+    "paypal": {
+        "email": {"label": "PayPal Email", "type": "text", "desc": "Receiver email for PayPal payments."},
+        "sandbox": {"label": "Sandbox Mode", "type": "bool", "desc": "Use PayPal sandbox."},
+        "base_url": {"label": "Base URL", "type": "text", "desc": "Public URL for IPN callbacks."},
+    },
+    "discord": {
+        "clientid": {"label": "Client ID", "type": "text", "desc": "Discord OAuth application ID."},
+        "clientsecret": {"label": "Client Secret", "type": "password", "desc": "Discord OAuth secret."},
+        "redirecturl": {"label": "Redirect URL", "type": "text", "desc": "OAuth callback URL."},
+        "discordbaseurl": {"label": "API Base URL", "type": "text", "desc": "Discord API base URL."},
+    },
+    "loadbalancing": {
+        "strategy": {"label": "Strategy", "type": "select", "options": ["random", "least_vps", "resources", "both"], "desc": "Node selection strategy."},
+    },
+    "console": {
+        "timeout": {"label": "SSH Timeout (s)", "type": "number", "desc": "SSH connection timeout."},
+        "metrics": {"label": "Metrics Mode", "type": "select", "options": ["dynamic", "static"], "desc": "How metrics are displayed."},
+    },
+}
+
+
+@app.route("/dashboard/admin/settings", methods=["GET", "POST"])
+@loginrequired
+@adminrequired
+def adminsettings():
+    if request.method == "POST":
+        section = request.form.get("section")
+        if section and section in SETTINGS_SCHEMA:
+            for key, meta in SETTINGS_SCHEMA[section].items():
+                flatkey = f"{section}.{key}"
+                if meta['type'] == 'bool':
+                    val = request.form.get(key) == 'on' or request.form.get(key) == '1'
+                elif meta['type'] == 'number':
+                    raw = request.form.get(key, '')
+                    val = int(raw) if raw else DEFAULT_CONFIG.get(section, {}).get(key, 0)
+                else:
+                    val = request.form.get(key, '')
+                db.setsetting(flatkey, val, f"{section} → {key}")
+            auditlog("settings.update", "settings", None, f"Updated {section} settings")
+            reloadconfig()
+            flash(f"{section.title()} settings saved.", "success")
+        return redirect(url_for('adminsettings'))
+
+    return render_template(
+        "adminsettings.html",
+        config=config,
+        schema=SETTINGS_SCHEMA,
+        defaults=DEFAULT_CONFIG,
+        current_theme_global=db.getsetting("general.theme", "catppuccin"),
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
 
 @app.route("/dashboard/admin/transactions")
 @loginrequired
@@ -1832,6 +2226,11 @@ def login():
                 ttlDays=SESSION_TTL_DAYS,
             )
 
+            # Set g.userinfo for auditlog
+            g.userinfo = user
+            auditlog("user.login", "user", user['id'], f"Login from {userIp}")
+            g.userinfo = None
+
             response = make_response(redirect(url_for("dashboard")))
             response.set_cookie(
                 COOKIE_NAME,
@@ -1843,6 +2242,7 @@ def login():
             )
             return response
         else:
+            auditlog("user.login_failed", None, None, f"Failed login for {email}")
             flash("Invalid email or password", "error")
 
     return render_template("login.html", **guestuserinfo())
@@ -1924,10 +2324,34 @@ def discordcallback():
     return response
 
 
+@app.route("/set-theme", methods=["POST"])
+def settheme():
+    theme_id = request.form.get("theme", "")
+    valid_ids = [t["id"] for t in THEMES]
+    if theme_id not in valid_ids:
+        flash("Invalid theme.", "error")
+        return redirect(request.referrer or url_for("index"))
+
+    resp = make_response(redirect(request.referrer or url_for("index")))
+    resp.set_cookie("theme", theme_id, max_age=86400 * 365, samesite="Lax")
+
+    user = getattr(g, 'userinfo', None)
+    if user:
+        db.updateuser(user['uuid'], theme=theme_id)
+        auditlog("user.theme", "user", user['id'], f"Changed theme to {theme_id}")
+
+    return resp
+
+
 @app.route("/logout")
 def logout():
     token = request.cookies.get(COOKIE_NAME)
     if token:
+        user = services.validatesession(token)
+        if user:
+            g.userinfo = user
+            auditlog("user.logout", "user", user['id'], "User logged out")
+            g.userinfo = None
         services.logout(token)
     resp = make_response(redirect(url_for("index")))
     resp.set_cookie(COOKIE_NAME, "", expires=0)

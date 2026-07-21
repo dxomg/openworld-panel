@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Log - {{ projectname }}{% endblock %}
+
+{% block content %}
+<style>
+    .log-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: var(--font-mono);
+        font-size: 12px;
+    }
+    .log-table th {
+        text-align: left;
+        padding: 10px 12px;
+        color: var(--text-dim);
+        border-bottom: 1px solid var(--border);
+        font-weight: 500;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .log-table td {
+        padding: 8px 12px;
+        color: var(--text);
+        border-bottom: 1px solid var(--border-soft);
+        vertical-align: top;
+    }
+    .log-table tr:hover td {
+        background: rgba(255,255,255,0.02);
+    }
+    .action-badge {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+    }
+    .action-create { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid #22c55e; }
+    .action-update { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+    .action-delete { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid #ef4444; }
+    .action-login { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid #a855f7; }
+    .action-other { background: rgba(255,255,255,0.08); color: var(--text-dim); border: 1px solid #555; }
+    .filter-bar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+    .filter-bar select, .filter-bar input {
+        font-size: 12px;
+        padding: 6px 10px;
+    }
+</style>
+
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Audit Log</h1>
+        <p>Complete trail of every action performed across the panel.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num accent">{{ logsData.totalCount }}</div>
+                <div class="label">Total Events</div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-head">
+        <h2>Event History</h2>
+    </div>
+
+    <form method="GET" action="{{ url_for('adminauditlog') }}" class="filter-bar" style="margin-bottom: 20px;">
+        <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search logs...">
+        <select name="action" onchange="this.form.submit()">
+            <option value="">All Actions</option>
+            {% for a in actionTypes %}
+            <option value="{{ a }}" {% if actionFilter == a %}selected{% endif %}>{{ a }}</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="user" value="{{ userFilter }}" placeholder="Filter by user...">
+        <button type="submit" class="btn btn-small">Filter</button>
+        {% if search or actionFilter or userFilter %}
+        <a href="{{ url_for('adminauditlog') }}" class="btn btn-small">Clear</a>
+        {% endif %}
+    </form>
+
+    {% if logsData.logs %}
+    <div style="overflow-x: auto;">
+        <table class="log-table">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Target</th>
+                    <th style="width: 50px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logsData.logs %}
+                <tr>
+                    <td style="white-space: nowrap; color: var(--text-dim);">{{ log.created }}</td>
+                    <td>
+                        <span style="font-weight: 600;">{{ log.username or 'system' }}</span>
+                        {% if log.role and log.role != 'system' %}
+                        <span style="font-size: 10px; color: var(--text-dim);">({{ log.role }})</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% set parts = log.action.split('.') %}
+                        {% set verb = parts[-1] if parts else log.action %}
+                        {% if verb in ['create', 'generate'] %}
+                        <span class="action-badge action-create">{{ log.action }}</span>
+                        {% elif verb in ['update'] %}
+                        <span class="action-badge action-update">{{ log.action }}</span>
+                        {% elif verb in ['delete', 'ban'] %}
+                        <span class="action-badge action-delete">{{ log.action }}</span>
+                        {% elif verb in ['login', 'logout', 'login_failed'] %}
+                        <span class="action-badge action-login">{{ log.action }}</span>
+                        {% else %}
+                        <span class="action-badge action-other">{{ log.action }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if log.target_type %}
+                        <span style="color: var(--text-dim);">{{ log.target_type }}</span>
+                        {% endif %}
+                        {% if log.target_id %}
+                        <span style="font-size: 10px; color: var(--accent);">{{ log.target_id[:12] }}{% if log.target_id|length > 12 %}...{% endif %}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-small" onclick='showLogDetail({{ log|tojson|forceescape }})'>View</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if logsData.totalPages > 1 %}
+    <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+        {% if logsData.hasPrev %}
+        <a href="{{ url_for('adminauditlog', page=logsData.currentPage - 1, q=search, action=actionFilter, user=userFilter) }}" class="btn btn-small">&larr; Previous</a>
+        {% endif %}
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+            PAGE {{ logsData.currentPage }} / {{ logsData.totalPages }}
+        </span>
+        {% if logsData.hasNext %}
+        <a href="{{ url_for('adminauditlog', page=logsData.currentPage + 1, q=search, action=actionFilter, user=userFilter) }}" class="btn btn-small">Next &rarr;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">&#x1F4CB;</div>
+        <h3>No Events Logged</h3>
+        <p>Actions will appear here as users interact with the panel.</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Log Detail Modal -->
+<div id="logDetailModal" class="modal-backdrop">
+    <div class="modal-panel" style="max-width: 560px;">
+        <div class="modal-head">
+            <h3>Event Details</h3>
+            <button type="button" class="modal-close" onclick="closeModal('logDetailModal')">&times;</button>
+        </div>
+        <div class="kv-list" id="logDetailBody"></div>
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft);">
+            <button type="button" onclick="closeModal('logDetailModal')" class="btn">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+
+    function showLogDetail(log) {
+        var body = document.getElementById('logDetailBody');
+        var rows = [
+            ['Time', log.created || ''],
+            ['ID', log.uuid || ''],
+            ['User', (log.username || 'system') + (log.role && log.role !== 'system' ? ' (' + log.role + ')' : '')],
+            ['Action', log.action || ''],
+            ['Target Type', log.target_type || '—'],
+            ['Target ID', log.target_id || '—'],
+            ['IP Address', log.ip || '—'],
+            ['Details', log.details || '—'],
+        ];
+        var html = '';
+        rows.forEach(function(r) {
+            html += '<div class="kv-row"><span class="k">' + r[0] + '</span><span class="v" style="word-break: break-all; max-width: 340px; text-align: right;">' + r[1] + '</span></div>';
+        });
+        body.innerHTML = html;
+        openModal('logDetailModal');
+    }
+</script>
+{% endblock %}

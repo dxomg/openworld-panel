@@ -225,15 +225,21 @@
 
         <!-- Step 1: Type Picker -->
         <div id="addNet_typePicker" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px 0;">
-            <button type="button" class="type-card" onclick="pickNetType('docker')">
-                <span class="type-badge type-docker" style="font-size: 13px; padding: 6px 14px; margin-bottom: 14px; display: inline-block;">DOCKER</span>
-                <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">Docker Network</div>
-                <div style="font-size: 12px; color: var(--text-dim);">Created on the node via agent API</div>
+            <button type="button" class="type-card" onclick="pickNetType('docker')" style="
+                background: rgba(59,130,246,0.08); border: 2px solid #333; border-radius: 12px;
+                padding: 28px 20px; cursor: pointer; text-align: center; transition: all 0.2s;
+            " onmouseover="this.style.borderColor='#3b82f6'" onmouseout="this.style.borderColor='#333'">
+                <div style="font-size: 32px; margin-bottom: 10px;">🐳</div>
+                <div style="font-weight: 600; font-size: 15px; margin-bottom: 4px;">Docker</div>
+                <div style="font-size: 12px; color: #888;">Created on the node via agent API</div>
             </button>
-            <button type="button" class="type-card" onclick="pickNetType('proxmox')">
-                <span class="type-badge type-proxmox" style="font-size: 13px; padding: 6px 14px; margin-bottom: 14px; display: inline-block;">PROXMOX</span>
-                <div style="font-weight: 600; font-size: 14px; margin-bottom: 4px;">Proxmox Network</div>
-                <div style="font-size: 12px; color: var(--text-dim);">Stored in database (bridge in PVE)</div>
+            <button type="button" class="type-card" onclick="pickNetType('proxmox')" style="
+                background: rgba(234,88,12,0.08); border: 2px solid #333; border-radius: 12px;
+                padding: 28px 20px; cursor: pointer; text-align: center; transition: all 0.2s;
+            " onmouseover="this.style.borderColor='#ea580c'" onmouseout="this.style.borderColor='#333'">
+                <div style="font-size: 32px; margin-bottom: 10px;">🖧</div>
+                <div style="font-weight: 600; font-size: 15px; margin-bottom: 4px;">Proxmox</div>
+                <div style="font-size: 12px; color: #888;">Stored in database (bridge in PVE)</div>
             </button>
         </div>
 

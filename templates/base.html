@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="{{ theme_class|default('') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -24,6 +24,7 @@
   
 <nav class="topnav">
     {% if request.endpoint == 'index' %}
+        {% include '_theme_dropdown.html' %}
         <a href="{{ url_for('login') }}" class="btn">Login</a>
 
     {% elif request.endpoint in ['dashboard', 'createvps'] %}
@@ -32,10 +33,12 @@
         {% if g.userinfo and g.userinfo.get('role') == 'admin' %}
             <a href="{{ url_for('admindashboard') }}" class="btn">Admin Console</a>
         {% endif %}
-        
+
+        {% include '_theme_dropdown.html' %}
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
 
     {% elif request.endpoint and request.endpoint.startswith('admin') %}
+        {% include '_theme_dropdown.html' %}
         <a href="{{ url_for('dashboard') }}" class="btn">← Back to Panel</a>
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
     {% endif %}
@@ -77,6 +80,9 @@
         <a href="{{ url_for('adminstoragepools') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminstoragepools' else '' }}">
             <span class="sidebar-icon">◉</span> Storage
         </a>
+        <a href="{{ url_for('adminimagestorage') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminimagestorage' else '' }}">
+            <span class="sidebar-icon">▦</span> Image Storage
+        </a>
         <a href="{{ url_for('adminosimage') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminosimage' else '' }}">
             <span class="sidebar-icon">◎</span> Images
         </a>
@@ -89,6 +95,13 @@
         </a>
         <a href="{{ url_for('admintransactions') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admintransactions' else '' }}">
             <span class="sidebar-icon">⟷</span> Transactions
+        </a>
+        <div class="sidebar-divider"></div>
+        <a href="{{ url_for('adminauditlog') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminauditlog' else '' }}">
+            <span class="sidebar-icon">≡</span> Audit Log
+        </a>
+        <a href="{{ url_for('adminsettings') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminsettings' else '' }}">
+            <span class="sidebar-icon">⚙</span> Settings
         </a>
     </nav>
 </aside>
@@ -121,6 +134,17 @@
     function toggleSidebar() {
         document.getElementById('adminSidebar').classList.toggle('is-open');
     }
+    function toggleThemeDropdown(e) {
+        if (e) e.stopPropagation();
+        var dd = document.getElementById('themeDropdown');
+        if (dd) dd.classList.toggle('is-open');
+    }
+    document.addEventListener('click', function(e) {
+        var dd = document.getElementById('themeDropdown');
+        if (dd && !e.target.closest('.theme-dropdown')) {
+            dd.classList.remove('is-open');
+        }
+    });
 
     // === CSRF Protection ===
     // Auto-inject CSRF token into all forms
