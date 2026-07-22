@@ -99,6 +99,31 @@ try:
 except sqlite3.OperationalError:
     print("theme column already exists on users.")
 
+# 6. Create jobs table
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uuid TEXT UNIQUE NOT NULL,
+        vpsid INTEGER,
+        vpsuuid TEXT NOT NULL,
+        userid INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        payload TEXT,
+        result TEXT,
+        created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE CASCADE,
+        FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
+    )
+""")
+print("Created jobs table.")
+
+cursor.execute("CREATE INDEX IF NOT EXISTS idxjobsuuid ON jobs(uuid)")
+cursor.execute("CREATE INDEX IF NOT EXISTS idxjobsvps ON jobs(vpsuuid)")
+cursor.execute("CREATE INDEX IF NOT EXISTS idxjobsstatus ON jobs(status)")
+print("Created jobs indexes.")
+
 # 5. Migrate config.toml to DB
 cursor.execute("SELECT COUNT(*) FROM settings")
 count = cursor.fetchone()[0]

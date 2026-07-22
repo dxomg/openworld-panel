@@ -196,7 +196,7 @@ def getvpsdetails(vpsId):
     """Gets full VPS info including node and plan details."""
     with db.getconnection() as conn:
         query = """
-            SELECT v.*, p.name as plan_name, p.readbps, p.writebps,
+            SELECT v.*, p.name as plan_name, p.price as plan_price, p.readbps, p.writebps,
                    n.address as node_ip, n.url as node_url, n.apikey as node_apikey,
                    i.name as image_name, i.image as image_path, i.imagestorageid,
                    ist.name as image_storage_name

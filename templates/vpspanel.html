@@ -36,8 +36,98 @@
     <form method="POST" action="/vps/{{ instance.uuid }}/action/stop" style="display:inline;">
       <button type="submit" class="btn btn-danger btn-small">&#9632; Stop</button>
     </form>
+
+    {% if instance.plan_price and instance.plan_price > 0 %}
+    <button type="button" class="btn btn-small" onclick="openModal('reinstallModal')">&#8635; Reinstall</button>
+    {% else %}
+    <form method="POST" action="{{ url_for('deletevps', vpsUuid=instance.uuid) }}" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete {{ instance.hostname }}? This cannot be undone.');">
+      <button type="submit" class="btn btn-danger btn-small" style="background: transparent;">&#x1F5D1; Delete</button>
+    </form>
+    {% endif %}
   </div>
 </div>
+
+<!-- Active Job Banner -->
+<div id="jobBanner" style="display: none; margin-bottom: 20px; padding: 14px 18px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--font-mono); font-size: 13px; color: var(--text-dim);">
+  <span id="jobBannerText">Processing...</span>
+  <span class="spinner" style="margin-left: 10px;"></span>
+</div>
+
+<!-- Reinstall Modal -->
+<div id="reinstallModal" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <h3>Reinstall {{ instance.hostname }}</h3>
+      <button type="button" class="modal-close" onclick="closeModal('reinstallModal')">&times;</button>
+    </div>
+    <form method="POST" action="{{ url_for('reinstallvps', vpsUuid=instance.uuid) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label>Operating System</label>
+        <select name="imageId" required>
+          {% for img in reinstallImages %}
+          <option value="{{ img.id }}" {% if img.id == instance.imageid %}selected{% endif %}>{{ img.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="hint">Select the OS image for the reinstallation.</span>
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+        <button type="button" onclick="closeModal('reinstallModal')" class="btn">Cancel</button>
+        <button type="submit" class="btn btn-primary" onclick="return confirm('Reinstall {{ instance.hostname }}? A new root password will be generated. This cannot be undone.');">Reinstall</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+
+  (function() {
+    var vpsUuid = '{{ instance.uuid }}';
+    var banner = document.getElementById('jobBanner');
+    var bannerText = document.getElementById('jobBannerText');
+    var pollInterval = null;
+
+    function checkJobs() {
+      fetch('/vps/' + vpsUuid + '/jobs')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (data.active) {
+            var type = data.active.type;
+            var labels = {
+              'provision': 'Provisioning VPS...',
+              'create': 'Creating VPS...',
+              'start': 'Starting VPS...',
+              'stop': 'Stopping VPS...',
+              'restart': 'Restarting VPS...',
+              'delete': 'Deleting VPS...',
+              'reinstall': 'Reinstalling VPS...'
+            };
+            bannerText.textContent = labels[type] || 'Processing ' + type + '...';
+            banner.style.display = 'flex';
+            banner.style.alignItems = 'center';
+          } else {
+            banner.style.display = 'none';
+            if (pollInterval) {
+              clearInterval(pollInterval);
+              pollInterval = null;
+            }
+            // Reload page if a job just completed (status changed)
+            if (data.jobs && data.jobs.length > 0 && data.jobs[0].status === 'completed') {
+              window.location.reload();
+            }
+          }
+        })
+        .catch(function() {});
+    }
+
+    // Initial check
+    checkJobs();
+    // Poll every 3s if there's an active job
+    pollInterval = setInterval(checkJobs, 3000);
+  })();
+</script>
 
 
 <div class="detail-grid">

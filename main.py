@@ -159,6 +159,126 @@ _CONSOLE_TOKEN_TTL = 300  # 5 minutes
 COOKIE_NAME = "sessioncookie"
 SESSION_TTL_DAYS = config["general"]["defaultcookiettl"]
 
+# --- Job Worker ---
+
+def _processjob(job):
+    """Process a single job. Returns True on success, False on failure."""
+    jobtype = job['type']
+    vpsUuid = job['vpsuuid']
+    payload = json.loads(job['payload']) if job.get('payload') else {}
+
+    if jobtype == 'provision':
+        services.provisiononnode(vpsUuid)
+
+    elif jobtype == 'start':
+        vps = db.getvps(vpsUuid)
+        if vps:
+            services.performvpsaction(vps['id'], 'start', actorUserId=job['userid'])
+            db.updatevps(vpsUuid, status='running')
+
+    elif jobtype == 'stop':
+        vps = db.getvps(vpsUuid)
+        if vps:
+            services.performvpsaction(vps['id'], 'stop', actorUserId=job['userid'])
+            db.updatevps(vpsUuid, status='stopped')
+
+    elif jobtype == 'restart':
+        vps = db.getvps(vpsUuid)
+        if vps:
+            services.performvpsaction(vps['id'], 'restart', actorUserId=job['userid'])
+            db.updatevps(vpsUuid, status='running')
+
+    elif jobtype == 'delete':
+        vps = db.getvps(vpsUuid)
+        if vps:
+            _deletevpsnode(vps)
+            db.unassignipbyvpsid(vps['id'])
+            if vps.get('storagepoolid') and vps.get('disk'):
+                db.increasestorageavailable(vps['storagepoolid'], vps['disk'])
+            if vps.get('planid'):
+                with db.getconnection() as conn:
+                    conn.execute("UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock >= 0", (vps['planid'],))
+            with db.getconnection() as conn:
+                conn.execute("DELETE FROM vps WHERE id = ?", (vps['id'],))
+
+    elif jobtype == 'reinstall':
+        vps = db.getvps(vpsUuid)
+        if vps:
+            _deletevpsnode(vps)
+            db.unassignipbyvpsid(vps['id'])
+            new_password = services.generaterandompassword()
+            imageId = payload.get('imageId')
+            updatefields = {'status': 'creating', 'password': new_password, 'container': None, 'vmid': None}
+            if imageId:
+                updatefields['imageid'] = imageId
+            db.updatevps(vpsUuid, **updatefields)
+            services.provisiononnode(vpsUuid)
+
+    elif jobtype == 'create':
+        services.provisiononnode(vpsUuid)
+
+    else:
+        raise ValueError(f"Unknown job type: {jobtype}")
+
+
+def _deletevpsnode(vps):
+    """Delete VPS container from node (Docker or Proxmox)."""
+    vpsUuid = vps['uuid']
+    node = db.getnodebyid(vps['nodeid'])
+    if not node:
+        return
+    nodeType = node.get('type', 'docker')
+    if nodeType == 'proxmox':
+        vmid = services.getvmidmapping(vpsUuid)
+        if vmid:
+            pve = services.getproxmoxclient(node)
+            node_name = node.get('proxmoxnode', 'pve')
+            services.pveclient.deletelxc(pve, node_name, vmid)
+            services.removevmidmapping(vpsUuid)
+    else:
+        services.nodeapi(node, f"/vps/{vpsUuid}", method="DELETE")
+
+
+def _jobworker():
+    """Background worker that processes queued jobs."""
+    while True:
+        try:
+            job = db.getnextpendingjob()
+            if not job:
+                time.sleep(2)
+                continue
+
+            db.updatejob(job['uuid'], status='running')
+
+            try:
+                _processjob(job)
+                db.updatejob(job['uuid'], status='completed')
+                auditlog(f"job.{job['type']}", "vps", job['vpsuuid'],
+                         f"Job {job['type']} completed for {job['vpsuuid']}")
+            except Exception as e:
+                db.updatejob(job['uuid'], status='failed', result=str(e))
+                auditlog(f"job.{job['type']}_failed", "vps", job['vpsuuid'],
+                         f"Job {job['type']} failed: {e}")
+                # Set VPS to error state if it was being created/provisioned
+                if job['type'] in ('provision', 'create', 'reinstall'):
+                    db.updatevps(job['vpsuuid'], status='error')
+
+        except Exception as e:
+            time.sleep(5)
+
+
+worker_thread = threading.Thread(target=_jobworker, daemon=True)
+worker_thread.start()
+
+
+def enqueuejob(vpsid, vpsuuid, userid, jobtype, payload=None):
+    """Create and enqueue a job. Returns the job UUID."""
+    jobuuid = str(uuid.uuid4())
+    payload_json = json.dumps(payload) if payload else None
+    db.addjob(uuid=jobuuid, vpsid=vpsid, vpsuuid=vpsuuid, userid=userid,
+              jobtype=jobtype, payload=payload_json)
+    return jobuuid
+
 # CSRF protection
 @app.before_request
 def csrfprotect():
@@ -384,14 +504,11 @@ def createvps():
 
             if isPaid:
                 return redirect(url_for('checkout', vpsUuid=vpsUuid))
-            
-            # Free VPS: provision on node immediately
-            try:
-                services.provisiononnode(vpsUuid)
-                flash("Free VPS is being created!", "success")
-            except ValueError as e:
-                db.updatevps(vpsUuid, status='error')
-                flash(f"VPS created but node provisioning failed: {e}", "error")
+
+            # Free VPS: enqueue provisioning
+            vpsRecord = db.getvps(vpsUuid)
+            enqueuejob(vpsRecord['id'], vpsUuid, g.userinfo["id"], 'provision')
+            flash("Free VPS is being created!", "success")
             
             return redirect(url_for('dashboard'))
         except Exception as e:
@@ -448,16 +565,20 @@ def processpayment():
     plan = db.getplanbyid(vps['planid'])
 
     if methodSlug == 'paypal':
+        base = config['paypal']['base_url'].rstrip('/')
         params = {
             "cmd": "_xclick",
             "business": config['paypal']['email'],
             "item_name": f"VPS: {plan['name']} ({vps['hostname']})",
             "amount": f"{plan['price']:.2f}",
             "currency_code": "USD",
-            "notify_url": f"{config['paypal']['base_url']}/paypal/ipn",
-            "return": f"{config['paypal']['base_url']}/vps/{vpsUuid}",
-            "cancel_return": f"{config['paypal']['base_url']}/checkout/{vpsUuid}",
-            "custom": vpsUuid
+            "notify_url": f"{base}/paypal/ipn",
+            "return": f"{base}/vps/{vpsUuid}",
+            "cancel_return": f"{base}/checkout/{vpsUuid}",
+            "custom": vpsUuid,
+            "rm": "1",
+            "no_note": "1",
+            "charset": "utf-8",
         }
         paypalRedirect = getpaypalurl() + "?" + urlencode(params)
         return redirect(paypalRedirect)
@@ -480,23 +601,25 @@ def processpayment():
 
     auditlog("payment.manual", "vps", vpsUuid, f"Manual payment of ${plan['price']:.2f} via {methodSlug}")
 
-    try:
-        services.provisiononnode(vpsUuid)
-        flash("Payment confirmed. VPS is being created!", "success")
-    except ValueError as e:
-        db.updatevps(vpsUuid, status='error')
-        flash(f"Payment confirmed but provisioning failed: {e}", "error")
-
+    enqueuejob(vps['id'], vpsUuid, vps['userid'], 'provision')
+    flash("Payment confirmed. VPS is being created!", "success")
     return redirect(url_for('dashboard'))
 
 @app.route("/paypal/ipn", methods=["POST"])
 def paypalipn():
+    app.logger.info("PayPal IPN received")
+
     # 1. Verify with PayPal
     verifyData = request.form.to_dict(flat=True)
     verifyData["cmd"] = "_notify-validate"
-    r = requests.post(getverifyurl(), data=verifyData, headers={"Connection": "close"})
+    try:
+        r = requests.post(getverifyurl(), data=verifyData, headers={"Connection": "close"}, timeout=15)
+    except Exception as e:
+        app.logger.error(f"PayPal IPN verification request failed: {e}")
+        return "Verification failed", 500
 
-    if r.text != "VERIFIED":
+    if r.text.strip() != "VERIFIED":
+        app.logger.warning(f"PayPal IPN not verified. Response: {r.text[:200]}")
         return "INVALID", 400
 
     # 2. Extract Data
@@ -506,23 +629,36 @@ def paypalipn():
     receiver = request.form.get("receiver_email")
     txnId = request.form.get("txn_id") or request.form.get("transaction_id")
 
+    app.logger.info(f"PayPal IPN: txn={txnId} status={paymentStatus} amount={amount} vps={vpsUuid}")
+
     # 3. Replay protection: reject if txn_id already processed
     if txnId and db.gettransactionbytxnid(txnId):
+        app.logger.info(f"PayPal IPN: already processed txn {txnId}")
         return "Already processed", 200
 
     # 4. Validation Logic
     vps = db.getvps(vpsUuid)
     if not vps:
+        app.logger.warning(f"PayPal IPN: VPS not found: {vpsUuid}")
         return "VPS not found", 400
-    
+
     plan = db.getplanbyid(vps['planid'])
 
     # Security Checks
     if paymentStatus != "Completed":
+        app.logger.info(f"PayPal IPN: payment not completed, status={paymentStatus}")
         return "Not completed", 200
-    if receiver.lower() != config['paypal']['email'].lower():
-        return "Wrong receiver", 400
+
+    # In sandbox, receiver_email may be the buyer's email, not merchant's
+    # Only check receiver in production
+    if not config['paypal']['sandbox'] and receiver:
+        paypal_email = config['paypal']['email'].lower()
+        if receiver.lower() != paypal_email:
+            app.logger.warning(f"PayPal IPN: receiver mismatch: {receiver} != {paypal_email}")
+            return "Wrong receiver", 400
+
     if float(amount) < float(plan['price']):
+        app.logger.warning(f"PayPal IPN: insufficient amount: {amount} < {plan['price']}")
         return "Insufficient amount", 400
 
     # 5. Success Action: Update Database
@@ -544,12 +680,13 @@ def paypalipn():
 
         auditlog("payment.paypal", "vps", vpsUuid, f"PayPal payment of ${amount} (txn: {txnId})")
 
-        try:
-            services.provisiononnode(vpsUuid)
-        except ValueError:
-            db.updatevps(vpsUuid, status='error')
+        enqueuejob(vps['id'], vpsUuid, vps['userid'], 'provision')
+        app.logger.info(f"PayPal IPN: payment processed, provisioning queued for {vpsUuid}")
+    else:
+        app.logger.info(f"PayPal IPN: VPS {vpsUuid} not in pendingpayment (status={vps['status']})")
 
     return "OK", 200
+
 
 @app.route("/vps/<vpsUuid>")
 @loginrequired
@@ -581,6 +718,7 @@ def vpspanel(vpsUuid):
         assignedIpv4=assignedIpv4,
         assignedIpv6=assignedIpv6,
         networkDns=networkDns,
+        reinstallImages=db.listimages(active=1),
         metrics_mode=config.get("console", {}).get("metrics", "dynamic"),
     )
 
@@ -590,6 +728,24 @@ def vpspanel(vpsUuid):
 # Action Routes (AJAX)
 #
 #############
+
+@app.route("/vps/<vpsUuid>/jobs")
+@loginrequired
+def vpsjobs(vpsUuid):
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        return jsonify({"error": "VPS not found"}), 404
+
+    isAdmin = g.userinfo.get('role') == 'admin'
+    if not isAdmin and vps["userid"] != g.userinfo["id"]:
+        return jsonify({"error": "VPS not found"}), 404
+
+    jobs = db.getrecentjobsforvps(vpsUuid, limit=5)
+    active = db.getactivejobforvps(vpsUuid)
+    return jsonify({
+        "active": active,
+        "jobs": jobs,
+    })
 
 @app.route("/vps/<vpsUuid>/action/<action>", methods=["POST"])
 @loginrequired
@@ -607,7 +763,7 @@ def vpsaction(vpsUuid, action):
     if not isAdmin and vps["userid"] != g.userinfo["id"]:
         flash("VPS not found.", "error")
         return redirect(url_for('dashboard'))
-    
+
     referer = request.headers.get('Referer', '')
     backUrl = url_for('adminvpspanel', vpsUuid=vpsUuid) if 'admin' in referer and isAdmin else url_for('vpspanel', vpsUuid=vpsUuid)
 
@@ -615,14 +771,61 @@ def vpsaction(vpsUuid, action):
         flash("This VPS is suspended.", "error")
         return redirect(backUrl)
 
-    try:
-        services.performvpsaction(vps["id"], action, actorUserId=g.userinfo["id"])
-        auditlog(f"vps.{action}", "vps", vpsUuid, f"VPS {action} on {vps['hostname']}")
-        flash(f"VPS {action} successful.", "success")
-    except ValueError as e:
-        flash(f"Action failed: {e}", "error")
+    if db.haspendingjobs(vpsUuid):
+        flash("This VPS already has a pending action.", "error")
+        return redirect(backUrl)
 
+    enqueuejob(vps['id'], vpsUuid, g.userinfo["id"], action)
+    auditlog(f"vps.{action}", "vps", vpsUuid, f"Queued {action} on {vps['hostname']}")
+    flash(f"VPS {action} queued.", "success")
     return redirect(backUrl)
+
+
+@app.route("/vps/<vpsUuid>/delete", methods=["POST"])
+@loginrequired
+def deletevps(vpsUuid):
+    vps = db.getvps(vpsUuid)
+    if not vps or vps["userid"] != g.userinfo["id"]:
+        flash("VPS not found.", "error")
+        return redirect(url_for('dashboard'))
+
+    if db.haspendingjobs(vpsUuid):
+        flash("This VPS has a pending action. Wait for it to complete.", "error")
+        return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
+
+    db.updatevps(vpsUuid, status='deleted')
+    enqueuejob(vps['id'], vpsUuid, g.userinfo["id"], 'delete')
+    auditlog("vps.delete", "vps", vpsUuid, f"Queued delete for {vps['hostname']}")
+    flash("VPS deletion queued.", "success")
+    return redirect(url_for('dashboard'))
+
+
+@app.route("/vps/<vpsUuid>/reinstall", methods=["POST"])
+@loginrequired
+def reinstallvps(vpsUuid):
+    vps = db.getvps(vpsUuid)
+    if not vps or vps["userid"] != g.userinfo["id"]:
+        flash("VPS not found.", "error")
+        return redirect(url_for('dashboard'))
+
+    plan = db.getplanbyid(vps['planid'])
+    if not plan or float(plan['price']) <= 0:
+        flash("Reinstall is only available for paid VPS.", "error")
+        return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
+
+    imageId = request.form.get("imageId", type=int)
+    if not imageId or not db.getimagebyid(imageId):
+        flash("Invalid OS image selected.", "error")
+        return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
+
+    if db.haspendingjobs(vpsUuid):
+        flash("This VPS has a pending action. Wait for it to complete.", "error")
+        return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
+
+    enqueuejob(vps['id'], vpsUuid, g.userinfo["id"], 'reinstall', payload={'imageId': imageId})
+    auditlog("vps.reinstall", "vps", vpsUuid, f"Queued reinstall for {vps['hostname']}")
+    flash("VPS reinstall queued. A new root password will be generated.", "success")
+    return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
 
 
 @app.route("/vps/<vpsUuid>/status")
@@ -1016,56 +1219,30 @@ def adminvpsdelete(vpsUuid):
         return redirect(url_for('adminvps'))
 
     force = request.form.get("force") == "1"
-    nodeError = None
 
-    # Try to delete on node
-    node = db.getnodebyid(vps['nodeid'])
-    if node:
-        nodeType = node.get('type', 'docker')
-        if nodeType == 'proxmox':
-            vmid = services.getvmidmapping(vpsUuid)
-            if vmid:
-                try:
-                    pve = services.getproxmoxclient(node)
-                    node_name = node.get('proxmoxnode', 'pve')
-                    services.pveclient.deletelxc(pve, node_name, vmid)
-                    services.removevmidmapping(vpsUuid)
-                except Exception as e:
-                    nodeError = str(e)
-            else:
-                nodeError = "VMID not found"
-        else:
-            result = services.nodeapi(node, f"/vps/{vpsUuid}", method="DELETE")
-            if not result:
-                nodeError = "Node unreachable"
-            elif result.get("error"):
-                nodeError = result['error']
-
-    if nodeError and not force:
-        flash(f"Node error: {nodeError}. Use Force Delete to remove from DB anyway.", "error")
-        return redirect(url_for('adminvpspanel', vpsUuid=vpsUuid))
-
-    # Release assigned IP
-    db.unassignipbyvpsid(vps['id'])
-
-    # Restore storage pool usage
-    if vps.get('storagepoolid') and vps.get('disk'):
-        db.increasestorageavailable(vps['storagepoolid'], vps['disk'])
-
-    # Restore plan stock
-    if vps.get('planid'):
+    if force:
+        # Force delete: just clean DB, skip node
+        db.unassignipbyvpsid(vps['id'])
+        if vps.get('storagepoolid') and vps.get('disk'):
+            db.increasestorageavailable(vps['storagepoolid'], vps['disk'])
+        if vps.get('planid'):
+            with db.getconnection() as conn:
+                conn.execute("UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock >= 0", (vps['planid'],))
         with db.getconnection() as conn:
-            conn.execute("UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock >= 0", (vps['planid'],))
+            conn.execute("DELETE FROM vps WHERE id = ?", (vps['id'],))
+        auditlog("vps.delete", "vps", vpsUuid, f"Admin force-deleted VPS {vps['hostname']}")
+        flash("VPS force-removed from DB.", "warning")
+    else:
+        db.updatevps(vpsUuid, status='deleted')
+        enqueuejob(vps['id'], vpsUuid, g.userinfo["id"], 'delete')
+        auditlog("vps.delete", "vps", vpsUuid, f"Admin queued delete for {vps['hostname']}")
+        flash("VPS deletion queued.", "success")
+
+    return redirect(url_for('adminvps'))
 
     # Remove from DB
     with db.getconnection() as conn:
         conn.execute("DELETE FROM vps WHERE id = ?", (vps['id'],))
-
-    auditlog("vps.delete", "vps", vpsUuid, f"Deleted VPS {vps['hostname']} (force={force}, node_error={nodeError})")
-    if nodeError:
-        flash(f"VPS removed from DB (node delete failed: {nodeError}).", "warning")
-    else:
-        flash("VPS deleted.", "success")
 
     return redirect(url_for('adminvps'))
 
@@ -1162,6 +1339,8 @@ def admincreatevps():
             if storagepoolid:
                 db.decreasestorageavailable(storagepoolid, plan['disk'])
             auditlog("vps.admin_create", "vps", vpsUuid, f"Admin created VPS {hostname} for user {userid}")
+            vpsRecord = db.getvps(vpsUuid)
+            enqueuejob(vpsRecord['id'], vpsUuid, userid, 'provision')
             flash(f"Instance {hostname} created successfully with {plan['name']} resources.", "success")
             return redirect(url_for('adminvps'))
             

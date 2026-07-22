@@ -477,6 +477,34 @@ CREATE TABLE IF NOT EXISTS settings (
     updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    vpsid INTEGER,
+    vpsuuid TEXT NOT NULL,
+    userid INTEGER NOT NULL,
+
+    type TEXT NOT NULL
+        CHECK(type IN ('create','delete','reinstall','start','stop','restart','provision')),
+
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','running','completed','failed')),
+
+    payload TEXT,
+    result TEXT,
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE CASCADE,
+    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idxjobsuuid ON jobs(uuid);
+CREATE INDEX IF NOT EXISTS idxjobsvps ON jobs(vpsuuid);
+CREATE INDEX IF NOT EXISTS idxjobsstatus ON jobs(status);
+
 """)
 
 conn.commit()

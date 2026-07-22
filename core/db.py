@@ -1395,3 +1395,53 @@ def getallsettings():
 def removesetting(key):
     with getconnection() as conn:
         conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+
+# --- JOB QUEUE FUNCTIONS ---
+
+def addjob(uuid, vpsid, vpsuuid, userid, jobtype, payload=None):
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO jobs (uuid, vpsid, vpsuuid, userid, type, status, payload)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        """, (uuid, vpsid, vpsuuid, userid, jobtype, payload))
+
+def getjob(uuid):
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE uuid = ?", (uuid,)).fetchone()
+        return dict(row) if row else None
+
+def getnextpendingjob():
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT * FROM jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1
+        """).fetchone()
+        return dict(row) if row else None
+
+def updatejob(uuid, **kwargs):
+    with getconnection() as conn:
+        keys = [f"{k} = ?" for k in kwargs.keys()]
+        values = list(kwargs.values()) + [uuid]
+        conn.execute(f"UPDATE jobs SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
+
+def getactivejobforvps(vpsuuid):
+    """Get the most recent non-completed job for a VPS."""
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT * FROM jobs WHERE vpsuuid = ? AND status IN ('pending', 'running')
+            ORDER BY id DESC LIMIT 1
+        """, (vpsuuid,)).fetchone()
+        return dict(row) if row else None
+
+def getrecentjobsforvps(vpsuuid, limit=5):
+    with getconnection() as conn:
+        rows = conn.execute("""
+            SELECT * FROM jobs WHERE vpsuuid = ? ORDER BY id DESC LIMIT ?
+        """, (vpsuuid, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+def haspendingjobs(vpsuuid):
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT COUNT(*) FROM jobs WHERE vpsuuid = ? AND status IN ('pending', 'running')
+        """, (vpsuuid,)).fetchone()
+        return row[0] > 0
