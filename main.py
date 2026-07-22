@@ -390,6 +390,7 @@ def createvps():
                 services.provisiononnode(vpsUuid)
                 flash("Free VPS is being created!", "success")
             except ValueError as e:
+                db.updatevps(vpsUuid, status='error')
                 flash(f"VPS created but node provisioning failed: {e}", "error")
             
             return redirect(url_for('dashboard'))
@@ -413,7 +414,7 @@ def checkout(vpsUuid):
         return redirect(url_for('dashboard'))
 
     plan = db.getplanbyid(vpsRecord['planid'])
-    methods = db.listallPaymentMethods() 
+    methods = db.listallpaymentmethods()
     
     # Pass it as checkoutVps to avoid collision with paneluserinfo['vps']
     return render_template(
@@ -483,6 +484,7 @@ def processpayment():
         services.provisiononnode(vpsUuid)
         flash("Payment confirmed. VPS is being created!", "success")
     except ValueError as e:
+        db.updatevps(vpsUuid, status='error')
         flash(f"Payment confirmed but provisioning failed: {e}", "error")
 
     return redirect(url_for('dashboard'))
@@ -545,7 +547,7 @@ def paypalipn():
         try:
             services.provisiononnode(vpsUuid)
         except ValueError:
-            pass
+            db.updatevps(vpsUuid, status='error')
 
     return "OK", 200
 

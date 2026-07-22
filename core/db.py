@@ -1007,7 +1007,7 @@ def addtransaction(uuid, userid, transactionid, amount, currency, status, paymen
                 INSERT INTO receipts (uuid, receiptnumber, transactionid, userid, amount, currency,
                                     taxamount, billingname, billingemail, billingaddress, notes)
                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)
-            """, (str(uuid.uuid4()), receiptNumber, txnId, userid, float(amount), currency,
+            """, (str(__import__('uuid').uuid4()), receiptNumber, txnId, userid, float(amount), currency,
                   user['username'] if user else None, user['email'] if user else None,
                   f"Auto-generated for transaction {transactionid}"))
 
