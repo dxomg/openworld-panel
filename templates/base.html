@@ -27,8 +27,9 @@
         {% include '_theme_dropdown.html' %}
         <a href="{{ url_for('login') }}" class="btn">Login</a>
 
-    {% elif request.endpoint in ['dashboard', 'createvps'] %}
+    {% elif request.endpoint in ['dashboard', 'createvps', 'tickets', 'viewticket', 'createticket', 'replyticket'] %}
         <a href="{{ url_for('dashboard') }}" class="btn {{ 'active' if request.endpoint == 'dashboard' else '' }}">Dashboard</a>
+        <a href="{{ url_for('tickets') }}" class="btn {{ 'active' if request.endpoint in ['tickets', 'viewticket'] else '' }}">Support</a>
         
         {% if g.userinfo and g.userinfo.get('role') == 'admin' %}
             <a href="{{ url_for('admindashboard') }}" class="btn">Admin Console</a>
@@ -51,57 +52,48 @@
 </button>
 <aside class="admin-sidebar" id="adminSidebar">
     <div class="sidebar-header">
-        <span class="sidebar-title">Admin</span>
-        <button class="sidebar-close" onclick="toggleSidebar()">&times;</button>
+        <span class="sidebar-title">ADMIN</span>
+        <button class="sidebar-close" onclick="window.location.href='{{ url_for('dashboard') }}'">&times;</button>
     </div>
     <nav class="sidebar-nav">
         <a href="{{ url_for('admindashboard') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admindashboard' else '' }}">
-            <span class="sidebar-icon">⊞</span> Infrastructure
+            <span class="sidebar-icon"><i data-lucide="layout-dashboard" aria-hidden="true"></i></span> Infrastructure
         </a>
         <a href="{{ url_for('adminusers') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminusers' else '' }}">
-            <span class="sidebar-icon">⊙</span> Users
+            <span class="sidebar-icon"><i data-lucide="users" aria-hidden="true"></i></span> Users
+        </a>
+        <a href="{{ url_for('admintickets') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admintickets' else '' }}">
+            <span class="sidebar-icon"><i data-lucide="messages-square" aria-hidden="true"></i></span> Tickets
         </a>
         <a href="{{ url_for('adminvps') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminvps' else '' }}">
-            <span class="sidebar-icon">▣</span> VPS
+            <span class="sidebar-icon"><i data-lucide="server" aria-hidden="true"></i></span> VPS
         </a>
         <div class="sidebar-divider"></div>
         <a href="{{ url_for('adminplans') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminplans' else '' }}">
-            <span class="sidebar-icon">◈</span> Plans
+            <span class="sidebar-icon"><i data-lucide="package-check" aria-hidden="true"></i></span> Plans
         </a>
-        <a href="{{ url_for('adminnodes') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminnodes' else '' }}">
-            <span class="sidebar-icon">⬡</span> Nodes
-        </a>
-        <a href="{{ url_for('adminnetworks') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminnetworks' else '' }}">
-            <span class="sidebar-icon">◎</span> Networks
-        </a>
-        <a href="{{ url_for('adminips') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminips' else '' }}">
-            <span class="sidebar-icon">◇</span> IPs
-        </a>
-        <a href="{{ url_for('adminstoragepools') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminstoragepools' else '' }}">
-            <span class="sidebar-icon">◉</span> Storage
-        </a>
-        <a href="{{ url_for('adminimagestorage') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminimagestorage' else '' }}">
-            <span class="sidebar-icon">▦</span> Image Storage
+        <a href="{{ url_for('adminnodes') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminnodes' or request.endpoint == 'adminnodeprofile' else '' }}">
+            <span class="sidebar-icon"><i data-lucide="network" aria-hidden="true"></i></span> Nodes
         </a>
         <a href="{{ url_for('adminosimage') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminosimage' else '' }}">
-            <span class="sidebar-icon">◎</span> Images
+            <span class="sidebar-icon"><i data-lucide="disc-3" aria-hidden="true"></i></span> Images
         </a>
         <div class="sidebar-divider"></div>
         <a href="{{ url_for('adminpaymentmethods') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminpaymentmethods' else '' }}">
-            <span class="sidebar-icon">◇</span> Payments
+            <span class="sidebar-icon"><i data-lucide="credit-card" aria-hidden="true"></i></span> Payments
         </a>
         <a href="{{ url_for('adminreceipts') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminreceipts' else '' }}">
-            <span class="sidebar-icon">◫</span> Receipts
+            <span class="sidebar-icon"><i data-lucide="receipt-text" aria-hidden="true"></i></span> Receipts
         </a>
         <a href="{{ url_for('admintransactions') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admintransactions' else '' }}">
-            <span class="sidebar-icon">⟷</span> Transactions
+            <span class="sidebar-icon"><i data-lucide="arrow-left-right" aria-hidden="true"></i></span> Transactions
         </a>
         <div class="sidebar-divider"></div>
         <a href="{{ url_for('adminauditlog') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminauditlog' else '' }}">
-            <span class="sidebar-icon">≡</span> Audit Log
+            <span class="sidebar-icon"><i data-lucide="clipboard-list" aria-hidden="true"></i></span> Audit Log
         </a>
         <a href="{{ url_for('adminsettings') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminsettings' else '' }}">
-            <span class="sidebar-icon">⚙</span> Settings
+            <span class="sidebar-icon"><i data-lucide="settings" aria-hidden="true"></i></span> Settings
         </a>
     </nav>
 </aside>
@@ -125,9 +117,16 @@
     <span>{{ projectname }}, made with love by Dxomg</span>
     <span class="footer-dot">·</span>
     <span>2026</span>
+    <span class="footer-dot">·</span>
+    <a href="{{ url_for('tos') }}" style="color: inherit; text-decoration: none; opacity: 0.8; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.8'">Terms of Service</a>
+    <span class="footer-dot">·</span>
+    <a href="{{ url_for('privacy') }}" style="color: inherit; text-decoration: none; opacity: 0.8; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.8'">Privacy Policy</a>
 </footer>
 
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 <script>
+    if (window.lucide) window.lucide.createIcons();
+
     function toggleMenu() {
         document.querySelector('.topnav').classList.toggle('is-open');
     }

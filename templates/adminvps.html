@@ -38,13 +38,6 @@
         align-items: flex-start;
     }
 
-    .vps-info-block {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        max-width: 70%;
-    }
-
     .vps-hostname {
         font-family: var(--font-mono);
         font-size: 16px;
@@ -130,16 +123,14 @@
   <a href="{{ url_for('adminvpspanel', vpsUuid=instance.uuid) }}" class="vps-card">
     
     <div class="vps-card-header">
-        <div class="vps-info-block">
+        <span>
             <span class="vps-hostname">
                 {{ instance.hostname }}
                 <span style="opacity: 0.3; font-size: 11px; font-weight: normal; margin-left: 4px;">#{{ instance.uuid[:8] }}</span>
-            </span>
-            <div class="vps-meta">
-                <div>Owner: <span style="color: var(--text-dim);">{{ instance.owner_name }}</span></div>
-                <div>{{ instance.ipv6 or instance.ipv4 or 'No IP assigned' }}</div>
-            </div>
-        </div>
+            </span><br>
+            <span class="vps-meta">Owner: <span style="color: var(--text-dim);">{{ instance.owner_name }}</span></span><br>
+            <span class="vps-meta">{{ instance.ipv6 or instance.ipv4 or 'No IP assigned' }}</span>
+        </span>
         
         <span class="status-pill {{ statusClass }}">
           <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}

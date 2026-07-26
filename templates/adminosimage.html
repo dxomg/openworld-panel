@@ -14,16 +14,25 @@
     }
     .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
     .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
+    .os-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 7px;
+        object-fit: contain;
+        padding: 6px;
+        background: var(--bg-raise);
+        border: 1px solid var(--border-soft);
+    }
     .img-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-        gap: 14px;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 10px;
     }
     .img-card {
         display: flex;
         flex-direction: column;
-        gap: 14px;
-        padding: 22px;
+        gap: 9px;
+        padding: 14px;
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: var(--radius);
@@ -37,45 +46,73 @@
     }
     .img-card-name {
         font-family: var(--font-mono);
-        font-size: 15px;
+        font-size: 13px;
         font-weight: 600;
         color: var(--text);
     }
     .img-card-tag {
         font-family: var(--font-mono);
-        font-size: 12px;
+        font-size: 11px;
         color: var(--text-dim);
-        margin-top: 3px;
+        margin-top: 2px;
     }
     .img-card-desc {
-        font-size: 13px;
+        font-size: 12px;
         color: var(--text-dim);
-        line-height: 1.5;
+        line-height: 1.35;
     }
     .img-specs {
         display: flex;
         flex-direction: column;
-        gap: 7px;
-        padding-top: 14px;
+        gap: 5px;
+        padding-top: 9px;
         border-top: 1px solid var(--border-soft);
     }
     .img-spec {
         display: flex;
         justify-content: space-between;
-        font-size: 12.5px;
+        font-size: 11px;
         font-family: var(--font-mono);
     }
     .img-spec .k { color: var(--text-dim); }
     .img-spec .v { color: var(--text); }
-    .proxmox-storage-field { display: none; }
-    .proxmox-storage-field.visible { display: block; }
+    .node-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 4px;
+    }
+    .node-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        background: rgba(59,130,246,0.1);
+        color: #60a5fa;
+        border: 1px solid rgba(59,130,246,0.3);
+    }
+    .node-pill .remove-btn {
+        cursor: pointer;
+        opacity: 0.6;
+        margin-left: 2px;
+        background: none;
+        border: 0;
+        color: inherit;
+        padding: 0;
+        font: inherit;
+        line-height: 1;
+    }
+    .node-pill .remove-btn:hover { opacity: 1; }
 </style>
 
 <div class="page">
     <section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>OS Images</h1>
-        <p>Manage operating system templates available for deployment.</p>
+        <p>Create OS images once, then assign them to nodes that have the template.</p>
 
         <div class="hero-stats">
             <div class="hero-stat">
@@ -115,9 +152,12 @@
         {% for img in allImages %}
         <div class="img-card" style="opacity: {{ '1' if img.active else '0.6' }};">
             <div class="img-card-head">
-                <div>
-                    <div class="img-card-name">{{ img.name }}</div>
-                    <div class="img-card-tag">{{ img.image }}</div>
+                <div style="display: flex; gap: 10px; align-items: flex-start; min-width: 0;">
+                    <img class="os-icon" src="{{ img.os_meta.icon }}" alt="{{ img.os_meta.name }} logo">
+                    <div style="min-width: 0;">
+                        <div class="img-card-name">{{ img.name }}</div>
+                        <div class="img-card-tag">{{ img.os_type|default('linux') }} &middot; {{ img.image }}</div>
+                    </div>
                 </div>
                 <span class="type-badge type-{{ img.node_type|default('docker') }}">
                     {{ img.node_type|default('docker')|upper }}
@@ -133,19 +173,36 @@
                     <span class="k">Status</span>
                     <span class="v" style="color: {{ 'var(--accent)' if img.active else 'var(--text-dim)' }};">{{ 'Active' if img.active else 'Hidden' }}</span>
                 </div>
-                {% if img.storage_name %}
                 <div class="img-spec">
-                    <span class="k">Image Storage</span>
-                    <span class="v" style="color: var(--accent);">{{ img.storage_name }}{% if img.storage_node_name %} ({{ img.storage_node_name }}){% endif %}</span>
+                    <span class="k">Assigned Nodes</span>
+                    <span class="v">{{ img.node_count }}</span>
                 </div>
-                {% endif %}
                 <div class="img-spec">
                     <span class="k">Instances</span>
                     <span class="v">{{ img.vps_count }}</span>
                 </div>
             </div>
 
-            <div style="display: flex; gap: 8px; margin-top: auto; padding-top: 14px; border-top: 1px solid var(--border-soft);">
+            <!-- Assigned Nodes -->
+            <div style="padding-top: 6px;">
+                <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 5px;">NODES</div>
+                <div class="node-pills">
+                    {% for n in img.assigned_nodes %}
+                    <span class="node-pill">
+                        {{ n.name }}
+                        <form class="inline-form" action="{{ url_for('adminosimageunassign', imageUuid=img.uuid) }}" method="POST" style="display:inline;">
+                            <input type="hidden" name="nodeid" value="{{ n.id }}">
+                            <button type="submit" class="remove-btn" aria-label="Unassign {{ n.name }}">&times;</button>
+                        </form>
+                    </span>
+                    {% else %}
+                    <span style="font-size: 11px; color: var(--text-dim);">None</span>
+                    {% endfor %}
+                </div>
+                <button class="btn btn-small" style="margin-top: 6px;" onclick="openAssignModal('{{ {'uuid': img.uuid, 'name': img.name, 'node_type': img.node_type}|tojson|forceescape }}')">+ Assign to Node</button>
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-top: auto; padding-top: 9px; border-top: 1px solid var(--border-soft);">
                 <button class="btn btn-small" onclick="openEditModal('{{ img|tojson|forceescape }}')">Edit</button>
                 <form action="{{ url_for('adminosimagedelete', imageUuid=img.uuid) }}" method="POST" onsubmit="return confirm('Delete this image?');">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
@@ -175,7 +232,7 @@
     <div class="empty-state">
         <div class="glyph">&#x1F4BF;</div>
         <h3>No OS Images Found</h3>
-        <p>Add your first OS image to allow users to deploy instances.</p>
+        <p>Add your first OS image, then assign it to nodes that have the template.</p>
     </div>
     {% endif %}
 </div>
@@ -197,31 +254,27 @@
                 <input type="text" name="image" required placeholder="ubuntu-22.04 or ubuntu-24.04-standard.tar.zst">
                 <span class="hint">Docker: image tag. Proxmox: template filename.</span>
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                <div class="field">
-                    <label>Platform</label>
-                    <select name="node_type" onchange="toggleStorageField(this, 'add')">
-                        <option value="docker">Docker</option>
-                        <option value="proxmox">Proxmox</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label>Status</label>
-                    <select name="active">
-                        <option value="1">Active</option>
-                        <option value="0">Hidden</option>
-                    </select>
-                </div>
-            </div>
-            <div class="field proxmox-storage-field" id="add_storage_field">
-                <label>Image Storage</label>
-                <select name="imagestorageid">
-                    <option value="">None (use node default)</option>
-                    {% for store in allImageStorages %}
-                    <option value="{{ store.id }}">{{ store.name }} ({{ store.node_name }})</option>
+            <div class="field">
+                <label>OS Type</label>
+                <select name="os_type">
+                    {% for key, os in osTypes.items() %}
+                    <option value="{{ key }}">{{ os.name }}</option>
                     {% endfor %}
                 </select>
-                <span class="hint">Which Proxmox storage holds this template file.</span>
+            </div>
+            <div class="field">
+                <label>Platform</label>
+                <select name="node_type">
+                    <option value="docker">Docker</option>
+                    <option value="proxmox">Proxmox</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Status</label>
+                <select name="active">
+                    <option value="1">Active</option>
+                    <option value="0">Hidden</option>
+                </select>
             </div>
             <div class="field">
                 <label>Description</label>
@@ -252,31 +305,27 @@
                 <label>Image Tag / Path</label>
                 <input type="text" name="image" id="edit_image" required>
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                <div class="field">
-                    <label>Platform</label>
-                    <select name="node_type" id="edit_node_type" onchange="toggleStorageField(this, 'edit')">
-                        <option value="docker">Docker</option>
-                        <option value="proxmox">Proxmox</option>
-                    </select>
-                </div>
-                <div class="field">
-                    <label>Status</label>
-                    <select name="active" id="edit_active">
-                        <option value="1">Active</option>
-                        <option value="0">Hidden</option>
-                    </select>
-                </div>
-            </div>
-            <div class="field proxmox-storage-field" id="edit_storage_field">
-                <label>Image Storage</label>
-                <select name="imagestorageid" id="edit_imagestorageid">
-                    <option value="">None (use node default)</option>
-                    {% for store in allImageStorages %}
-                    <option value="{{ store.id }}">{{ store.name }} ({{ store.node_name }})</option>
+            <div class="field">
+                <label>OS Type</label>
+                <select name="os_type" id="edit_os_type">
+                    {% for key, os in osTypes.items() %}
+                    <option value="{{ key }}">{{ os.name }}</option>
                     {% endfor %}
                 </select>
-                <span class="hint">Which Proxmox storage holds this template file.</span>
+            </div>
+            <div class="field">
+                <label>Platform</label>
+                <select name="node_type" id="edit_node_type">
+                    <option value="docker">Docker</option>
+                    <option value="proxmox">Proxmox</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Status</label>
+                <select name="active" id="edit_active">
+                    <option value="1">Active</option>
+                    <option value="0">Hidden</option>
+                </select>
             </div>
             <div class="field">
                 <label>Description</label>
@@ -291,35 +340,114 @@
     </div>
 </div>
 
+<!-- ===== Assign to Node Modal ===== -->
+<div id="assignModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Assign to Node</h3>
+            <button type="button" class="modal-close" onclick="closeModal('assignModal')">&times;</button>
+        </div>
+        <form id="assignForm" action="" method="POST">
+            <div class="field">
+                <label>Image</label>
+                <input type="text" id="assign_image_name" disabled>
+            </div>
+            <div class="field">
+                <label>Node</label>
+                <select name="nodeid" id="assign_node_select" required onchange="loadStorageForNode(this.value)">
+                    <option value="">Select a node...</option>
+                    {% for n in allNodes %}
+                    <option value="{{ n.id }}" data-type="{{ n.type }}">{{ n.name }} ({{ n.type|upper }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field" id="assign_storage_field" style="display: none;">
+                <label>Image Storage</label>
+                <select name="imagestorageid" id="assign_storage_select">
+                    <option value="">Loading...</option>
+                </select>
+                <span class="hint">Which storage on this node holds the template.</span>
+            </div>
+
+            <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+                <button type="button" onclick="closeModal('assignModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Assign</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
+    const STORAGE_URL = "{{ url_for('adminosimagestorages', nodeId=0) }}";
+    const ASSIGN_URL = "{{ url_for('adminosimageassign', imageUuid='UUID') }}";
+    const UPDATE_URL = "{{ url_for('adminosimageupdate', imageUuid='UUID') }}";
+
     function openModal(id) { document.getElementById(id).classList.add('is-open'); }
     function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
 
-    function toggleStorageField(selectEl, prefix) {
-        var field = document.getElementById(prefix + '_storage_field');
-        if (selectEl.value === 'proxmox') {
-            field.classList.add('visible');
-        } else {
-            field.classList.remove('visible');
+    function openAssignModal(imgData) {
+        const img = JSON.parse(imgData);
+        document.getElementById('assign_image_name').value = img.name;
+        document.getElementById('assignForm').action = ASSIGN_URL.replace('UUID', img.uuid);
+
+        const nodeSelect = document.getElementById('assign_node_select');
+        nodeSelect.value = '';
+        document.getElementById('assign_storage_field').style.display = 'none';
+
+        // Only show nodes matching image type, hide others
+        Array.from(nodeSelect.options).forEach((opt, i) => {
+            if (i === 0) return;
+            opt.style.display = opt.dataset.type === img.node_type ? '' : 'none';
+        });
+
+        openModal('assignModal');
+    }
+
+    function loadStorageForNode(nodeId) {
+        const storageField = document.getElementById('assign_storage_field');
+        const storageSelect = document.getElementById('assign_storage_select');
+
+        if (!nodeId) {
+            storageField.style.display = 'none';
+            return;
         }
+
+        // Check if selected node is proxmox
+        const opt = document.getElementById('assign_node_select').selectedOptions[0];
+        if (!opt || opt.dataset.type !== 'proxmox') {
+            storageField.style.display = 'none';
+            return;
+        }
+
+        storageField.style.display = '';
+        storageSelect.innerHTML = '<option value="">Loading...</option>';
+
+        fetch(STORAGE_URL.replace('/0', '/' + nodeId))
+            .then(r => r.json())
+            .then(data => {
+                storageSelect.innerHTML = '<option value="">None (use node default)</option>';
+                data.forEach(s => {
+                    const o = document.createElement('option');
+                    o.value = s.id;
+                    o.textContent = s.name;
+                    storageSelect.appendChild(o);
+                });
+            })
+            .catch(() => {
+                storageSelect.innerHTML = '<option value="">Failed to load</option>';
+            });
     }
 
     function openEditModal(imgData) {
         const img = JSON.parse(imgData);
         const form = document.getElementById('editImageForm');
-
-        let baseUrl = "{{ url_for('adminosimageupdate', imageUuid='UUID_PLACEHOLDER') }}";
-        form.action = baseUrl.replace('UUID_PLACEHOLDER', img.uuid);
-
+        form.action = UPDATE_URL.replace('UUID', img.uuid);
         document.getElementById('edit_name').value = img.name;
         document.getElementById('edit_image').value = img.image;
         document.getElementById('edit_description').value = img.description || "";
         document.getElementById('edit_active').value = img.active ? "1" : "0";
         document.getElementById('edit_node_type').value = img.node_type || "docker";
-        document.getElementById('edit_imagestorageid').value = img.imagestorageid || "";
-
-        toggleStorageField(document.getElementById('edit_node_type'), 'edit');
-
+        document.getElementById('edit_os_type').value = img.os_type || "linux";
         openModal('editImageModal');
     }
 </script>

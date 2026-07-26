@@ -3,6 +3,65 @@
 {% block title %}User Management - {{ projectname }}{% endblock %}
 
 {% block content %}
+<style>
+    /* Mobile-friendly user cards */
+    @media (max-width: 768px) {
+        .vps-grid {
+            grid-template-columns: 1fr !important;
+            gap: 16px;
+        }
+        
+        .vps-card {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            padding: 16px;
+        }
+        
+        .vps-card .vps-id {
+            margin-bottom: 8px;
+        }
+        
+        .vps-card .vps-hostname {
+            font-size: 15px;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+        
+        .vps-card .vps-meta {
+            font-size: 10px !important;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            white-space: normal !important;
+            line-height: 1.5;
+            max-width: 100%;
+        }
+        
+        .vps-card .btn-row {
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-soft);
+        }
+        
+        .vps-card .btn-row .btn,
+        .vps-card .btn-row form {
+            width: 100%;
+        }
+        
+        .vps-card .btn-row form {
+            display: block !important;
+        }
+        
+        .vps-card .btn-row .btn {
+            width: 100%;
+            text-align: center;
+            padding: 10px 16px;
+        }
+    }
+</style>
+
 <div class="page">
     <!-- ===== Admin Hero Section ===== -->
     <section class="hero">

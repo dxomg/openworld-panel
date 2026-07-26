@@ -21,6 +21,7 @@
   </div>
 
   <div class="btn-row">
+    {% if instance.status != 'suspended' %}
     {% if instance.status == 'running' and (assignedIpv4 or assignedIpv6) %}
     <button type="button" class="btn btn-console btn-small" onclick="openConsole('{{ instance.uuid }}')">&#9000; Console</button>
     {% endif %}
@@ -37,6 +38,24 @@
       <button type="submit" class="btn btn-danger btn-small">&#9632; Stop</button>
     </form>
 
+    <button type="button" class="btn btn-small" onclick="openModal('reinstallModal')">&#8635; Reinstall</button>
+
+    {% if instance.node_type == 'proxmox' %}
+    <form method="POST" action="/vps/{{ instance.uuid }}/action/enable-tun" style="display:inline;" id="enableTunForm">
+      <button type="button" onclick="openModal('tunWarningModal')" class="btn btn-small">Enable TUN</button>
+    </form>
+    {% endif %}
+
+    <form method="POST" action="{{ url_for('adminvpssuspend', vpsUuid=instance.uuid) }}" style="display:inline;">
+      <input type="hidden" name="reason" value="Suspended by admin">
+      <button type="submit" class="btn btn-danger btn-small" onclick="return confirm('Suspend this VPS? It will be stopped and user actions will be disabled.');">Suspend</button>
+    </form>
+    {% else %}
+    <form method="POST" action="{{ url_for('adminvpsunsuspend', vpsUuid=instance.uuid) }}" style="display:inline;">
+      <button type="submit" class="btn btn-primary btn-small">Unsuspend</button>
+    </form>
+    {% endif %}
+
     <form method="POST" action="{{ url_for('adminvpsdelete', vpsUuid=instance.uuid) }}" style="display:inline;" onsubmit="return confirm('DELETE this VPS? This will destroy the container and remove it from the database.');">
       <button type="submit" class="btn btn-danger btn-small">Delete</button>
     </form>
@@ -48,6 +67,59 @@
   </div>
 </div>
 
+{% if suspension %}
+<div class="panel" style="margin: 0 0 20px 0; border-color: var(--danger);">
+  <h3>Suspension</h3>
+  <p>{{ suspension.reason }}</p>
+  <span class="hint">Suspended at {{ suspension.created }}</span>
+</div>
+{% endif %}
+
+<div id="reinstallModal" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <h3>Reinstall {{ instance.hostname }}</h3>
+      <button type="button" class="modal-close" onclick="closeModal('reinstallModal')">&times;</button>
+    </div>
+    <form method="POST" action="{{ url_for('reinstallvps', vpsUuid=instance.uuid) }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+      <div class="field">
+        <label>Operating System</label>
+        <select name="imageId" required>
+          {% for img in reinstallImages %}
+          <option value="{{ img.id }}" {% if img.id == instance.imageid %}selected{% endif %}>{{ img.name }}</option>
+          {% endfor %}
+        </select>
+        <span class="hint">Select the OS image for the reinstallation.</span>
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+        <button type="button" onclick="closeModal('reinstallModal')" class="btn">Cancel</button>
+        <button type="submit" class="btn btn-primary" onclick="return confirm('Reinstall {{ instance.hostname }}? A new root password will be generated. This cannot be undone.');">Reinstall</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="tunWarningModal" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <h3>Enable TUN/TAP</h3>
+      <button type="button" class="modal-close" onclick="closeModal('tunWarningModal')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p>Enabling TUN will restart this VPS. Required for VPN support. Continue?</p>
+    </div>
+    <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+      <button type="button" onclick="closeModal('tunWarningModal')" class="btn">Cancel</button>
+      <button type="button" onclick="document.getElementById('enableTunForm').submit(); closeModal('tunWarningModal');" class="btn btn-primary">Enable TUN</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function openModal(id) { document.getElementById(id).classList.add('is-open'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+</script>
 
 <div class="detail-grid">
 
@@ -112,7 +184,17 @@
 
         <div class="kv-row">
           <span class="k">OS Image</span>
-          <span class="v">{{ instance.image_name or instance.image }}</span>
+          <span class="v" style="display: flex; align-items: center; gap: 8px;">
+            {% if instance.os_meta and instance.os_meta.icon %}
+            <img src="{{ instance.os_meta.icon }}" alt="{{ instance.os_meta.name }}" style="width: 20px; height: 20px; object-fit: contain;">
+            {% endif %}
+            <span>{{ instance.image_name or instance.image }}</span>
+          </span>
+        </div>
+
+        <div class="kv-row">
+          <span class="k">Node Type</span>
+          <span class="v">{{ instance.node_type|capitalize }}</span>
         </div>
 
         <div class="kv-row">
@@ -250,15 +332,18 @@
     var consoleBody = document.getElementById('consoleBody');
     var consoleTitle = document.getElementById('consoleTitle');
     var consoleIframe = null;
+    var consoleIps = [
+        {% if assignedIpv6 %}{label: 'IPv6', ip: {{ assignedIpv6|tojson }}},{% endif %}
+        {% if assignedIpv4 %}{label: 'IPv4', ip: {{ assignedIpv4|tojson }}},{% endif %}
+    ];
 
-    window.openConsole = function(vpsUuid) {
-        consoleModal.classList.add('is-open');
+    function connectConsole(vpsUuid, ip) {
         consoleBody.innerHTML = '<div class="console-loading">Initializing...</div>';
-
         function getCookie(n){var m=document.cookie.match('(^| )'+n+'=([^;]+)');return m?m[2]:null;}
         fetch('/vps/' + vpsUuid + '/console/token', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token') || ''}
+            headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrf_token') || ''},
+            body: JSON.stringify({ip: ip})
         })
         .then(function(r) {
             if (!r.ok) throw new Error('Failed (' + r.status + ')');
@@ -266,7 +351,7 @@
         })
         .then(function(data) {
             if (data.error) throw new Error(data.error);
-            consoleTitle.textContent = 'Console \u2014 {{ assignedIpv4 or assignedIpv6 or "VPS" }}';
+            consoleTitle.textContent = 'Console \u2014 ' + ip;
 
             consoleIframe = document.createElement('iframe');
             consoleIframe.className = 'console-iframe';
@@ -280,6 +365,24 @@
             div.className = 'console-loading error';
             div.textContent = err.message || 'Connection failed';
             consoleBody.appendChild(div);
+        });
+    }
+
+    window.openConsole = function(vpsUuid) {
+        consoleModal.classList.add('is-open');
+        if (consoleIps.length < 2) {
+            connectConsole(vpsUuid, consoleIps[0] && consoleIps[0].ip);
+            return;
+        }
+        consoleTitle.textContent = 'Choose SSH IP';
+        consoleBody.innerHTML = '';
+        consoleIps.forEach(function(item) {
+            var btn = document.createElement('button');
+            btn.className = 'btn btn-small';
+            btn.style.margin = '8px';
+            btn.textContent = item.label + ' - ' + item.ip;
+            btn.onclick = function() { connectConsole(vpsUuid, item.ip); };
+            consoleBody.appendChild(btn);
         });
     };
 

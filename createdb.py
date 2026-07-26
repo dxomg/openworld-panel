@@ -58,8 +58,7 @@ CREATE TABLE IF NOT EXISTS plans (
     swap INTEGER NOT NULL,
     disk INTEGER NOT NULL,
 
-    readbps INTEGER NOT NULL DEFAULT 0,
-    writebps INTEGER NOT NULL DEFAULT 0,
+    netmbps INTEGER NOT NULL DEFAULT 0,
 
     ipv4 INTEGER NOT NULL DEFAULT 0,
     ipv6 INTEGER NOT NULL DEFAULT 1,
@@ -67,6 +66,9 @@ CREATE TABLE IF NOT EXISTS plans (
     price REAL NOT NULL DEFAULT 0,
 
     stock INTEGER NOT NULL DEFAULT -1,
+
+    node_type TEXT NOT NULL DEFAULT 'docker'
+        CHECK(node_type IN ('docker', 'proxmox')),
 
     active INTEGER NOT NULL DEFAULT 1
         CHECK(active IN (0,1)),
@@ -81,20 +83,34 @@ CREATE TABLE IF NOT EXISTS images (
 
     name TEXT NOT NULL,
     image TEXT NOT NULL,
+    os_type TEXT NOT NULL DEFAULT 'linux',
     description TEXT,
 
     node_type TEXT NOT NULL DEFAULT 'docker'
         CHECK(node_type IN ('docker', 'proxmox')),
 
-    imagestorageid INTEGER,
-
     active INTEGER NOT NULL DEFAULT 1
         CHECK(active IN (0,1)),
 
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-    FOREIGN KEY(imagestorageid) REFERENCES imagestorage(id) ON DELETE SET NULL
+CREATE TABLE IF NOT EXISTS node_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    nodeid INTEGER NOT NULL,
+    imageid INTEGER NOT NULL,
+
+    imagestorageid INTEGER,
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY(imageid) REFERENCES images(id) ON DELETE CASCADE,
+    FOREIGN KEY(imagestorageid) REFERENCES imagestorage(id) ON DELETE SET NULL,
+    UNIQUE(nodeid, imageid)
 );
 
 CREATE TABLE IF NOT EXISTS nodes (
@@ -120,7 +136,6 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     cpu INTEGER NOT NULL,
     ram INTEGER NOT NULL,
-    disk INTEGER NOT NULL,
 
     proxmoxhost TEXT,
     proxmoxuser TEXT,
@@ -218,7 +233,28 @@ CREATE TABLE IF NOT EXISTS proxmox_networks (
     FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS networkips (
+CREATE TABLE IF NOT EXISTS networkipv4 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+
+    networkid INTEGER NOT NULL,
+    network_type TEXT NOT NULL DEFAULT 'docker'
+        CHECK(network_type IN ('docker', 'proxmox')),
+
+    ip TEXT NOT NULL,
+
+    assigned INTEGER NOT NULL DEFAULT 0
+        CHECK(assigned IN (0,1)),
+
+    vpsid INTEGER,
+
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE SET NULL,
+    UNIQUE(networkid, network_type, ip)
+);
+
+CREATE TABLE IF NOT EXISTS networkipv6 (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL,
 
@@ -403,6 +439,10 @@ CREATE INDEX IF NOT EXISTS idxplansuuid ON plans(uuid);
 
 CREATE INDEX IF NOT EXISTS idximagesuuid ON images(uuid);
 
+CREATE INDEX IF NOT EXISTS idxnodeimagesuuid ON node_images(uuid);
+CREATE INDEX IF NOT EXISTS idxnodeimagesnode ON node_images(nodeid);
+CREATE INDEX IF NOT EXISTS idxnodeimagesimage ON node_images(imageid);
+
 CREATE INDEX IF NOT EXISTS idxnodesuuid ON nodes(uuid);
 CREATE INDEX IF NOT EXISTS idxnodestier ON nodes(tier);
 
@@ -415,8 +455,10 @@ CREATE INDEX IF NOT EXISTS idxdockernetnode ON docker_networks(nodeid);
 CREATE INDEX IF NOT EXISTS idxproxnetuuid ON proxmox_networks(uuid);
 CREATE INDEX IF NOT EXISTS idxproxnetnode ON proxmox_networks(nodeid);
 
-CREATE INDEX IF NOT EXISTS idxnetworkipuuid ON networkips(uuid);
-CREATE INDEX IF NOT EXISTS idxnetworkipnet ON networkips(networkid, network_type);
+CREATE INDEX IF NOT EXISTS idxnetworkipv4uuid ON networkipv4(uuid);
+CREATE INDEX IF NOT EXISTS idxnetworkipv4net ON networkipv4(networkid, network_type);
+CREATE INDEX IF NOT EXISTS idxnetworkipv6uuid ON networkipv6(uuid);
+CREATE INDEX IF NOT EXISTS idxnetworkipv6net ON networkipv6(networkid, network_type);
 
 CREATE INDEX IF NOT EXISTS idxvpsuuid ON vps(uuid);
 CREATE INDEX IF NOT EXISTS idxvpsuser ON vps(userid);
@@ -486,7 +528,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     userid INTEGER NOT NULL,
 
     type TEXT NOT NULL
-        CHECK(type IN ('create','delete','reinstall','start','stop','restart','provision')),
+        CHECK(type IN ('create','delete','reinstall','start','stop','restart','provision','enable_tun')),
 
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK(status IN ('pending','running','completed','failed')),
@@ -504,6 +546,39 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idxjobsuuid ON jobs(uuid);
 CREATE INDEX IF NOT EXISTS idxjobsvps ON jobs(vpsuuid);
 CREATE INDEX IF NOT EXISTS idxjobsstatus ON jobs(status);
+
+CREATE TABLE IF NOT EXISTS tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+    userid INTEGER NOT NULL,
+    subject TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK(status IN ('open','replied','closed')),
+    priority TEXT NOT NULL DEFAULT 'normal'
+        CHECK(priority IN ('low','normal','high')),
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS ticket_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticketid INTEGER NOT NULL,
+    userid INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    is_staff INTEGER NOT NULL DEFAULT 0
+        CHECK(is_staff IN (0,1)),
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY(ticketid) REFERENCES tickets(id) ON DELETE CASCADE,
+    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idxticketsuuid ON tickets(uuid);
+CREATE INDEX IF NOT EXISTS idxticketsuser ON tickets(userid);
+CREATE INDEX IF NOT EXISTS idxticketsstatus ON tickets(status);
+CREATE INDEX IF NOT EXISTS idxticketmsgticket ON ticket_messages(ticketid);
 
 """)
 

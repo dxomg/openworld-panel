@@ -37,6 +37,55 @@
         font-size: 0.9rem;
         color: #888;
     }
+    .image-choice-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 10px;
+    }
+    .image-choice {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-raise);
+        cursor: pointer;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .image-choice:hover {
+        border-color: var(--accent-dim);
+    }
+    .image-choice input {
+        display: none;
+    }
+    .image-choice:has(input:checked) {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .image-choice img {
+        width: 34px;
+        height: 34px;
+        padding: 6px;
+        object-fit: contain;
+        border-radius: 7px;
+        background: var(--panel);
+        border: 1px solid var(--border-soft);
+        flex: 0 0 auto;
+    }
+    .image-choice-name {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--text);
+    }
+    .image-choice-meta {
+        margin-top: 2px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--text-dim);
+        text-transform: uppercase;
+    }
 </style>
 
 <div class="page">
@@ -77,14 +126,13 @@
                     <div class="plan-spec"><span class="k">vCPU</span><span class="v">{{ plan.cpu }} vCore</span></div>
                     <div class="plan-spec"><span class="k">Memory</span><span class="v">{{ plan.ram }} MB</span></div>
                     <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} MB</span></div>
-                    {% if plan.readbps or plan.writebps %}
+                    <div class="plan-spec"><span class="k">Node Type</span><span class="v">{{ plan.node_type|capitalize }}</span></div>
                     <div class="plan-spec">
-                        <span class="k">Disk I/O</span>
-                        <span class="v">{% if plan.readbps %}R {{ plan.readbps }} Mbps{% endif %}{% if plan.readbps and plan.writebps %} / {% endif %}{% if plan.writebps %}W {{ plan.writebps }} Mbps{% endif %}</span>
+                        <span class="k">Network Speed</span>
+                        <span class="v">{% if plan.netmbps %}{{ plan.netmbps }} Mbps{% else %}Unlimited{% endif %}</span>
                     </div>
-                    {% endif %}
                     <div class="plan-spec">
-                        <span class="k">Network</span>
+                        <span class="k">IP</span>
                         <span class="v">{% if plan.ipv4 %}IPv4 + {% endif %}IPv6</span>
                     </div>
                     <div class="plan-spec">
@@ -131,12 +179,18 @@
 
             <div class="field">
                 <label>Operating System (Image)</label>
-                <select name="imageId" required style="width: 100%; padding: 12px; border-radius: 8px; background: #222; border: 1px solid #444; color: white;">
-                    <option value="" disabled selected>Select an OS image...</option>
+                <div class="image-choice-grid">
                     {% for img in images %}
-                        <option value="{{ img.id }}">{{ img.name }}</option>
+                    <label class="image-choice">
+                        <input type="radio" name="imageId" value="{{ img.id }}" required>
+                        <img src="{{ img.os_meta.icon }}" alt="{{ img.os_meta.name }} logo">
+                        <span>
+                            <span class="image-choice-name">{{ img.name }}</span>
+                            <span class="image-choice-meta">{{ img.os_meta.name }} · {{ img.node_type|default('docker') }}</span>
+                        </span>
+                    </label>
                     {% endfor %}
-                </select>
+                </div>
                 <p style="margin-top: 10px; font-size: 0.8rem; color: #666;">
                     Hostname and password will be generated automatically and shown after deployment.
                 </p>

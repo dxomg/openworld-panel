@@ -51,6 +51,13 @@ def getlxcstatus(pve, node_name, vmid):
     return pve.nodes(node_name).lxc(vmid).status.current.get()
 
 
+def getlxcstats(pve, node_name, vmid):
+    status = getlxcstatus(pve, node_name, vmid)
+    rrd = pve.nodes(node_name).lxc(vmid).rrddata.get(timeframe='hour', cf='AVERAGE')
+    latest = rrd[-1] if rrd else {}
+    return {**status, "netin": latest.get("netin", 0) or 0, "netout": latest.get("netout", 0) or 0}
+
+
 def getlxcconfig(pve, node_name, vmid):
     return pve.nodes(node_name).lxc(vmid).config.get()
 

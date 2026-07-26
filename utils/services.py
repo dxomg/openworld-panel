@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from core import db
 from utils import proxmox as pveclient
+import paramiko
 
 # --- AUTH & SESSION SERVICES ---
 
@@ -157,7 +158,7 @@ def provisionvps(userId, planId, imageId, hostname):
     with db.getconnection() as conn:
         plan = conn.execute("SELECT * FROM plans WHERE id = ?", (planId,)).fetchone()
         image = conn.execute("SELECT * FROM images WHERE id = ?", (imageId,)).fetchone()
-        node = conn.execute("SELECT * FROM nodes WHERE status = 'online' AND ram >= ? LIMIT 1", (plan['ram'],)).fetchone()
+        node = conn.execute("SELECT * FROM nodes WHERE status = 'online' AND type = ? AND ram >= ? LIMIT 1", (plan['node_type'], plan['ram'],)).fetchone()
         storage = conn.execute("SELECT * FROM storagepools WHERE nodeid = ? LIMIT 1", (node['id'],)).fetchone()
 
     if not node or not storage:
@@ -196,15 +197,17 @@ def getvpsdetails(vpsId):
     """Gets full VPS info including node and plan details."""
     with db.getconnection() as conn:
         query = """
-            SELECT v.*, p.name as plan_name, p.price as plan_price, p.readbps, p.writebps,
-                   n.address as node_ip, n.url as node_url, n.apikey as node_apikey,
-                   i.name as image_name, i.image as image_path, i.imagestorageid,
+            SELECT v.*, p.name as plan_name, p.price as plan_price, p.netmbps, p.ipv4 as plan_ipv4, p.ipv6 as plan_ipv6, p.node_type as plan_node_type,
+                   n.address as node_ip, n.url as node_url, n.apikey as node_apikey, n.type as node_type,
+                   i.name as image_name, i.image as image_path, i.os_type,
+                   ni.imagestorageid,
                    ist.name as image_storage_name
             FROM vps v
             JOIN plans p ON v.planid = p.id
             JOIN nodes n ON v.nodeid = n.id
             JOIN images i ON v.imageid = i.id
-            LEFT JOIN imagestorage ist ON i.imagestorageid = ist.id
+            LEFT JOIN node_images ni ON ni.imageid = i.id AND ni.nodeid = n.id
+            LEFT JOIN imagestorage ist ON ni.imagestorageid = ist.id
             WHERE v.id = ?
         """
         row = conn.execute(query, (vpsId,)).fetchone()
@@ -265,21 +268,28 @@ def provisionondocker(vpsUuid):
 
         netType = vps.get('network_type', 'docker')
 
-        # Assign IPv6 if network supports it
-        if net and net.get('ipv6'):
-            availIpv6 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv6')
-            if availIpv6:
-                assignedIpv6 = availIpv6['ip']
-                assignedIpIds.append(availIpv6['id'])
-                db.assignip(availIpv6['id'], vps['id'])
+        needsIpv6 = bool(vpsDetails.get('plan_ipv6'))
+        needsIpv4 = bool(vpsDetails.get('plan_ipv4'))
+        if needsIpv6 and not (net and net.get('ipv6')):
+            raise ValueError("Plan requires IPv6 but network does not support it")
+        if needsIpv4 and not (net and net.get('ipv4')):
+            raise ValueError("Plan requires IPv4 but network does not support it")
 
-        # Assign IPv4 if network supports it
-        if net and net.get('ipv4'):
-            availIpv4 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv4')
-            if availIpv4:
-                assignedIpv4 = availIpv4['ip']
-                assignedIpIds.append(availIpv4['id'])
-                db.assignip(availIpv4['id'], vps['id'])
+        if needsIpv6:
+            availIpv6 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv6', vpsid=vps['id'])
+            if not availIpv6:
+                raise ValueError("No IPv6 addresses available for this network")
+            assignedIpv6 = availIpv6['ip']
+            assignedIpIds.append((availIpv6['id'], 'ipv6'))
+
+        if needsIpv4:
+            availIpv4 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv4', vpsid=vps['id'])
+            if not availIpv4:
+                for ipId, ipVersion in assignedIpIds:
+                    db.unassignip(ipId, ipVersion)
+                raise ValueError("No IPv4 addresses available for this network")
+            assignedIpv4 = availIpv4['ip']
+            assignedIpIds.append((availIpv4['id'], 'ipv4'))
 
         # Primary IP for container config (prefer IPv6)
         assignedIp = assignedIpv6 or assignedIpv4
@@ -307,24 +317,25 @@ def provisionondocker(vpsUuid):
         "image": vpsDetails['image_path'],
         "rootPassword": vps['password'],
         "pool": poolName,
+        "netMbps": int(vpsDetails.get("netmbps") or 0),
     }
 
     result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
     if not result:
-        for ipId in assignedIpIds:
-            db.unassignip(ipId)
+        for ipId, ipVersion in assignedIpIds:
+            db.unassignip(ipId, ipVersion)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Node unreachable or failed to respond")
 
     if result.get("error"):
-        for ipId in assignedIpIds:
-            db.unassignip(ipId)
+        for ipId, ipVersion in assignedIpIds:
+            db.unassignip(ipId, ipVersion)
         db.updatevps(vpsUuid, status='error')
         raise ValueError(f"Node error: {result['error']}")
 
     if not result.get("containerId"):
-        for ipId in assignedIpIds:
-            db.unassignip(ipId)
+        for ipId, ipVersion in assignedIpIds:
+            db.unassignip(ipId, ipVersion)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Node did not return a container ID")
 
@@ -408,6 +419,17 @@ def performvpsaction(vpsId, action, actorUserId):
     db.updatevps(vps['uuid'], status=newStatus)
     return {"status": newStatus}
 
+def formatbytes(value):
+    try:
+        value = float(value or 0)
+    except (TypeError, ValueError):
+        return "0B"
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+
+
 def getlatestvpsmetric(vpsId):
     """Fetch live metrics from the node."""
     vps = getvpsdetails(vpsId)
@@ -431,27 +453,26 @@ def getlatestvpsmetric(vpsId):
         try:
             pve = getproxmoxclient(node)
             node_name = node.get('proxmoxnode', 'pve')
-            status = pveclient.getlxcstatus(pve, node_name, vmid)
+            status = pveclient.getlxcstats(pve, node_name, vmid)
         except Exception:
             return None
-        
+
         if not status or status.get('status') != 'running':
             return None
-        
+
         cpu_usage = status.get('cpu', 0)
         mem_usage = status.get('mem', 0)
-        mem_max = status.get('maxmem', 0)
         disk_usage = status.get('disk', 0)
         disk_max = status.get('maxdisk', 0)
-        
+
         return {
             "cpu": f"{cpu_usage * 100:.1f}%",
             "ram": f"{mem_usage / (1024**2):.0f}MB",
             "disk": f"{(disk_usage / disk_max * 100):.1f}%" if disk_max > 0 else "0%",
             "diskUsed": f"{disk_usage / (1024**3):.1f}GB",
             "diskTotal": f"{disk_max / (1024**3):.1f}GB",
-            "netIn": "N/A",
-            "netOut": "N/A",
+            "netIn": f"{formatbytes(status.get('netin', 0))}/s",
+            "netOut": f"{formatbytes(status.get('netout', 0))}/s",
         }
     else:
         if not node.get('apikey'):
@@ -530,19 +551,28 @@ def provisiononproxmox(vpsUuid):
         if net.get('dns'):
             networkDns = net['dns']
 
-        if net.get('ipv6'):
-            availIpv6 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv6')
-            if availIpv6:
-                assignedIpv6 = availIpv6['ip']
-                assignedIpIds.append(availIpv6['id'])
-                db.assignip(availIpv6['id'], vps['id'])
+        needsIpv6 = bool(vpsDetails.get('plan_ipv6'))
+        needsIpv4 = bool(vpsDetails.get('plan_ipv4'))
+        if needsIpv6 and not net.get('ipv6'):
+            raise ValueError("Plan requires IPv6 but network does not support it")
+        if needsIpv4 and not net.get('ipv4'):
+            raise ValueError("Plan requires IPv4 but network does not support it")
 
-        if net.get('ipv4'):
-            availIpv4 = db.getavailableipbyversion(vps['networkid'], network_type=netType, version='ipv4')
-            if availIpv4:
-                assignedIpv4 = availIpv4['ip']
-                assignedIpIds.append(availIpv4['id'])
-                db.assignip(availIpv4['id'], vps['id'])
+        if needsIpv6:
+            availIpv6 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv6', vpsid=vps['id'])
+            if not availIpv6:
+                raise ValueError("No IPv6 addresses available for this network")
+            assignedIpv6 = availIpv6['ip']
+            assignedIpIds.append((availIpv6['id'], 'ipv6'))
+
+        if needsIpv4:
+            availIpv4 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv4', vpsid=vps['id'])
+            if not availIpv4:
+                for ipId, ipVersion in assignedIpIds:
+                    db.unassignip(ipId, ipVersion)
+                raise ValueError("No IPv4 addresses available for this network")
+            assignedIpv4 = availIpv4['ip']
+            assignedIpIds.append((availIpv4['id'], 'ipv4'))
 
     assignedIp = assignedIpv6 or assignedIpv4
 
@@ -552,8 +582,8 @@ def provisiononproxmox(vpsUuid):
     # Get next VMID
     vmid = pveclient.nextvmid(pve)
     if not vmid:
-        for ipId in assignedIpIds:
-            db.unassignip(ipId)
+        for ipId, ipVersion in assignedIpIds:
+            db.unassignip(ipId, ipVersion)
         db.updatevps(vpsUuid, status='error')
         raise ValueError("Failed to get VMID")
 
@@ -589,33 +619,40 @@ def provisiononproxmox(vpsUuid):
         "rootfs": f"{storagePool}:{disk_gb}",
         "ostemplate": template,
         "password": vps['password'],
-        "net0": f"name=eth0,bridge={bridgeName},ip=dhcp",
+        "net0": f"name=eth0,bridge={bridgeName}",
         "onboot": 1,
         "swap": int(vps.get('swap', 0)),
+        "features": "nesting=1",
     }
 
     # Set DNS if configured on network
     if networkDns:
         lxc_params["nameserver"] = networkDns
 
+    # Plan netmbps is Mbps; Proxmox net0 rate is MB/s
+    netRateMbps = int(vpsDetails.get("netmbps") or 0)
+    ratePart = f",rate={max(netRateMbps / 8.0, 0.001):.3f}" if netRateMbps > 0 else ""
+
     # If we have a specific IP, set it with gateway
     if assignedIpv6 and assignedIpv4:
         gw6 = f",gw6={ipv6Gateway}" if ipv6Gateway else ""
         gw4 = f",gw={ipv4Gateway}" if ipv4Gateway else ""
-        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip6={assignedIpv6}/64{gw6},ip={assignedIpv4}/24{gw4}"
+        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip6={assignedIpv6}/64{gw6},ip={assignedIpv4}/24{gw4}{ratePart}"
     elif assignedIpv6:
         gw = f",gw6={ipv6Gateway}" if ipv6Gateway else ""
-        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip6={assignedIpv6}/64{gw},ip=dhcp"
+        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip6={assignedIpv6}/64{gw}{ratePart}"
     elif assignedIpv4:
         gw = f",gw={ipv4Gateway}" if ipv4Gateway else ""
-        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip={assignedIpv4}/24{gw}"
+        lxc_params["net0"] = f"name=eth0,bridge={bridgeName},ip={assignedIpv4}/24{gw}{ratePart}"
+    elif ratePart:
+        lxc_params["net0"] = f"name=eth0,bridge={bridgeName}{ratePart}"
 
     # Create LXC
     try:
         pveclient.createlxc(pve, node_name, vmid, lxc_params)
     except Exception as e:
-        for ipId in assignedIpIds:
-            db.unassignip(ipId)
+        for ipId, ipVersion in assignedIpIds:
+            db.unassignip(ipId, ipVersion)
         db.updatevps(vpsUuid, status='error')
         raise ValueError(f"LXC creation failed: {e}")
 
@@ -624,8 +661,8 @@ def provisiononproxmox(vpsUuid):
     try:
         pveclient.startlxc(pve, node_name, vmid)
     except Exception as e:
-        for ipId in assignedIpIds:
-            db.unassignip(ipId)
+        for ipId, ipVersion in assignedIpIds:
+            db.unassignip(ipId, ipVersion)
         db.updatevps(vpsUuid, status='error')
         raise ValueError(f"LXC start failed: {e}")
 
@@ -643,3 +680,41 @@ def getvmidmapping(uuid):
 
 def removevmidmapping(uuid):
     db.updatevps(uuid, vmid=None)
+
+
+def is_tun_enabled_for_lxc(node_id, vmid):
+    """Checks if TUN is already enabled for a Proxmox LXC container."""
+    node = db.getnodebyid(node_id)
+    if not node:
+        raise ValueError("Node not found")
+    
+    pve = getproxmoxclient(node)
+    try:
+        config = pve.nodes(node['proxmoxnode']).lxc(vmid).config.get()
+        return "dev0" in config and "path=/dev/net/tun" in config.get("dev0", "")
+    except Exception as e:
+        raise Exception(f"Failed to check TUN status: {str(e)}")
+
+
+def enable_tun_for_lxc(node_id, vmid):
+    """Enables TUN device for a Proxmox LXC container using the `dev0` parameter (no confirmation)."""
+    if is_tun_enabled_for_lxc(node_id, vmid):
+        raise ValueError("TUN is already enabled for this VPS.")
+
+    node = db.getnodebyid(node_id)
+    if not node:
+        raise ValueError("Node not found")
+
+    pve = getproxmoxclient(node)
+    try:
+        pve.nodes(node['proxmoxnode']).lxc(vmid).status.stop.post()
+        while True:
+            status = pve.nodes(node['proxmoxnode']).lxc(vmid).status.current.get().get("status")
+            if status == "stopped":
+                break
+            time.sleep(1)
+
+        pve.nodes(node['proxmoxnode']).lxc(vmid).config.put(dev0="path=/dev/net/tun")
+        pve.nodes(node['proxmoxnode']).lxc(vmid).status.start.post()
+    except Exception as e:
+        raise Exception(f"Failed to enable TUN: {str(e)}")

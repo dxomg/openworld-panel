@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Ticket: {{ ticket.subject }} - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <div style="margin-bottom: 32px;">
+        <a href="{{ url_for('tickets') }}" style="color: var(--text-dim); text-decoration: none; font-size: 13px;">&larr; Back to Tickets</a>
+    </div>
+
+    <section class="hero" style="padding-bottom: 20px;">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Support Ticket</div>
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px;">
+            <h1 style="margin: 0;">{{ ticket.subject }}</h1>
+            {% if ticket.status == 'open' %}
+            <span class="status-pill status-running"><span class="dot"></span>Open</span>
+            {% elif ticket.status == 'replied' %}
+            <span class="status-pill status-replied"><span class="dot"></span>Replied</span>
+            {% else %}
+            <span class="status-pill status-unknown"><span class="dot"></span>Closed</span>
+            {% endif %}
+            <span class="tier-pill priority-{{ ticket.priority }}">{{ ticket.priority|upper }}</span>
+        </div>
+        <p style="opacity: 0.7; font-size: 14px;">Created {{ ticket.created }} &middot; Ticket #{{ ticket.uuid[:8] }}</p>
+    </section>
+
+    <!-- Ticket Messages -->
+    <div style="display: flex; flex-direction: column; gap: 16px; margin-top: 32px;">
+        {% for msg in messages %}
+        <div class="vps-card{% if msg.is_staff %} staff-message{% endif %}">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+                <div>
+                    <div style="font-weight: 600; font-size: 14px;">
+                        {{ msg.username }}
+                        {% if msg.is_staff or msg.role == 'admin' %}
+                        <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--accent); color: #06201D; font-weight: 700; margin-left: 6px;">STAFF</span>
+                        {% endif %}
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">{{ msg.created }}</div>
+                </div>
+            </div>
+            <div style="line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;">{{ msg.message }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Reply Form -->
+    {% if ticket.status != 'closed' %}
+    <div style="margin-top: 32px;">
+        <div class="section-head">
+            <h2>Add Reply</h2>
+        </div>
+        <form action="{{ url_for('replyticket', ticket_uuid=ticket.uuid) }}" method="POST" class="vps-card">
+            <div class="field">
+                <label>Your Message</label>
+                <textarea name="message" required rows="6" placeholder="Type your reply..." style="resize: vertical; min-height: 120px;"></textarea>
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 16px;">
+                <button type="submit" class="btn btn-primary">Send Reply</button>
+                <a href="{{ url_for('tickets') }}" class="btn">Cancel</a>
+            </div>
+        </form>
+    </div>
+    {% else %}
+    <div class="empty-state" style="margin-top: 32px;">
+        <h3>Ticket Closed</h3>
+        <p>This ticket is closed. Contact support to reopen if needed.</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+    @media (max-width: 768px) {
+        .vps-card {
+            padding: 16px;
+        }
+        
+        .hero h1 {
+            font-size: 20px;
+        }
+        
+        .tier-pill {
+            font-size: 9px;
+            padding: 3px 6px;
+        }
+    }
+</style>
+{% endblock %}

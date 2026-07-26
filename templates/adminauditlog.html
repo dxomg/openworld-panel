@@ -42,15 +42,16 @@
     .action-delete { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid #ef4444; }
     .action-login { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid #a855f7; }
     .action-other { background: rgba(255,255,255,0.08); color: var(--text-dim); border: 1px solid #555; }
-    .filter-bar {
+    .audit-filters {
         display: flex;
         gap: 8px;
         align-items: center;
         flex-wrap: wrap;
+        justify-content: flex-end;
     }
-    .filter-bar select, .filter-bar input {
-        font-size: 12px;
-        padding: 6px 10px;
+    .audit-filters .search-input,
+    .audit-filters .filter-select {
+        width: 220px;
     }
 </style>
 
@@ -70,22 +71,21 @@
 
     <div class="section-head">
         <h2>Event History</h2>
+        <form method="GET" action="{{ url_for('adminauditlog') }}" style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search logs...">
+            <select name="action" class="search-input" onchange="this.form.submit()">
+                <option value="">All Actions</option>
+                {% for a in actionTypes %}
+                <option value="{{ a }}" {% if actionFilter == a %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+            </select>
+            <input type="text" name="user" class="search-input" value="{{ userFilter }}" placeholder="Filter by user...">
+            <button type="submit" class="btn btn-small">Filter</button>
+            {% if search or actionFilter or userFilter %}
+            <a href="{{ url_for('adminauditlog') }}" class="btn btn-small">Clear</a>
+            {% endif %}
+        </form>
     </div>
-
-    <form method="GET" action="{{ url_for('adminauditlog') }}" class="filter-bar" style="margin-bottom: 20px;">
-        <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search logs...">
-        <select name="action" onchange="this.form.submit()">
-            <option value="">All Actions</option>
-            {% for a in actionTypes %}
-            <option value="{{ a }}" {% if actionFilter == a %}selected{% endif %}>{{ a }}</option>
-            {% endfor %}
-        </select>
-        <input type="text" name="user" value="{{ userFilter }}" placeholder="Filter by user...">
-        <button type="submit" class="btn btn-small">Filter</button>
-        {% if search or actionFilter or userFilter %}
-        <a href="{{ url_for('adminauditlog') }}" class="btn btn-small">Clear</a>
-        {% endif %}
-    </form>
 
     {% if logsData.logs %}
     <div style="overflow-x: auto;">

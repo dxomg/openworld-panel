@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Support Tickets - Admin - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page">
+    <section class="hero">
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+        <h1>Support Tickets</h1>
+        <p>Manage and respond to user support requests.</p>
+
+        <div class="hero-stats">
+            <div class="hero-stat">
+                <div class="num" style="color: #4ade80;">{{ openCount }}</div>
+                <div class="label">Open</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num" style="color: #60a5fa;">{{ repliedCount }}</div>
+                <div class="label">Replied</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ closedCount }}</div>
+                <div class="label">Closed</div>
+            </div>
+        </div>
+    </section>
+
+    <div class="section-head" style="margin-top: 48px;">
+        <h2>All Tickets</h2>
+        <form method="GET" style="display: flex; gap: 8px; align-items: center;">
+            <select name="status" class="search-input" onchange="this.form.submit()" style="width: 150px;">
+                <option value="">All Status</option>
+                <option value="open" {% if statusFilter == 'open' %}selected{% endif %}>Open</option>
+                <option value="replied" {% if statusFilter == 'replied' %}selected{% endif %}>Replied</option>
+                <option value="closed" {% if statusFilter == 'closed' %}selected{% endif %}>Closed</option>
+            </select>
+        </form>
+    </div>
+
+    {% if ticketData.tickets %}
+    <div class="vps-grid">
+        {% for ticket in ticketData.tickets %}
+        <div class="vps-card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                {% if ticket.status == 'open' %}
+                <span class="status-pill status-running"><span class="dot"></span>Open</span>
+                {% elif ticket.status == 'replied' %}
+                <span class="status-pill status-replied"><span class="dot"></span>Replied</span>
+                {% else %}
+                <span class="status-pill status-unknown"><span class="dot"></span>Closed</span>
+                {% endif %}
+                
+                <span class="tier-pill priority-{{ ticket.priority }}">{{ ticket.priority|upper }}</span>
+            </div>
+            
+            <div class="vps-id">
+                <div class="vps-hostname">{{ ticket.subject }}</div>
+                <div class="vps-meta">
+                    {{ ticket.username }} ({{ ticket.email }}) &middot; 
+                    {{ ticket.created }} &middot; 
+                    {{ ticket.message_count }} message{% if ticket.message_count != 1 %}s{% endif %}
+                </div>
+            </div>
+            
+            <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+                <a href="{{ url_for('viewticket', ticket_uuid=ticket.uuid) }}" class="btn btn-primary btn-small">View & Reply</a>
+                {% if ticket.status != 'closed' %}
+                <form action="{{ url_for('admincloseticket', ticket_uuid=ticket.uuid) }}" method="POST" style="display: inline;">
+                    <button type="submit" class="btn btn-small" onclick="return confirm('Close this ticket?');">Close</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if ticketData.total_pages > 1 %}
+    <div class="pagination" style="margin-top: 32px;">
+        {% if ticketData.page > 1 %}
+        <a href="?page={{ ticketData.page - 1 }}{% if statusFilter %}&status={{ statusFilter }}{% endif %}" class="btn btn-small">← Previous</a>
+        {% endif %}
+        <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim);">
+            Page {{ ticketData.page }} of {{ ticketData.total_pages }}
+        </span>
+        {% if ticketData.page < ticketData.total_pages %}
+        <a href="?page={{ ticketData.page + 1 }}{% if statusFilter %}&status={{ statusFilter }}{% endif %}" class="btn btn-small">Next →</a>
+        {% endif %}
+    </div>
+    {% endif %}
+    
+    {% else %}
+    <div class="empty-state">
+        <div class="glyph">[ ]</div>
+        <h3>No tickets found</h3>
+        <p>Tickets matching your filter will appear here.</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+    @media (max-width: 768px) {
+        .vps-grid {
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+        
+        .vps-card {
+            padding: 16px;
+        }
+        
+        .vps-card .vps-meta {
+            font-size: 11px;
+            word-break: break-word;
+        }
+        
+        .btn-row {
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .btn-row .btn,
+        .btn-row form {
+            width: 100%;
+        }
+        
+        .btn-row form {
+            display: block !important;
+        }
+        
+        .btn-row .btn {
+            width: 100%;
+            text-align: center;
+        }
+    }
+</style>
+{% endblock %}

@@ -7,18 +7,18 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/xterm.min.css') }}">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        html, body { width: 100%; height: 100%; background: #0B1220; overflow: hidden; }
+        html, body { width: 100%; height: 100%; overflow: hidden; }
         #terminal { width: 100%; height: 100%; }
         #terminal .xterm { padding: 8px; }
         #status {
             position: absolute; bottom: 12px; right: 16px;
             font-family: 'IBM Plex Mono', monospace; font-size: 11px;
-            color: #7C8CA6; z-index: 10; pointer-events: none;
+            color: var(--text-dim, #7C8CA6); z-index: 10; pointer-events: none;
             transition: opacity 0.3s;
         }
-        #status.error { color: #E2574C; }
-        #status.connecting { color: #E8A33D; }
-        #status.connected { color: #4FD1C5; }
+        #status.error { color: var(--danger, #E2574C); }
+        #status.connecting { color: var(--warn, #E8A33D); }
+        #status.connected { color: var(--accent, #4FD1C5); }
     </style>
 </head>
 <body>
@@ -33,11 +33,41 @@
         var port = {{ port | tojson }};
         var username = {{ username | tojson }};
         var password = {{ password | tojson }};
+        var themeClass = {{ theme | tojson }};
         var statusEl = document.getElementById('status');
         var terminalEl = document.getElementById('terminal');
         var term = null;
         var sock = null;
         var fitAddon = null;
+
+        // Apply theme class to body
+        if (themeClass) document.documentElement.className = themeClass;
+
+        var themes = {
+            '': { bg: '#0B1220', fg: '#DCE6F5', cursor: '#4FD1C5', selection: 'rgba(79,209,197,0.3)',
+                  black:'#0B1220', red:'#E2574C', green:'#4FD1C5', yellow:'#E8A33D', blue:'#6C8EBF', magenta:'#C678DD', cyan:'#56B6C2', white:'#DCE6F5',
+                  brightBlack:'#4C5C78', brightRed:'#FF6B6B', brightGreen:'#5FE0D3', brightYellow:'#FFD93D', brightBlue:'#7EB8DA', brightMagenta:'#D9A0F0', brightCyan:'#7FDBDA', brightWhite:'#FFFFFF' },
+            'theme-catppuccin': { bg:'#1e1e2e', fg:'#cdd6f4', cursor:'#cba6f7', selection:'rgba(203,166,247,0.3)',
+                  black:'#1e1e2e', red:'#f38ba8', green:'#a6e3a1', yellow:'#f9e2af', blue:'#89b4fa', magenta:'#cba6f7', cyan:'#94e2d5', white:'#cdd6f4',
+                  brightBlack:'#585b70', brightRed:'#f38ba8', brightGreen:'#a6e3a1', brightYellow:'#f9e2af', brightBlue:'#89b4fa', brightMagenta:'#cba6f7', brightCyan:'#94e2d5', brightWhite:'#f5e0dc' },
+            'theme-dracula': { bg:'#282a36', fg:'#f8f8f2', cursor:'#50fa7b', selection:'rgba(80,250,123,0.3)',
+                  black:'#282a36', red:'#ff5555', green:'#50fa7b', yellow:'#f1fa8c', blue:'#6272a4', magenta:'#ff79c6', cyan:'#8be9fd', white:'#f8f8f2',
+                  brightBlack:'#6272a4', brightRed:'#ff6e6e', brightGreen:'#69ff94', brightYellow:'#ffffa5', brightBlue:'#d6acff', brightMagenta:'#ff92df', brightCyan:'#a4ffff', brightWhite:'#ffffff' },
+            'theme-nord': { bg:'#2e3440', fg:'#eceff4', cursor:'#88c0d0', selection:'rgba(136,192,208,0.3)',
+                  black:'#3b4252', red:'#bf616a', green:'#a3be8c', yellow:'#ebcb8b', blue:'#81a1c1', magenta:'#b48ead', cyan:'#88c0d0', white:'#eceff4',
+                  brightBlack:'#4c566a', brightRed:'#bf616a', brightGreen:'#a3be8c', brightYellow:'#ebcb8b', brightBlue:'#81a1c1', brightMagenta:'#b48ead', brightCyan:'#8fbcbb', brightWhite:'#eceff4' },
+            'theme-gruvbox': { bg:'#282828', fg:'#ebdbb2', cursor:'#b8bb26', selection:'rgba(184,187,38,0.3)',
+                  black:'#282828', red:'#fb4934', green:'#b8bb26', yellow:'#fabd2f', blue:'#83a598', magenta:'#d3869b', cyan:'#8ec07c', white:'#ebdbb2',
+                  brightBlack:'#928374', brightRed:'#fb4934', brightGreen:'#b8bb26', brightYellow:'#fabd2f', brightBlue:'#83a598', brightMagenta:'#d3869b', brightCyan:'#8ec07c', brightWhite:'#fbf1c7' },
+            'theme-tokyonight': { bg:'#1a1b26', fg:'#c0caf5', cursor:'#7aa2f7', selection:'rgba(122,162,247,0.3)',
+                  black:'#15161e', red:'#f7768e', green:'#9ece6a', yellow:'#e0af68', blue:'#7aa2f7', magenta:'#bb9af7', cyan:'#7dcfff', white:'#a9b1d6',
+                  brightBlack:'#414868', brightRed:'#f7768e', brightGreen:'#9ece6a', brightYellow:'#e0af68', brightBlue:'#7aa2f7', brightMagenta:'#bb9af7', brightCyan:'#7dcfff', brightWhite:'#c0caf5' },
+            'theme-solarized': { bg:'#002b36', fg:'#839496', cursor:'#2aa198', selection:'rgba(42,161,152,0.3)',
+                  black:'#073642', red:'#dc322f', green:'#859900', yellow:'#b58900', blue:'#268bd2', magenta:'#d33682', cyan:'#2aa198', white:'#eee8d5',
+                  brightBlack:'#586e75', brightRed:'#cb4b16', brightGreen:'#586e75', brightYellow:'#657b83', brightBlue:'#839496', brightMagenta:'#6c71c4', brightCyan:'#93a1a1', brightWhite:'#fdf6e3' }
+        };
+
+        var t = themes[themeClass] || themes[''];
 
         function setStatus(text, cls) {
             statusEl.textContent = text;
@@ -45,31 +75,33 @@
         }
 
         function initTerminal() {
+            document.body.style.background = t.bg;
+
             term = new Terminal({
                 cursorBlink: true,
                 fontSize: 14,
                 fontFamily: "'IBM Plex Mono', monospace",
                 theme: {
-                    background: '#0B1220',
-                    foreground: '#DCE6F5',
-                    cursor: '#4FD1C5',
-                    selectionBackground: 'rgba(79, 209, 197, 0.3)',
-                    black: '#0B1220',
-                    red: '#E2574C',
-                    green: '#4FD1C5',
-                    yellow: '#E8A33D',
-                    blue: '#6C8EBF',
-                    magenta: '#C678DD',
-                    cyan: '#56B6C2',
-                    white: '#DCE6F5',
-                    brightBlack: '#4C5C78',
-                    brightRed: '#FF6B6B',
-                    brightGreen: '#5FE0D3',
-                    brightYellow: '#FFD93D',
-                    brightBlue: '#7EB8DA',
-                    brightMagenta: '#D9A0F0',
-                    brightCyan: '#7FDBDA',
-                    brightWhite: '#FFFFFF'
+                    background: t.bg,
+                    foreground: t.fg,
+                    cursor: t.cursor,
+                    selectionBackground: t.selection,
+                    black: t.black,
+                    red: t.red,
+                    green: t.green,
+                    yellow: t.yellow,
+                    blue: t.blue,
+                    magenta: t.magenta,
+                    cyan: t.cyan,
+                    white: t.white,
+                    brightBlack: t.brightBlack,
+                    brightRed: t.brightRed,
+                    brightGreen: t.brightGreen,
+                    brightYellow: t.brightYellow,
+                    brightBlue: t.brightBlue,
+                    brightMagenta: t.brightMagenta,
+                    brightCyan: t.brightCyan,
+                    brightWhite: t.brightWhite
                 }
             });
 

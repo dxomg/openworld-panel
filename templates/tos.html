@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+
+{% block title %}Terms of Service - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page" style="max-width: 900px; margin: 0 auto;">
+    <section class="hero" style="margin-bottom: 48px;">
+        <h1>Terms of Service</h1>
+        <p style="opacity: 0.7;">Last updated: July 25, 2026</p>
+    </section>
+
+    <div style="display: flex; flex-direction: column; gap: 32px; line-height: 1.7;">
+        
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">1. Acceptance of Terms</h2>
+            <p>By accessing and using {{ projectname }}, you accept and agree to be bound by the terms and conditions of this agreement. If you do not agree to these terms, you should not use this service.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">2. Service Description</h2>
+            <p>{{ projectname }} provides Virtual Private Server (VPS) hosting services, allowing users to deploy and manage containerized instances. Our services include but are not limited to:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Virtual server provisioning and management</li>
+                <li>Network connectivity and IP allocation</li>
+                <li>Storage allocation and management</li>
+                <li>Web-based control panel access</li>
+                <li>Technical support services</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">3. User Responsibilities</h2>
+            <p>As a user of {{ projectname }}, you are responsible for:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Maintaining the confidentiality of your account credentials</li>
+                <li>All activities that occur under your account</li>
+                <li>Ensuring compliance with all applicable laws and regulations</li>
+                <li>Regular backups of your data</li>
+                <li>Securing your virtual servers and applications</li>
+                <li>Monitoring your resource usage</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">4. Acceptable Use Policy</h2>
+            <p>You agree not to use {{ projectname }} services for any of the following prohibited activities:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li><strong>Illegal Activities:</strong> Any activity that violates local, national, or international laws</li>
+                <li><strong>Malicious Software:</strong> Distribution of viruses, malware, or other harmful code</li>
+                <li><strong>Network Abuse:</strong> Port scanning, DDoS attacks, or network flooding</li>
+                <li><strong>Spam:</strong> Sending unsolicited bulk email or messages</li>
+                <li><strong>Copyright Infringement:</strong> Hosting or distributing pirated content</li>
+                <li><strong>Cryptocurrency Mining:</strong> Excessive CPU usage for mining operations</li>
+                <li><strong>Proxy/VPN Abuse:</strong> Operating open proxies or VPNs for malicious purposes</li>
+                <li><strong>Adult Content:</strong> Hosting illegal adult content or content involving minors</li>
+                <li><strong>Resource Abuse:</strong> Excessive resource consumption affecting other users</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">5. Account Suspension and Termination</h2>
+            <p>{{ projectname }} reserves the right to suspend or terminate your account immediately if:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>You violate these Terms of Service</li>
+                <li>You engage in prohibited activities</li>
+                <li>Your account is used for illegal purposes</li>
+                <li>You fail to pay for services rendered</li>
+                <li>Your activities negatively impact other users or our infrastructure</li>
+            </ul>
+            <p style="margin-top: 12px;">In case of suspension, you will be notified via email. Serious violations may result in immediate termination without prior notice.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">6. Billing and Payments</h2>
+            <p><strong>Payment Terms:</strong> Services are billed according to the plan you select. Payment is due at the time of service provisioning or renewal.</p>
+            <p style="margin-top: 12px;"><strong>Refund Policy:</strong> Refunds are provided on a case-by-case basis. Services terminated due to Terms of Service violations are not eligible for refunds.</p>
+            <p style="margin-top: 12px;"><strong>Late Payments:</strong> Failure to pay within the specified period may result in service suspension or termination.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">7. Service Availability</h2>
+            <p>While we strive to maintain 99.9% uptime, {{ projectname }} does not guarantee uninterrupted service availability. We are not liable for:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Scheduled maintenance downtime</li>
+                <li>Force majeure events</li>
+                <li>Third-party network or infrastructure failures</li>
+                <li>DDoS attacks or other security incidents</li>
+            </ul>
+            <p style="margin-top: 12px;">Planned maintenance will be announced in advance whenever possible.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">8. Data and Backups</h2>
+            <p><strong>Your Responsibility:</strong> You are solely responsible for backing up your data. {{ projectname }} is not responsible for data loss.</p>
+            <p style="margin-top: 12px;"><strong>Data Retention:</strong> Upon account termination, your data may be retained for up to 7 days before permanent deletion.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">9. Limitation of Liability</h2>
+            <p>{{ projectname }} and its operators shall not be liable for:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Any indirect, incidental, special, or consequential damages</li>
+                <li>Loss of profits, data, or business opportunities</li>
+                <li>Service interruptions or data loss</li>
+                <li>Actions taken based on our advice or support</li>
+            </ul>
+            <p style="margin-top: 12px;">Our total liability shall not exceed the amount you paid for services in the three months preceding the claim.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">10. Modification of Terms</h2>
+            <p>{{ projectname }} reserves the right to modify these Terms of Service at any time. Users will be notified of significant changes via email or through the control panel. Continued use of the service after changes constitutes acceptance of the modified terms.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">11. Governing Law</h2>
+            <p>These Terms of Service shall be governed by and construed in accordance with applicable laws. Any disputes shall be resolved through binding arbitration.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">12. Contact Information</h2>
+            <p>For questions regarding these Terms of Service, please contact us through the support panel or at the contact information provided in your account dashboard.</p>
+        </section>
+
+        <div style="margin-top: 48px; padding: 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;">
+            <p style="font-size: 14px; opacity: 0.8;">By using {{ projectname }}, you acknowledge that you have read, understood, and agree to be bound by these Terms of Service.</p>
+        </div>
+
+    </div>
+</div>
+{% endblock %}

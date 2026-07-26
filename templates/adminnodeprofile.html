@@ -1,0 +1,1201 @@
+{% extends "base.html" %}
+
+{% block title %}{{ node.name }} - Node Profile - {{ projectname }}{% endblock %}
+
+{% block content %}
+<style>
+    .tier-pill {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: bold;
+        text-transform: uppercase;
+        margin-left: 8px;
+        vertical-align: middle;
+    }
+    .tier-free { background: rgba(255, 255, 255, 0.1); color: #aaa; border: 1px solid #444; }
+    .tier-paid { background: rgba(255, 215, 0, 0.1); color: #ffd700; border: 1px solid #ffd700; }
+    .node-tabs {
+        display: flex;
+        gap: 4px;
+        border-bottom: 1px solid #333;
+        margin-bottom: 24px;
+        overflow-x: auto;
+    }
+    .node-tab {
+        padding: 10px 18px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-dim, #888);
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+        white-space: nowrap;
+        background: none;
+        border-top: none;
+        border-left: none;
+        border-right: none;
+        font-family: inherit;
+    }
+    .node-tab:hover { color: var(--text, #fff); }
+    .node-tab.active {
+        color: var(--accent, #3b82f6);
+        border-bottom-color: var(--accent, #3b82f6);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .sub-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+    }
+    .sub-table th {
+        text-align: left;
+        padding: 10px 12px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-dim, #888);
+        border-bottom: 1px solid #333;
+    }
+    .sub-table td {
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        vertical-align: middle;
+    }
+    .sub-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .ip-status {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+    }
+    .ip-free { background: rgba(34,197,94,0.15); color: #4ade80; }
+    .ip-assigned { background: rgba(239,68,68,0.15); color: #f87171; }
+    .inline-form {
+        display: inline;
+    }
+    .stat-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+    .stat-box {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid #2a2a2a;
+        border-radius: 8px;
+        padding: 14px 16px;
+    }
+    .stat-box .num { font-size: 22px; font-weight: 700; font-family: var(--font-mono); }
+    .stat-box .lbl { font-size: 11px; color: var(--text-dim, #888); margin-top: 2px; }
+    .empty-mini {
+        text-align: center;
+        padding: 40px 20px;
+        color: var(--text-dim, #888);
+    }
+    .empty-mini .glyph { font-size: 28px; margin-bottom: 8px; }
+</style>
+
+<div class="page">
+    <!-- Header -->
+    <section class="hero" style="padding-bottom: 20px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
+            <a href="{{ url_for('adminnodes') }}" style="color: var(--text-dim, #888); text-decoration: none; font-size: 13px;">&larr; Nodes</a>
+        </div>
+        <div class="hero-eyebrow"><span class="pulse-dot"></span> Node Profile</div>
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+            <h1 style="margin: 0;">{{ node.name }}</h1>
+            {% set sClass = 'status-running' if node.status == 'online' else 'status-unknown' %}
+            <span class="status-pill {{ sClass }}"><span class="dot"></span>{{ node.status|capitalize }}</span>
+            <span class="tier-pill" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6;">{{ nodeType|upper }}</span>
+            <span class="tier-pill tier-{{ node.tier }}">{{ node.tier }}</span>
+        </div>
+        <p style="margin-top: 6px;">{{ node.address }} &middot; {{ node.hostname }}</p>
+
+        <div class="hero-stats" style="margin-top: 16px;">
+            <div class="hero-stat">
+                <div class="num">{{ node.vps_count|default(0) }}</div>
+                <div class="label">VPS Instances</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ node.cpu }}</div>
+                <div class="label">CPU Cores</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ node.ram // 1024 }}<span style="font-size: 14px;"> GB</span></div>
+                <div class="label">RAM Capacity</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ node.disk }}<span style="font-size: 14px;"> GB</span></div>
+                <div class="label">Disk Capacity</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ networks|length }}</div>
+                <div class="label">Networks</div>
+            </div>
+            <div class="hero-stat">
+                <div class="num">{{ storagePools|length }}</div>
+                <div class="label">Storage Pools</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tabs -->
+    <div class="node-tabs">
+        <button class="node-tab {% if activeTab == 'overview' %}active{% endif %}" data-tab="overview">Overview</button>
+        <button class="node-tab {% if activeTab == 'networks' %}active{% endif %}" data-tab="networks">Networks</button>
+        <button class="node-tab {% if activeTab == 'ips' %}active{% endif %}" data-tab="ips">IP Addresses</button>
+        {% if nodeType == 'proxmox' %}
+        <button class="node-tab {% if activeTab == 'storage' %}active{% endif %}" data-tab="storage">Storage Pools</button>
+        <button class="node-tab {% if activeTab == 'imagestorage' %}active{% endif %}" data-tab="imagestorage">Image Storage</button>
+        {% endif %}
+        <button class="node-tab {% if activeTab == 'images' %}active{% endif %}" data-tab="images">Images</button>
+    </div>
+
+    <!-- ===== OVERVIEW TAB ===== -->
+    <div id="tab-overview" class="tab-panel {% if activeTab == 'overview' %}active{% endif %}">
+        <div class="section-head">
+            <h2>Live Node Stats</h2>
+        </div>
+        <div class="stat-row" id="liveStats">
+            <div class="stat-box">
+                <div class="lbl">CPU Usage</div>
+                <div class="num" id="stat-cpu">--</div>
+            </div>
+            <div class="stat-box">
+                <div class="lbl">Memory Usage</div>
+                <div class="num" id="stat-ram">--</div>
+            </div>
+            <div class="stat-box">
+                <div class="lbl">Disk Usage</div>
+                <div class="num" id="stat-disk">--</div>
+            </div>
+            <div class="stat-box">
+                <div class="lbl">Network In</div>
+                <div class="num" id="stat-netin">--</div>
+            </div>
+            <div class="stat-box">
+                <div class="lbl">Network Out</div>
+                <div class="num" id="stat-netout">--</div>
+            </div>
+        </div>
+        
+        <div class="section-head">
+            <h2>Node Configuration</h2>
+        </div>
+        <form action="{{ url_for('adminnodesupdate', nodeUuid=node.uuid) }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 700px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Display Name</label>
+                <input type="text" name="name" value="{{ node.name }}" required>
+            </div>
+            <div class="field">
+                <label>Hostname</label>
+                <input type="text" name="hostname" value="{{ node.hostname }}" required>
+            </div>
+            <div class="field">
+                <label>IP Address</label>
+                <input type="text" name="address" value="{{ node.address }}" required>
+            </div>
+            {% if nodeType == 'docker' %}
+            <div class="field" style="grid-column: span 2;">
+                <label>Node URL (Agent)</label>
+                <input type="text" name="url" value="{{ node.url or '' }}" placeholder="http://1.2.3.4:1234">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>API Key</label>
+                <input type="password" name="apikey" placeholder="Leave blank to keep current">
+            </div>
+            {% else %}
+            <div class="field">
+                <label>Proxmox Host</label>
+                <input type="text" name="proxmoxhost" value="{{ node.proxmoxhost or '' }}">
+            </div>
+            <div class="field">
+                <label>Proxmox Port</label>
+                <input type="number" name="proxmoxport" value="{{ node.proxmoxport or 8006 }}">
+            </div>
+            <div class="field">
+                <label>Username</label>
+                <input type="text" name="proxmoxuser" value="{{ node.proxmoxuser or '' }}">
+            </div>
+            <div class="field">
+                <label>Password</label>
+                <input type="password" name="proxmoxpassword" placeholder="Leave blank to keep current">
+            </div>
+            <div class="field">
+                <label>Node Name</label>
+                <input type="text" name="proxmoxnode" value="{{ node.proxmoxnode or 'pve' }}">
+            </div>
+            <div class="field">
+                <label>Verify SSL</label>
+                <select name="proxmoxssl">
+                    <option value="0" {% if not node.proxmoxssl %}selected{% endif %}>No</option>
+                    <option value="1" {% if node.proxmoxssl %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            {% endif %}
+            <div class="field">
+                <label>Billing Tier</label>
+                <select name="tier">
+                    <option value="free" {% if node.tier == 'free' %}selected{% endif %}>Free Node</option>
+                    <option value="paid" {% if node.tier == 'paid' %}selected{% endif %}>Paid Node</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Status</label>
+                <select name="status">
+                    <option value="online" {% if node.status == 'online' %}selected{% endif %}>Online</option>
+                    <option value="maintenance" {% if node.status == 'maintenance' %}selected{% endif %}>Maintenance</option>
+                    <option value="offline" {% if node.status == 'offline' %}selected{% endif %}>Offline</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>RAM Cap (MB)</label>
+                <input type="number" name="ram" value="{{ node.ram }}" required>
+            </div>
+            <div class="field">
+                <label>Node Type</label>
+                <select name="type" disabled>
+                    <option value="docker" {% if nodeType == 'docker' %}selected{% endif %}>Docker</option>
+                    <option value="proxmox" {% if nodeType == 'proxmox' %}selected{% endif %}>Proxmox</option>
+                </select>
+                <input type="hidden" name="type" value="{{ nodeType }}">
+            </div>
+            <div style="grid-column: span 2; margin-top: 10px;">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- ===== NETWORKS TAB ===== -->
+    <div id="tab-networks" class="tab-panel {% if activeTab == 'networks' %}active{% endif %}">
+        <div class="section-head">
+            <h2>Networks</h2>
+            <button onclick="openModal('addNetworkModal')" class="btn btn-primary btn-small">+ Add Network</button>
+        </div>
+
+        {% if networks %}
+        <div style="overflow-x: auto;">
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>IPv6 Subnet</th>
+                        <th>IPv6 Gateway</th>
+                        <th>IPv4</th>
+                        <th>IPs</th>
+                        <th>DNS</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for net in networks %}
+                    <tr>
+                        <td><strong>{{ net.name }}</strong></td>
+                        <td style="font-family: var(--font-mono); font-size: 12px;">{{ net.subnet or '—' }}</td>
+                        <td style="font-family: var(--font-mono); font-size: 12px;">{{ net.gateway or '—' }}</td>
+                        <td>
+                            {% if net.ipv4 %}
+                            <span style="color: #4ade80;">{{ net.ipv4_subnet or 'enabled' }}</span>
+                            {% else %}
+                            <span style="color: #666;">off</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ ipStats.get(net.id, {}).get('total', 0) }} total / {{ ipStats.get(net.id, {}).get('available', 0) }} free</td>
+                        <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">{{ net.dns or '—' }}</td>
+                        <td style="display: flex; gap: 6px;">
+                            <button class="btn btn-small" onclick="openEditNetwork('{{ net|tojson|forceescape }}')">Edit</button>
+                            <form class="inline-form" action="{{ url_for('adminnodenetworkdelete', nodeUuid=node.uuid, netUuid=net.uuid) }}" method="POST" onsubmit="return confirm('Delete this network?');">
+                                <button type="submit" class="btn btn-small btn-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-mini">
+            <div class="glyph">&#x1F310;</div>
+            <p>No networks configured for this node.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- ===== IP ADDRESSES TAB ===== -->
+    <div id="tab-ips" class="tab-panel {% if activeTab == 'ips' %}active{% endif %}">
+        <div class="section-head">
+            <h2>IP Addresses</h2>
+            <div style="display: flex; gap: 8px;">
+                <button onclick="openModal('addIpModal')" class="btn btn-small">+ Add IP</button>
+                <button onclick="openModal('generateIpsModal')" class="btn btn-primary btn-small">Bulk Generate</button>
+            </div>
+        </div>
+
+        {% if networks %}
+        <div style="margin-bottom: 20px; display: flex; align-items: center; gap: 12px;">
+            <label style="font-size: 12px; color: var(--text-dim, #888);">Network:</label>
+            <select id="ipNetworkSelect" onchange="loadNetworkIps()" style="padding: 6px 12px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
+                {% for net in networks %}
+                <option value="{{ net.id }}" data-type="{{ nodeType }}">{{ net.name }}</option>
+                {% endfor %}
+            </select>
+            <label style="font-size: 12px; color: var(--text-dim, #888);">Pool:</label>
+            <select id="ipVersionSelect" onchange="loadNetworkIps()" style="padding: 6px 12px; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #fff; font-size: 13px;">
+                <option value="ipv6">IPv6</option>
+                <option value="ipv4">IPv4</option>
+            </select>
+            <span id="ipStatsInline" style="font-size: 12px; color: var(--text-dim, #888);"></span>
+        </div>
+
+        <div id="ipsLoading" style="display: none; text-align: center; padding: 20px; color: #888;">Loading IPs...</div>
+        <div id="ipsEmpty" style="display: none;" class="empty-mini">
+            <div class="glyph">&#x1F4F0;</div>
+            <p>No IPs on this network. Add some or bulk generate.</p>
+        </div>
+
+        <div id="ipsTableWrap" style="overflow-x: auto; display: none;">
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>IP Address</th>
+                        <th>Status</th>
+                        <th>Assigned VPS</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="ipsTableBody"></tbody>
+            </table>
+            <div id="ipsPagination" style="display: flex; gap: 8px; justify-content: center; align-items: center; margin-top: 16px;"></div>
+        </div>
+        {% else %}
+        <div class="empty-mini">
+            <div class="glyph">&#x1F4F0;</div>
+            <p>Create a network first to manage IP addresses.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if nodeType == 'proxmox' %}
+    <!-- ===== STORAGE POOLS TAB ===== -->
+    <div id="tab-storage" class="tab-panel {% if activeTab == 'storage' %}active{% endif %}">
+        <div class="section-head">
+            <h2>Storage Pools</h2>
+            <button onclick="openModal('addStorageModal')" class="btn btn-primary btn-small">+ Add Pool</button>
+        </div>
+
+        {% if storagePools %}
+        <div style="overflow-x: auto;">
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Source</th>
+                        <th>Size</th>
+                        <th>Used</th>
+                        <th>Available</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pool in storagePools %}
+                    <tr>
+                        <td><strong>{{ pool.name }}</strong></td>
+                        <td style="font-family: var(--font-mono); font-size: 12px;">{{ pool.source or '—' }}</td>
+                        <td>{{ pool.size }} GB</td>
+                        <td>{{ (pool.used / 1024)|round(1) }} GB</td>
+                        <td>{{ (pool.size - (pool.used or 0) / 1024)|round(1) }} GB</td>
+                        <td style="display: flex; gap: 6px;">
+                            <button class="btn btn-small" onclick="openEditStorage('{{ pool|tojson|forceescape }}')">Edit</button>
+                            <form class="inline-form" action="{{ url_for('adminnodestoragedelete', nodeUuid=node.uuid, poolUuid=pool.uuid) }}" method="POST" onsubmit="return confirm('Delete this storage pool?');">
+                                <button type="submit" class="btn btn-small btn-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-mini">
+            <div class="glyph">&#x1F4BE;</div>
+            <p>No storage pools configured for this node.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- ===== IMAGE STORAGE TAB ===== -->
+    <div id="tab-imagestorage" class="tab-panel {% if activeTab == 'imagestorage' %}active{% endif %}">
+        <div class="section-head">
+            <h2>Image Storage</h2>
+            <div style="display: flex; gap: 8px;">
+                <button onclick="openModal('addImageStorageModal')" class="btn btn-primary btn-small">+ Add Storage</button>
+                <button onclick="browseTemplates()" class="btn btn-small">Browse Remote Templates</button>
+            </div>
+        </div>
+
+        {% if imageStorages %}
+        <div style="overflow-x: auto;">
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Description</th>
+                        <th>Images Using</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ist in imageStorages %}
+                    <tr>
+                        <td><strong>{{ ist.name }}</strong></td>
+                        <td>{{ ist.description or '—' }}</td>
+                        <td>{{ nodeImages|selectattr('imagestorageid', 'equalto', ist.id)|list|length }}</td>
+                        <td style="display: flex; gap: 6px;">
+                            <button class="btn btn-small" onclick="openEditImageStorage('{{ ist|tojson|forceescape }}')">Edit</button>
+                            <form class="inline-form" action="{{ url_for('adminnodeimagestoragedelete', nodeUuid=node.uuid, storageUuid=ist.uuid) }}" method="POST" onsubmit="return confirm('Delete this image storage?');">
+                                <button type="submit" class="btn btn-small btn-danger">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-mini">
+            <div class="glyph">&#x1F4C2;</div>
+            <p>No image storage configured. Add one to manage OS templates.</p>
+        </div>
+        {% endif %}
+
+        <!-- Remote Templates Browser -->
+        <div id="templatesBrowser" style="display: none; margin-top: 30px; border: 1px solid #333; border-radius: 8px; padding: 20px;">
+            <div class="section-head">
+                <h3>Remote Templates ({{ node.proxmoxnode or 'pve' }})</h3>
+                <button onclick="document.getElementById('templatesBrowser').style.display='none'" class="btn btn-small">Close</button>
+            </div>
+            <div id="templatesLoading" style="text-align: center; padding: 20px; color: #888;">Loading templates from Proxmox...</div>
+            <div id="templatesContent" style="display: none;">
+                <table class="sub-table">
+                    <thead>
+                        <tr>
+                            <th>Storage</th>
+                            <th>Template</th>
+                            <th>Size</th>
+                            <th>Format</th>
+                        </tr>
+                    </thead>
+                    <tbody id="templatesBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- ===== IMAGES TAB ===== -->
+    <div id="tab-images" class="tab-panel {% if activeTab == 'images' %}active{% endif %}">
+        <div class="section-head">
+            <h2>Assigned Images</h2>
+            <a href="{{ url_for('adminosimage') }}" class="btn btn-small">Manage Images & Nodes &rarr;</a>
+        </div>
+
+        <div id="imagesLoading" style="display: none; text-align: center; padding: 20px; color: #888;">Loading images...</div>
+        <div id="imagesEmpty" style="display: none;" class="empty-mini">
+            <div class="glyph">&#x1F5BC;</div>
+            <p>No images assigned to this node. Go to <a href="{{ url_for('adminosimage') }}">OS Images</a> to assign images.</p>
+        </div>
+
+        <div id="imagesTableWrap" style="overflow-x: auto; display: none;">
+            <table class="sub-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Image / Template</th>
+                        {% if nodeType == 'proxmox' %}<th>Storage</th>{% endif %}
+                        <th>Status</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="imagesTableBody"></tbody>
+            </table>
+            <div id="imagesPagination" style="display: flex; gap: 8px; justify-content: center; align-items: center; margin-top: 16px;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== ADD NETWORK MODAL ===== -->
+<div id="addNetworkModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Network to {{ node.name }}</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addNetworkModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminnodenetworkcreate', nodeUuid=node.uuid) }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Network Name</label>
+                <input type="text" name="name" required placeholder="br-mynet">
+            </div>
+            <div class="field">
+                <label>IPv6</label>
+                <select name="ipv6">
+                    <option value="1" selected>Enabled</option>
+                    <option value="0">Disabled</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>IPv4</label>
+                <select name="ipv4">
+                    <option value="0" selected>Disabled</option>
+                    <option value="1">Enabled</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>IPv6 Subnet</label>
+                <input type="text" name="ipv6_subnet" placeholder="2a02:xxxx::/64">
+            </div>
+            <div class="field">
+                <label>IPv6 Gateway</label>
+                <input type="text" name="ipv6_gateway" placeholder="2a02:xxxx::1">
+            </div>
+            <div class="field">
+                <label>IPv4 Subnet</label>
+                <input type="text" name="ipv4_subnet" placeholder="10.0.0.0/24">
+            </div>
+            <div class="field">
+                <label>IPv4 Gateway</label>
+                <input type="text" name="ipv4_gateway" placeholder="10.0.0.1">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>DNS Servers</label>
+                <input type="text" name="dns" value="1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888">
+            </div>
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addNetworkModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Network</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== EDIT NETWORK MODAL ===== -->
+<div id="editNetworkModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Edit Network</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editNetworkModal')">&times;</button>
+        </div>
+        <form id="editNetworkForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Network Name</label>
+                <input type="text" name="name" id="edit_network_name" required>
+            </div>
+            <div class="field">
+                <label>IPv6</label>
+                <select name="ipv6" id="edit_network_ipv6">
+                    <option value="1">Enabled</option>
+                    <option value="0">Disabled</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>IPv4</label>
+                <select name="ipv4" id="edit_network_ipv4">
+                    <option value="0">Disabled</option>
+                    <option value="1">Enabled</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>IPv6 Subnet</label>
+                <input type="text" name="ipv6_subnet" id="edit_network_ipv6_subnet">
+            </div>
+            <div class="field">
+                <label>IPv6 Gateway</label>
+                <input type="text" name="ipv6_gateway" id="edit_network_ipv6_gateway">
+            </div>
+            <div class="field">
+                <label>IPv4 Subnet</label>
+                <input type="text" name="ipv4_subnet" id="edit_network_ipv4_subnet">
+            </div>
+            <div class="field">
+                <label>IPv4 Gateway</label>
+                <input type="text" name="ipv4_gateway" id="edit_network_ipv4_gateway">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>DNS Servers</label>
+                <input type="text" name="dns" id="edit_network_dns">
+            </div>
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editNetworkModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== ADD IP MODAL ===== -->
+<div id="addIpModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add IP Address</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addIpModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminnodeipadd', nodeUuid=node.uuid) }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr; gap: 15px;">
+            <div class="field">
+                <label>Network</label>
+                <select name="networkid" required>
+                    {% for net in networks %}
+                    <option value="{{ net.id }}">{{ net.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label>Pool</label>
+                <select name="version" required>
+                    <option value="ipv6">IPv6</option>
+                    <option value="ipv4">IPv4</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>IP Address</label>
+                <input type="text" name="ip" required placeholder="2a02:xxxx::1 or 10.0.0.1">
+            </div>
+            <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addIpModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add IP</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== BULK GENERATE IPS MODAL ===== -->
+<div id="generateIpsModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Bulk Generate IPs</h3>
+            <button type="button" class="modal-close" onclick="closeModal('generateIpsModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminnodeipsgenerate', nodeUuid=node.uuid) }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Network</label>
+                <select name="networkid" required>
+                    {% for net in networks %}
+                    <option value="{{ net.id }}">{{ net.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="field">
+                <label>Pool</label>
+                <select name="version" required>
+                    <option value="ipv6">IPv6</option>
+                    <option value="ipv4">IPv4</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Base IP</label>
+                <input type="text" name="baseip" required placeholder="2a02:xxxx::100">
+            </div>
+            <div class="field">
+                <label>Count</label>
+                <input type="number" name="count" required min="1" value="10">
+            </div>
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('generateIpsModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Generate</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if nodeType == 'proxmox' %}
+<!-- ===== ADD STORAGE POOL MODAL ===== -->
+<div id="addStorageModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Storage Pool</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addStorageModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminnodestoragecreate', nodeUuid=node.uuid) }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Pool Name</label>
+                <input type="text" name="name" required placeholder="local-lvm">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Size (GB)</label>
+                <input type="number" name="size" required min="1" value="50">
+            </div>
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addStorageModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Pool</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== EDIT STORAGE POOL MODAL ===== -->
+<div id="editStorageModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Edit Storage Pool</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editStorageModal')">&times;</button>
+        </div>
+        <form id="editStorageForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Pool Name</label>
+                <input type="text" name="name" id="edit_storage_name" required>
+            </div>
+            <div class="field">
+                <label>Size (GB)</label>
+                <input type="number" name="size" id="edit_storage_size">
+            </div>
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editStorageModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== ADD IMAGE STORAGE MODAL ===== -->
+<div id="addImageStorageModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Image Storage</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addImageStorageModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminnodeimagestoragecreate', nodeUuid=node.uuid) }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr; gap: 15px;">
+            <div class="field">
+                <label>Storage Name</label>
+                <input type="text" name="name" required placeholder="local:vztmpl/">
+            </div>
+            <div class="field">
+                <label>Description</label>
+                <input type="text" name="description" placeholder="Proxmox template storage">
+            </div>
+            <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addImageStorageModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Storage</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== EDIT IMAGE STORAGE MODAL ===== -->
+<div id="editImageStorageModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Edit Image Storage</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editImageStorageModal')">&times;</button>
+        </div>
+        <form id="editImageStorageForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr; gap: 15px;">
+            <div class="field">
+                <label>Storage Name</label>
+                <input type="text" name="name" id="edit_ist_name" required>
+            </div>
+            <div class="field">
+                <label>Description</label>
+                <input type="text" name="description" id="edit_ist_description">
+            </div>
+            <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editImageStorageModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endif %}
+
+<script>
+    // Tab switching
+    document.querySelectorAll('.node-tab').forEach(tab => {
+        tab.addEventListener('click', function() {
+            document.querySelectorAll('.node-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            this.classList.add('active');
+            document.getElementById('tab-' + this.dataset.tab).classList.add('active');
+            history.replaceState(null, '', '#' + this.dataset.tab);
+            if (this.dataset.tab === 'ips') loadNetworkIps();
+        });
+    });
+
+    // Restore tab from URL hash or server-set activeTab
+    (function() {
+        const hash = window.location.hash.replace('#', '');
+        if (hash) {
+            const tab = document.querySelector(`.node-tab[data-tab="${hash}"]`);
+            if (tab) {
+                document.querySelectorAll('.node-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + hash).classList.add('active');
+            }
+        }
+    })();
+
+    function openModal(id) {
+        document.getElementById(id).classList.add('is-open');
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('is-open');
+    }
+
+    function openEditNetwork(netJson) {
+        const net = JSON.parse(netJson);
+        const form = document.getElementById('editNetworkForm');
+        const base = "{{ url_for('adminnodenetworkcreate', nodeUuid=node.uuid) }}".replace('create', '');
+        form.action = base + net.uuid + '/update';
+        document.getElementById('edit_network_name').value = net.name;
+        document.getElementById('edit_network_name').readOnly = nodeType === 'docker';
+        document.getElementById('edit_network_ipv6').value = String(net.ipv6 || 0);
+        document.getElementById('edit_network_ipv4').value = String(net.ipv4 || 0);
+        document.getElementById('edit_network_ipv6_subnet').value = net.subnet || '';
+        document.getElementById('edit_network_ipv6_gateway').value = net.gateway || '';
+        document.getElementById('edit_network_ipv4_subnet').value = net.ipv4_subnet || '';
+        document.getElementById('edit_network_ipv4_gateway').value = net.ipv4_gateway || '';
+        document.getElementById('edit_network_dns').value = net.dns || '';
+        openModal('editNetworkModal');
+    }
+
+    // ===== IP CRUD =====
+    const _ipUrls = {};
+    {% for net in networks %}
+    _ipUrls[{{ net.id }}] = {
+        list: "{{ url_for('adminnodeips', nodeUuid=node.uuid, netUuid=net.uuid) }}",
+        deleteBase: "{{ url_for('adminnodeipdelete', nodeUuid=node.uuid, ipUuid='__UUID__') }}",
+        name: "{{ net.name }}"
+    };
+    {% endfor %}
+
+    let _currentIpPage = 1;
+
+    function loadNetworkIps(page) {
+        const sel = document.getElementById('ipNetworkSelect');
+        if (!sel) return;
+        const versionSel = document.getElementById('ipVersionSelect');
+        const version = versionSel ? versionSel.value : 'ipv6';
+        const netId = parseInt(sel.value);
+        const urls = _ipUrls[netId];
+        if (!urls) return;
+
+        _currentIpPage = page || 1;
+        document.getElementById('ipsLoading').style.display = 'block';
+        document.getElementById('ipsTableWrap').style.display = 'none';
+        document.getElementById('ipsEmpty').style.display = 'none';
+
+        fetch(urls.list + '?page=' + _currentIpPage + '&version=' + encodeURIComponent(version))
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('ipsLoading').style.display = 'none';
+                if (data.error) return;
+
+                const ips = data.ips;
+                const pag = data.pagination;
+                const stats = data.stats;
+
+                const poolStats = stats[version] || {total: 0, available: 0, assigned: 0};
+                document.getElementById('ipStatsInline').textContent =
+                    poolStats.total + ' ' + version.toUpperCase() + ' total · ' + poolStats.available + ' free · ' + poolStats.assigned + ' assigned';
+
+                if (ips.length === 0) {
+                    document.getElementById('ipsEmpty').style.display = 'block';
+                    return;
+                }
+
+                const tbody = document.getElementById('ipsTableBody');
+                tbody.innerHTML = '';
+                ips.forEach(ip => {
+                    const tr = document.createElement('tr');
+                    const status = ip.assigned
+                        ? '<span class="ip-status ip-assigned">Assigned</span>'
+                        : '<span class="ip-status ip-free">Free</span>';
+                    const vps = ip.vps_hostname || '—';
+                    const delUrl = urls.deleteBase.replace('__UUID__', ip.uuid);
+                    const delBtn = ip.assigned
+                        ? '<span style="color: #666; font-size: 11px;">in use</span>'
+                        : `<form class="inline-form" action="${delUrl}" method="POST" onsubmit="return confirm('Delete this IP?');"><button type="submit" class="btn btn-small btn-danger">Delete</button></form>`;
+                    tr.innerHTML = `<td style="font-family: var(--font-mono); font-size: 13px;">${ip.ip}</td><td>${status}</td><td>${vps}</td><td>${delBtn}</td>`;
+                    tbody.appendChild(tr);
+                });
+
+                // Pagination
+                const pagDiv = document.getElementById('ipsPagination');
+                pagDiv.innerHTML = '';
+                if (pag.totalPages > 1) {
+                    if (pag.hasPrev) {
+                        const btn = document.createElement('button');
+                        btn.className = 'btn btn-small';
+                        btn.textContent = '← Prev';
+                        btn.onclick = () => loadNetworkIps(pag.currentPage - 1);
+                        pagDiv.appendChild(btn);
+                    }
+                    const span = document.createElement('span');
+                    span.style.cssText = 'font-family: var(--font-mono); font-size: 12px; color: var(--text-dim, #888); padding: 0 15px;';
+                    span.textContent = 'PAGE ' + pag.currentPage + ' / ' + pag.totalPages;
+                    pagDiv.appendChild(span);
+                    if (pag.hasNext) {
+                        const btn = document.createElement('button');
+                        btn.className = 'btn btn-small';
+                        btn.textContent = 'Next →';
+                        btn.onclick = () => loadNetworkIps(pag.currentPage + 1);
+                        pagDiv.appendChild(btn);
+                    }
+                }
+
+                document.getElementById('ipsTableWrap').style.display = 'block';
+            })
+            .catch(() => {
+                document.getElementById('ipsLoading').style.display = 'none';
+                document.getElementById('ipsLoading').textContent = 'Failed to load IPs.';
+                document.getElementById('ipsLoading').style.display = 'block';
+            });
+    }
+
+    // Load IPs on page load if ips tab is active
+    if (document.querySelector('.node-tab[data-tab="ips"].active')) {
+        loadNetworkIps();
+    }
+
+    // ===== IMAGES PAGINATION =====
+    let _currentImagePage = 1;
+    const nodeType = "{{ nodeType }}";
+
+    function loadNodeImages(page) {
+        _currentImagePage = page || 1;
+        document.getElementById('imagesLoading').style.display = 'block';
+        document.getElementById('imagesTableWrap').style.display = 'none';
+        document.getElementById('imagesEmpty').style.display = 'none';
+
+        fetch("{{ url_for('adminnodeimageslist', nodeUuid=node.uuid) }}?page=" + _currentImagePage)
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('imagesLoading').style.display = 'none';
+                if (data.error) return;
+
+                const images = data.images;
+                const pag = data.pagination;
+
+                if (images.length === 0 && pag.currentPage === 1) {
+                    document.getElementById('imagesEmpty').style.display = 'block';
+                    return;
+                }
+
+                const tbody = document.getElementById('imagesTableBody');
+                tbody.innerHTML = '';
+                images.forEach(img => {
+                    const tr = document.createElement('tr');
+                    const status = img.active
+                        ? '<span class="ip-status ip-free">Active</span>'
+                        : '<span class="ip-status ip-assigned">Disabled</span>';
+                    
+                    let storageCol = '';
+                    if (nodeType === 'proxmox') {
+                        storageCol = `<td>${img.storage_name || '—'}</td>`;
+                    }
+                    
+                    const unassignUrl = "{{ url_for('adminosimageunassign', imageUuid='__UUID__') }}".replace('__UUID__', img.uuid);
+                    const unassignBtn = `<form class="inline-form" action="${unassignUrl}" method="POST" onsubmit="return confirm('Unassign this image from {{ node.name }}?');"><input type="hidden" name="nodeid" value="{{ node.id }}"><button type="submit" class="btn btn-small btn-danger">Unassign</button></form>`;
+                    
+                    tr.innerHTML = `<td><strong>${img.name}</strong></td><td style="font-family: var(--font-mono); font-size: 12px;">${img.image}</td>${storageCol}<td>${status}</td><td>${unassignBtn}</td>`;
+                    tbody.appendChild(tr);
+                });
+
+                // Pagination
+                const pagDiv = document.getElementById('imagesPagination');
+                pagDiv.innerHTML = '';
+                if (pag.totalPages > 1) {
+                    if (pag.hasPrev) {
+                        const btn = document.createElement('button');
+                        btn.className = 'btn btn-small';
+                        btn.textContent = '← Prev';
+                        btn.onclick = () => loadNodeImages(pag.currentPage - 1);
+                        pagDiv.appendChild(btn);
+                    }
+                    const span = document.createElement('span');
+                    span.style.cssText = 'font-family: var(--font-mono); font-size: 12px; color: var(--text-dim, #888); padding: 0 15px;';
+                    span.textContent = 'PAGE ' + pag.currentPage + ' / ' + pag.totalPages;
+                    pagDiv.appendChild(span);
+                    if (pag.hasNext) {
+                        const btn = document.createElement('button');
+                        btn.className = 'btn btn-small';
+                        btn.textContent = 'Next →';
+                        btn.onclick = () => loadNodeImages(pag.currentPage + 1);
+                        pagDiv.appendChild(btn);
+                    }
+                }
+
+                document.getElementById('imagesTableWrap').style.display = 'block';
+            })
+            .catch(() => {
+                document.getElementById('imagesLoading').style.display = 'none';
+                document.getElementById('imagesLoading').textContent = 'Failed to load images.';
+                document.getElementById('imagesLoading').style.display = 'block';
+            });
+    }
+
+    // Load images on page load if images tab is active
+    if (document.querySelector('.node-tab[data-tab="images"].active')) {
+        loadNodeImages();
+    }
+
+    // Load images when switching to images tab
+    document.querySelectorAll('.node-tab').forEach(tab => {
+        tab.addEventListener('click', function() {
+            if (this.dataset.tab === 'images') {
+                loadNodeImages();
+            }
+        });
+    });
+
+
+    {% if nodeType == 'proxmox' %}
+    function openEditStorage(poolJson) {
+        const pool = JSON.parse(poolJson);
+        const form = document.getElementById('editStorageForm');
+        const base = "{{ url_for('adminnodestoragecreate', nodeUuid=node.uuid) }}".replace('create', '');
+        form.action = base + pool.uuid + '/update';
+        document.getElementById('edit_storage_name').value = pool.name;
+        document.getElementById('edit_storage_size').value = pool.size;
+        openModal('editStorageModal');
+    }
+
+    function openEditImageStorage(istJson) {
+        const ist = JSON.parse(istJson);
+        const form = document.getElementById('editImageStorageForm');
+        const base = "{{ url_for('adminnodeimagestoragecreate', nodeUuid=node.uuid) }}".replace('create', '');
+        form.action = base + ist.uuid + '/update';
+        document.getElementById('edit_ist_name').value = ist.name;
+        document.getElementById('edit_ist_description').value = ist.description || '';
+        openModal('editImageStorageModal');
+    }
+
+    function browseTemplates() {
+        const browser = document.getElementById('templatesBrowser');
+        browser.style.display = 'block';
+        document.getElementById('templatesLoading').style.display = 'block';
+        document.getElementById('templatesContent').style.display = 'none';
+
+        fetch("{{ url_for('adminnodeimagestoragefetch', nodeUuid=node.uuid) }}")
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('templatesLoading').style.display = 'none';
+                if (data.error) {
+                    document.getElementById('templatesLoading').textContent = 'Error: ' + data.error;
+                    document.getElementById('templatesLoading').style.display = 'block';
+                    return;
+                }
+                const tbody = document.getElementById('templatesBody');
+                tbody.innerHTML = '';
+                if (data.templates.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 20px; color: #888;">No templates found on this node.</td></tr>';
+                } else {
+                    data.templates.forEach(t => {
+                        const row = document.createElement('tr');
+                        const sizeMB = (t.size / 1024 / 1024).toFixed(1);
+                        row.innerHTML = `<td>${t.storage}</td><td style="font-family: var(--font-mono); font-size: 12px;">${t.name}</td><td>${sizeMB} MB</td><td>${t.format}</td>`;
+                        tbody.appendChild(row);
+                    });
+                }
+                document.getElementById('templatesContent').style.display = 'block';
+            })
+            .catch(err => {
+                document.getElementById('templatesLoading').textContent = 'Failed to fetch: ' + err;
+            });
+    }
+    {% endif %}
+
+    // ===== LIVE NODE STATS =====
+    function formatBytes(bytes) {
+        if (!bytes || bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+    }
+
+    function formatPercent(value) {
+        if (typeof value === 'number') {
+            return value.toFixed(1) + '%';
+        }
+        return '--';
+    }
+
+    function updateNodeStats() {
+        fetch("{{ url_for('adminnodestats', nodeUuid=node.uuid) }}")
+            .then(r => {
+                if (!r.ok) throw new Error('Failed to fetch stats');
+                return r.json();
+            })
+            .then(stats => {
+                // CPU Usage - show percentage
+                if (stats.cpu_percent !== undefined && stats.cpu_percent !== null) {
+                    const cpu = Number(stats.cpu_percent);
+                    if (!isNaN(cpu)) {
+                        document.getElementById('stat-cpu').textContent = cpu.toFixed(1) + '%';
+                    } else {
+                        document.getElementById('stat-cpu').textContent = '--';
+                    }
+                } else {
+                    document.getElementById('stat-cpu').textContent = '--';
+                }
+
+                // Memory Usage
+                if (stats.memory_total && stats.memory_used !== undefined) {
+                    const memPercent = stats.memory_percent || 0;
+                    const used = formatBytes(stats.memory_used);
+                    const total = formatBytes(stats.memory_total);
+                    document.getElementById('stat-ram').innerHTML = 
+                        `<span style="font-size: 22px;">${memPercent.toFixed(1)}%</span><br>` +
+                        `<span style="font-size: 11px; font-weight: normal; color: #888;">${used} / ${total}</span>`;
+                }
+
+                // Disk Usage
+                if (stats.disk_total && stats.disk_used !== undefined) {
+                    const diskPercent = stats.disk_percent || 0;
+                    const used = formatBytes(stats.disk_used);
+                    const total = formatBytes(stats.disk_total);
+                    document.getElementById('stat-disk').innerHTML = 
+                        `<span style="font-size: 22px;">${diskPercent.toFixed(1)}%</span><br>` +
+                        `<span style="font-size: 11px; font-weight: normal; color: #888;">${used} / ${total}</span>`;
+                }
+
+                // Network I/O
+                if (stats.network_rx_bytes !== undefined) {
+                    document.getElementById('stat-netin').textContent = formatBytes(stats.network_rx_bytes);
+                }
+                if (stats.network_tx_bytes !== undefined) {
+                    document.getElementById('stat-netout').textContent = formatBytes(stats.network_tx_bytes);
+                }
+            })
+            .catch(err => {
+                console.error('Failed to fetch node stats:', err);
+                // Keep showing previous values or "--" on error
+            });
+    }
+
+    // Update stats immediately and then every 5 seconds
+    let statsInterval = null;
+    if (document.querySelector('.node-tab[data-tab="overview"].active')) {
+        updateNodeStats();
+        statsInterval = setInterval(updateNodeStats, 5000);
+    }
+
+    // When switching to overview tab, start polling
+    document.querySelectorAll('.node-tab').forEach(tab => {
+        tab.addEventListener('click', function() {
+            if (this.dataset.tab === 'overview') {
+                if (!statsInterval) {
+                    updateNodeStats();
+                    statsInterval = setInterval(updateNodeStats, 5000);
+                }
+            } else {
+                if (statsInterval) {
+                    clearInterval(statsInterval);
+                    statsInterval = null;
+                }
+            }
+        });
+    });
+</script>
+{% endblock %}

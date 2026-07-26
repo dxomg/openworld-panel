@@ -38,12 +38,6 @@
         align-items: flex-start;
     }
 
-    .vps-info-block {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-
     .vps-hostname {
         font-family: var(--font-mono);
         font-size: 16px;
@@ -134,8 +128,8 @@
   <a href="{{ url_for('checkout', vpsUuid=instance.uuid) if instance.status == 'pendingpayment' else url_for('vpspanel', vpsUuid=instance.uuid) }}" class="vps-card">
     
     <div class="vps-card-header">
-        <div class="vps-info-block">
-            <span class="vps-hostname">{{ instance.hostname }}</span>
+        <span>
+            <span class="vps-hostname">{{ instance.hostname }}</span><br>
             {% if instance.ipv6 %}
             <span class="vps-meta" data-copy="{{ instance.ipv6 }}" title="Click to copy">{{ instance.ipv6 }}</span>
             {% elif instance.ipv4 %}
@@ -143,7 +137,7 @@
             {% else %}
             <span class="vps-meta">No IP assigned</span>
             {% endif %}
-        </div>
+        </span>
         
         <span class="status-pill {{ statusClass }}">
           <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}

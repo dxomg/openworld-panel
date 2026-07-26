@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block title %}Privacy Policy - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="page" style="max-width: 900px; margin: 0 auto;">
+    <section class="hero" style="margin-bottom: 48px;">
+        <h1>Privacy Policy</h1>
+        <p style="opacity: 0.7;">Last updated: July 25, 2026</p>
+    </section>
+
+    <div style="display: flex; flex-direction: column; gap: 32px; line-height: 1.7;">
+        
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">1. Introduction</h2>
+            <p>{{ projectname }} ("we," "our," or "us") is committed to protecting your privacy. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our VPS hosting services.</p>
+            <p style="margin-top: 12px;">By using {{ projectname }}, you consent to the data practices described in this policy.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">2. Information We Collect</h2>
+            
+            <h3 style="margin-top: 20px; margin-bottom: 12px; font-size: 1.2rem;">Account Information</h3>
+            <p>When you create an account, we collect:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Username and email address</li>
+                <li>Password (stored encrypted)</li>
+                <li>Account creation date and last login time</li>
+                <li>Account role and permissions</li>
+            </ul>
+
+            <h3 style="margin-top: 20px; margin-bottom: 12px; font-size: 1.2rem;">Billing Information</h3>
+            <p>For paid services, we collect:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Payment method information (processed by PayPal)</li>
+                <li>Transaction history and receipts</li>
+                <li>Billing address (if provided)</li>
+            </ul>
+            <p style="margin-top: 12px;"><em>Note: We do not store credit card details. Payment processing is handled by third-party payment processors.</em></p>
+
+            <h3 style="margin-top: 20px; margin-bottom: 12px; font-size: 1.2rem;">Service Usage Data</h3>
+            <p>We collect information about your use of our services:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>VPS instances created, modified, and deleted</li>
+                <li>Resource usage (CPU, RAM, disk, bandwidth)</li>
+                <li>IP addresses assigned to your services</li>
+                <li>Control panel activity and audit logs</li>
+                <li>Support tickets and communications</li>
+            </ul>
+
+            <h3 style="margin-top: 20px; margin-bottom: 12px; font-size: 1.2rem;">Technical Information</h3>
+            <p>We automatically collect certain technical information:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>IP address and browser type</li>
+                <li>Operating system and device information</li>
+                <li>Session data and cookies</li>
+                <li>Access logs and timestamps</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">3. How We Use Your Information</h2>
+            <p>We use collected information for the following purposes:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li><strong>Service Provision:</strong> To provide, maintain, and improve our VPS hosting services</li>
+                <li><strong>Account Management:</strong> To manage your account, authenticate users, and provide support</li>
+                <li><strong>Billing:</strong> To process payments and generate invoices</li>
+                <li><strong>Security:</strong> To detect abuse, prevent fraud, and ensure platform security</li>
+                <li><strong>Communication:</strong> To send service-related notifications, updates, and support responses</li>
+                <li><strong>Compliance:</strong> To comply with legal obligations and enforce our Terms of Service</li>
+                <li><strong>Analytics:</strong> To analyze usage patterns and improve our services</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">4. Data Storage and Security</h2>
+            <p><strong>Data Storage:</strong> Your data is stored on secure servers within our infrastructure. We implement industry-standard security measures including:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Encrypted passwords using bcrypt</li>
+                <li>Secure HTTPS connections</li>
+                <li>Regular security audits and updates</li>
+                <li>Access controls and authentication</li>
+                <li>Monitoring for suspicious activity</li>
+            </ul>
+            <p style="margin-top: 12px;"><strong>Data Retention:</strong> We retain your information for as long as your account is active or as needed to provide services. After account deletion, data may be retained for up to 30 days before permanent deletion.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">5. Third-Party Services</h2>
+            <p>We use the following third-party services that may collect information:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li><strong>PayPal:</strong> For payment processing (subject to PayPal's Privacy Policy)</li>
+                <li><strong>Discord OAuth:</strong> If you authenticate via Discord (subject to Discord's Privacy Policy)</li>
+            </ul>
+            <p style="margin-top: 12px;">We are not responsible for the privacy practices of third-party services. We encourage you to review their privacy policies.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">6. Cookies and Tracking</h2>
+            <p>{{ projectname }} uses cookies and similar technologies to:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Maintain your login session</li>
+                <li>Remember your preferences (theme, settings)</li>
+                <li>Analyze site usage and performance</li>
+            </ul>
+            <p style="margin-top: 12px;">You can control cookie settings through your browser, but disabling cookies may limit functionality.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">7. Your Rights</h2>
+            <p>You have the following rights regarding your personal data:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li><strong>Access:</strong> Request a copy of your personal data</li>
+                <li><strong>Correction:</strong> Update or correct inaccurate information</li>
+                <li><strong>Deletion:</strong> Request deletion of your account and data</li>
+                <li><strong>Portability:</strong> Request your data in a portable format</li>
+                <li><strong>Objection:</strong> Object to certain data processing activities</li>
+            </ul>
+            <p style="margin-top: 12px;">To exercise these rights, contact us through your account dashboard or support panel.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">8. Data Disclosure</h2>
+            <p>We do not sell, trade, or rent your personal information. We may disclose information only in the following circumstances:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li><strong>Legal Requirements:</strong> When required by law, court order, or government request</li>
+                <li><strong>Terms Enforcement:</strong> To enforce our Terms of Service</li>
+                <li><strong>Protection:</strong> To protect our rights, property, or safety, or that of our users</li>
+                <li><strong>Business Transfer:</strong> In connection with a merger, acquisition, or sale of assets</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">9. Children's Privacy</h2>
+            <p>{{ projectname }} is not intended for users under 18 years of age. We do not knowingly collect personal information from children. If we become aware that a child has provided personal information, we will delete it immediately.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">10. International Users</h2>
+            <p>Your information may be transferred to and processed in countries other than your country of residence. By using {{ projectname }}, you consent to the transfer of information to countries that may have different data protection laws.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">11. Changes to This Policy</h2>
+            <p>We may update this Privacy Policy from time to time. We will notify you of significant changes by email or through a notice on our platform. Your continued use of {{ projectname }} after changes constitutes acceptance of the updated policy.</p>
+        </section>
+
+        <section>
+            <h2 style="margin-bottom: 16px; font-size: 1.5rem;">12. Contact Us</h2>
+            <p>If you have questions or concerns about this Privacy Policy or our data practices, please contact us through:</p>
+            <ul style="margin-left: 24px; margin-top: 12px;">
+                <li>Support panel in your account dashboard</li>
+                <li>Email provided in your account settings</li>
+            </ul>
+        </section>
+
+        <div style="margin-top: 48px; padding: 24px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;">
+            <p style="font-size: 14px; opacity: 0.8;">By using {{ projectname }}, you acknowledge that you have read and understood this Privacy Policy and agree to its terms.</p>
+        </div>
+
+    </div>
+</div>
+{% endblock %}
