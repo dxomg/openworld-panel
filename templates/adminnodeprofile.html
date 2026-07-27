@@ -118,8 +118,8 @@
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Node Profile</div>
         <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
             <h1 style="margin: 0;">{{ node.name }}</h1>
-            {% set sClass = 'status-running' if node.status == 'online' else 'status-unknown' %}
-            <span class="status-pill {{ sClass }}"><span class="dot"></span>{{ node.status|capitalize }}</span>
+            {% set sClass = 'status-running' if node.status == 'online' else ('status-stopped' if node.status == 'offline' else 'status-unknown') %}
+            <span id="node-status-pill" class="status-pill {{ sClass }}"><span class="dot"></span><span id="node-status-text">{{ node.status|capitalize }}</span></span>
             <span style="display: inline-flex; gap: 6px; align-items: center; margin-left: 4px;">
                 <span class="type-badge type-{{ nodeType|default('docker') }}">{{ nodeType|default('docker')|upper }}</span>
                 <span class="tier-pill tier-{{ node.tier }}">{{ node.tier }}</span>
@@ -1143,46 +1143,56 @@
         return '--';
     }
 
+    function setNodeStatusPill(status) {
+        if (!status) return;
+        const pill = document.getElementById('node-status-pill');
+        const text = document.getElementById('node-status-text');
+        if (!pill || !text) return;
+        text.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        pill.classList.remove('status-running', 'status-stopped', 'status-unknown');
+        if (status === 'online') pill.classList.add('status-running');
+        else if (status === 'offline') pill.classList.add('status-stopped');
+        else pill.classList.add('status-unknown');
+    }
+
     function updateNodeStats() {
         fetch("{{ url_for('adminnodestats', nodeUuid=node.uuid) }}")
-            .then(r => {
-                if (!r.ok) throw new Error('Failed to fetch stats');
-                return r.json();
-            })
-            .then(stats => {
-                // CPU Usage - show percentage
+            .then(r => r.json().then(data => ({ ok: r.ok, data })))
+            .then(({ ok, data }) => {
+                if (data.node_status) setNodeStatusPill(data.node_status);
+                if (!ok) {
+                    ['stat-cpu','stat-ram','stat-disk','stat-netin','stat-netout'].forEach(id => {
+                        const el = document.getElementById(id);
+                        if (el) el.textContent = '--';
+                    });
+                    return;
+                }
+                const stats = data;
                 if (stats.cpu_percent !== undefined && stats.cpu_percent !== null) {
                     const cpu = Number(stats.cpu_percent);
-                    if (!isNaN(cpu)) {
-                        document.getElementById('stat-cpu').textContent = cpu.toFixed(1) + '%';
-                    } else {
-                        document.getElementById('stat-cpu').textContent = '--';
-                    }
+                    document.getElementById('stat-cpu').textContent = !isNaN(cpu) ? cpu.toFixed(1) + '%' : '--';
                 } else {
                     document.getElementById('stat-cpu').textContent = '--';
                 }
 
-                // Memory Usage
                 if (stats.memory_total && stats.memory_used !== undefined) {
                     const memPercent = stats.memory_percent || 0;
                     const used = formatBytes(stats.memory_used);
                     const total = formatBytes(stats.memory_total);
-                    document.getElementById('stat-ram').innerHTML = 
+                    document.getElementById('stat-ram').innerHTML =
                         `<span style="font-size: 22px;">${memPercent.toFixed(1)}%</span><br>` +
                         `<span style="font-size: 11px; font-weight: normal; color: #888;">${used} / ${total}</span>`;
                 }
 
-                // Disk Usage
                 if (stats.disk_total && stats.disk_used !== undefined) {
                     const diskPercent = stats.disk_percent || 0;
                     const used = formatBytes(stats.disk_used);
                     const total = formatBytes(stats.disk_total);
-                    document.getElementById('stat-disk').innerHTML = 
+                    document.getElementById('stat-disk').innerHTML =
                         `<span style="font-size: 22px;">${diskPercent.toFixed(1)}%</span><br>` +
                         `<span style="font-size: 11px; font-weight: normal; color: #888;">${used} / ${total}</span>`;
                 }
 
-                // Network I/O
                 if (stats.network_rx_bytes !== undefined) {
                     document.getElementById('stat-netin').textContent = formatBytes(stats.network_rx_bytes);
                 }
@@ -1192,7 +1202,7 @@
             })
             .catch(err => {
                 console.error('Failed to fetch node stats:', err);
-                // Keep showing previous values or "--" on error
+                setNodeStatusPill('offline');
             });
     }
 

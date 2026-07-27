@@ -77,6 +77,26 @@ CREATE TABLE IF NOT EXISTS plans (
     updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS plan_nodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    planid INTEGER NOT NULL,
+    nodeid INTEGER NOT NULL,
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE,
+    UNIQUE(planid, nodeid)
+);
+
+CREATE TABLE IF NOT EXISTS plan_storagepools (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    planid INTEGER NOT NULL,
+    storagepoolid INTEGER NOT NULL,
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+    FOREIGN KEY(storagepoolid) REFERENCES storagepools(id) ON DELETE CASCADE,
+    UNIQUE(planid, storagepoolid)
+);
+
 CREATE TABLE IF NOT EXISTS images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL,
@@ -436,6 +456,10 @@ CREATE INDEX IF NOT EXISTS idxusersdiscord ON users(discordid);
 CREATE INDEX IF NOT EXISTS idxbansuser ON bans(userid);
 
 CREATE INDEX IF NOT EXISTS idxplansuuid ON plans(uuid);
+CREATE INDEX IF NOT EXISTS idxplannodesplan ON plan_nodes(planid);
+CREATE INDEX IF NOT EXISTS idxplannodesnode ON plan_nodes(nodeid);
+CREATE INDEX IF NOT EXISTS idxplanpoolsplan ON plan_storagepools(planid);
+CREATE INDEX IF NOT EXISTS idxplanpoolspool ON plan_storagepools(storagepoolid);
 
 CREATE INDEX IF NOT EXISTS idximagesuuid ON images(uuid);
 

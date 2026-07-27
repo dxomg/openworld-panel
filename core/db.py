@@ -112,6 +112,119 @@ def removeplan(uuid):
     with getconnection() as conn:
         conn.execute("DELETE FROM plans WHERE uuid = ?", (uuid,))
 
+
+def ensureplanassignmenttables():
+    """Create plan_nodes / plan_storagepools if missing (live DB migrate)."""
+    with getconnection() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS plan_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                planid INTEGER NOT NULL,
+                nodeid INTEGER NOT NULL,
+                created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+                FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE,
+                UNIQUE(planid, nodeid)
+            );
+            CREATE TABLE IF NOT EXISTS plan_storagepools (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                planid INTEGER NOT NULL,
+                storagepoolid INTEGER NOT NULL,
+                created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+                FOREIGN KEY(storagepoolid) REFERENCES storagepools(id) ON DELETE CASCADE,
+                UNIQUE(planid, storagepoolid)
+            );
+            CREATE INDEX IF NOT EXISTS idxplannodesplan ON plan_nodes(planid);
+            CREATE INDEX IF NOT EXISTS idxplannodesnode ON plan_nodes(nodeid);
+            CREATE INDEX IF NOT EXISTS idxplanpoolsplan ON plan_storagepools(planid);
+            CREATE INDEX IF NOT EXISTS idxplanpoolspool ON plan_storagepools(storagepoolid);
+        """)
+
+
+def getplannodeids(planid):
+    with getconnection() as conn:
+        rows = conn.execute(
+            "SELECT nodeid FROM plan_nodes WHERE planid = ?", (planid,)
+        ).fetchall()
+        return [r["nodeid"] for r in rows]
+
+
+def getplanstoragepoolids(planid):
+    with getconnection() as conn:
+        rows = conn.execute(
+            "SELECT storagepoolid FROM plan_storagepools WHERE planid = ?", (planid,)
+        ).fetchall()
+        return [r["storagepoolid"] for r in rows]
+
+
+def listplannodes(planid):
+    with getconnection() as conn:
+        rows = conn.execute("""
+            SELECT n.*
+            FROM plan_nodes pn
+            JOIN nodes n ON n.id = pn.nodeid
+            WHERE pn.planid = ?
+            ORDER BY n.name
+        """, (planid,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def listplanstoragepools(planid):
+    with getconnection() as conn:
+        rows = conn.execute("""
+            SELECT sp.*, nd.name as node_name, nd.id as node_id
+            FROM plan_storagepools psp
+            JOIN storagepools sp ON sp.id = psp.storagepoolid
+            JOIN nodes nd ON nd.id = sp.nodeid
+            WHERE psp.planid = ?
+            ORDER BY nd.name, sp.name
+        """, (planid,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def setplannodes(planid, nodeids):
+    """Replace plan→node assignments. nodeids = list of int ids."""
+    nodeids = [int(x) for x in nodeids if x is not None and str(x).strip() != ""]
+    with getconnection() as conn:
+        conn.execute("DELETE FROM plan_nodes WHERE planid = ?", (planid,))
+        for nid in nodeids:
+            conn.execute(
+                "INSERT OR IGNORE INTO plan_nodes (planid, nodeid) VALUES (?, ?)",
+                (planid, nid),
+            )
+
+
+def setplanstoragepools(planid, poolids, nodeids=None):
+    """Replace plan→storagepool assignments. Only pools on assigned nodes kept."""
+    poolids = [int(x) for x in poolids if x is not None and str(x).strip() != ""]
+    with getconnection() as conn:
+        if nodeids is not None:
+            nodeids = [int(x) for x in nodeids if x is not None and str(x).strip() != ""]
+            if not nodeids:
+                poolids = []
+            else:
+                placeholders = ",".join("?" * len(nodeids))
+                valid = conn.execute(
+                    f"SELECT id FROM storagepools WHERE nodeid IN ({placeholders})",
+                    nodeids,
+                ).fetchall()
+                valid_ids = {r["id"] for r in valid}
+                poolids = [p for p in poolids if p in valid_ids]
+        conn.execute("DELETE FROM plan_storagepools WHERE planid = ?", (planid,))
+        for pid in poolids:
+            conn.execute(
+                "INSERT OR IGNORE INTO plan_storagepools (planid, storagepoolid) VALUES (?, ?)",
+                (planid, pid),
+            )
+
+
+def getplanbyuuid(planuuid):
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM plans WHERE uuid = ?", (planuuid,)).fetchone()
+        return dict(row) if row else None
+
+
 def userhasfreevps(userid):
     """Check if user already has a VPS on a free plan (price = 0)."""
     with getconnection() as conn:
@@ -1258,73 +1371,97 @@ def gettransactionfull(tid):
         return dict(row) if row else None
 
 
-def getsuitablenodeandstorage(planPrice, strategy='both', node_type='docker', imageid=None):
-    requiredTier = 'paid' if planPrice > 0 else 'free'
+def getsuitablenodeandstorage(planid, strategy='both', node_type='docker', imageid=None, disk_mb=0):
+    """Pick node+storage from plan assignments (not free/paid tier).
+
+    Returns (node_id, storagepool_id). storagepool_id may be None for docker.
+    """
     imageFilter = "AND EXISTS (SELECT 1 FROM node_images ni WHERE ni.nodeid = n.id AND ni.imageid = ?)" if imageid else ""
     imageParams = [imageid] if imageid else []
-    
+    # Only nodes assigned to this plan
+    planNodeFilter = "AND EXISTS (SELECT 1 FROM plan_nodes pn WHERE pn.nodeid = n.id AND pn.planid = ?)"
+    baseWhere = f"n.status = 'online' AND n.type = ? {planNodeFilter} {imageFilter}"
+    baseParams = [node_type, planid] + imageParams
+
     with getconnection() as conn:
         if strategy == 'random':
             nodes = conn.execute(
-                f"SELECT id FROM nodes n WHERE tier = ? AND status = 'online' AND type = ? {imageFilter}",
-                [requiredTier, node_type] + imageParams
+                f"SELECT n.id FROM nodes n WHERE {baseWhere}",
+                baseParams
             ).fetchall()
             if not nodes:
                 return None, None
             node_id = random.choice(nodes)['id']
 
         elif strategy == 'least_vps':
-            row = conn.execute("""
+            row = conn.execute(f"""
                 SELECT n.id
                 FROM nodes n
                 LEFT JOIN vps v ON v.nodeid = n.id AND v.status NOT IN ('deleted', 'error')
-                WHERE n.tier = ? AND n.status = 'online' AND n.type = ? """ + imageFilter + """
+                WHERE {baseWhere}
                 GROUP BY n.id
                 ORDER BY COUNT(v.id) ASC
                 LIMIT 1
-            """, [requiredTier, node_type] + imageParams).fetchone()
+            """, baseParams).fetchone()
             if not row:
                 return None, None
             node_id = row['id']
 
         elif strategy == 'resources':
-            row = conn.execute("""
+            row = conn.execute(f"""
                 SELECT n.id
                 FROM nodes n
                 LEFT JOIN vps v ON v.nodeid = n.id AND v.status NOT IN ('deleted', 'error')
-                WHERE n.tier = ? AND n.status = 'online' AND n.type = ? """ + imageFilter + """
+                WHERE {baseWhere}
                 GROUP BY n.id
                 HAVING n.ram > COALESCE(SUM(v.ram), 0)
                 ORDER BY (n.ram - COALESCE(SUM(v.ram), 0)) DESC
                 LIMIT 1
-            """, [requiredTier, node_type] + imageParams).fetchone()
+            """, baseParams).fetchone()
             if not row:
                 return None, None
             node_id = row['id']
 
         else:  # 'both' (default)
-            row = conn.execute("""
+            row = conn.execute(f"""
                 SELECT n.id,
                        n.ram as total_ram,
                        COALESCE(SUM(v.ram), 0) as used_ram,
                        COUNT(v.id) as vps_count
                 FROM nodes n
                 LEFT JOIN vps v ON v.nodeid = n.id AND v.status NOT IN ('deleted', 'error')
-                WHERE n.tier = ? AND n.status = 'online' AND n.type = ? """ + imageFilter + """
+                WHERE {baseWhere}
                 GROUP BY n.id
                 HAVING n.ram > COALESCE(SUM(v.ram), 0)
                 ORDER BY (n.ram - COALESCE(SUM(v.ram), 0)) DESC, vps_count ASC
                 LIMIT 1
-            """, [requiredTier, node_type] + imageParams).fetchone()
+            """, baseParams).fetchone()
             if not row:
                 return None, None
             node_id = row['id']
 
-        storage = conn.execute(
-            "SELECT id FROM storagepools WHERE nodeid = ?", 
-            (node_id,)
-        ).fetchone()
-        
+        # Storage: prefer pools assigned to plan on this node; fall back none
+        storage = conn.execute("""
+            SELECT sp.id
+            FROM storagepools sp
+            JOIN plan_storagepools psp ON psp.storagepoolid = sp.id
+            WHERE psp.planid = ? AND sp.nodeid = ?
+              AND (sp.size <= 0 OR (sp.size * 1024 - sp.used) >= ?)
+            ORDER BY (CASE WHEN sp.size > 0 THEN (sp.size * 1024 - sp.used) ELSE 999999999 END) DESC
+            LIMIT 1
+        """, (planid, node_id, disk_mb or 0)).fetchone()
+
+        if not storage and node_type == 'proxmox':
+            # Assigned pool on node but capacity filter empty — try without capacity
+            storage = conn.execute("""
+                SELECT sp.id
+                FROM storagepools sp
+                JOIN plan_storagepools psp ON psp.storagepoolid = sp.id
+                WHERE psp.planid = ? AND sp.nodeid = ?
+                ORDER BY sp.created DESC
+                LIMIT 1
+            """, (planid, node_id)).fetchone()
+
         return node_id, (storage['id'] if storage else None)
     
 def updateimage(uuid, **kwargs):

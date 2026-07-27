@@ -52,8 +52,8 @@
                     <span style="color: var(--text);">{{ checkoutVps.hostname }}</span>
                 </div>
                 <div class="checkout-context-row">
-                    <span style="color: var(--text-dim);">Deployment Tier</span>
-                    <span style="color: var(--accent);">{{ 'Premium Node' if plan.price > 0 else 'Standard Node' }}</span>
+                    <span style="color: var(--text-dim);">Plan</span>
+                    <span style="color: var(--accent);">{{ plan.name }}</span>
                 </div>
             </div>
 

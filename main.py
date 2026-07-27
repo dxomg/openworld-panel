@@ -520,6 +520,7 @@ def dashboard():
 @app.route("/createvps", methods=["GET", "POST"])
 @loginrequired
 def createvps():
+    db.ensureplanassignmenttables()
     if request.method == "POST":
         planId = request.form.get("planId", type=int)
         imageId = request.form.get("imageId", type=int)
@@ -555,15 +556,16 @@ def createvps():
             flash("Selected image is not assigned to any node.", "error")
             return redirect(url_for('createvps'))
 
-        nodeId, storageId = db.getsuitablenodeandstorage(
-            plan['price'],
+        nodeId, storagePoolId = db.getsuitablenodeandstorage(
+            plan['id'],
             strategy=config.get('loadbalancing', {}).get('strategy', 'both'),
             node_type=plan['node_type'],
-            imageid=image['id']
+            imageid=image['id'],
+            disk_mb=plan.get('disk', 0),
         )
         
         if not nodeId:
-            flash("No nodes available with this image assigned.", "error")
+            flash("No nodes available for this plan (check plan node assignments and image).", "error")
             return redirect(url_for('createvps'))
 
         # Auto-assign network from the node
@@ -580,14 +582,10 @@ def createvps():
             flash(ipError, "error")
             return redirect(url_for('createvps'))
 
-        # Auto-assign storage pool from the node (proxmox only)
-        storagePoolId = None
-        if nodeNetType == 'proxmox':
-            nodePools = db.liststoragepools(nodeid=nodeId)
-            if not nodePools:
-                flash("No storage pool configured for this node. Contact an admin.", "error")
-                return redirect(url_for('createvps'))
-            storagePoolId = nodePools[0]['id']
+        # Proxmox needs a plan-assigned storage pool on the chosen node
+        if nodeNetType == 'proxmox' and not storagePoolId:
+            flash("No storage pool assigned to this plan for the selected node. Contact an admin.", "error")
+            return redirect(url_for('createvps'))
 
         vpsUuid = str(uuid.uuid4())
         initialStatus = 'pendingpayment' if isPaid else 'creating'
@@ -600,7 +598,7 @@ def createvps():
                 plan=plan,
                 imageid=imageId,
                 nodeid=nodeId,
-                storageid=storageId,
+                storageid=storagePoolId,
                 networkid=networkId,
                 network_type=nodeNetType,
                 storagepoolid=storagePoolId,
@@ -1609,32 +1607,61 @@ def admincreatevps():
 @loginrequired
 @adminrequired
 def adminplans():
-    # Handle New Plan Creation
+    db.ensureplanassignmenttables()
     if request.method == "POST":
+        planUuid = str(uuid.uuid4())
         db.addplan(
-            uuid=str(uuid.uuid4()),
+            uuid=planUuid,
             name=request.form.get("name"),
-            cpu=request.form.get("cpu"),
-            ram=request.form.get("ram"),
-            swap=request.form.get("swap"),
-            disk=request.form.get("disk"),
-            price=request.form.get("price"),
+            cpu=int(request.form.get("cpu")),
+            ram=int(request.form.get("ram")),
+            swap=int(request.form.get("swap")),
+            disk=int(request.form.get("disk")),
+            description=request.form.get("description"),
+            ipv4=1 if request.form.get("ipv4") else 0,
+            ipv6=1 if request.form.get("ipv6") else 0,
+            price=float(request.form.get("price") or 0),
+            active=1 if request.form.get("active") else 0,
             stock=int(request.form.get("stock", -1)),
             netmbps=int(request.form.get("netmbps", 0)),
-            node_type=request.form.get("node_type", "docker")
+            node_type=request.form.get("node_type", "docker"),
         )
-        auditlog("plan.create", "plan", None, f"Created plan '{request.form.get('name')}'")
+        plan = db.getplanbyuuid(planUuid)
+        if plan:
+            nodeIds = request.form.getlist("node_ids")
+            db.setplannodes(plan["id"], nodeIds)
+            db.setplanstoragepools(plan["id"], request.form.getlist("storagepool_ids"), nodeids=nodeIds)
+        auditlog("plan.create", "plan", planUuid, f"Created plan '{request.form.get('name')}'")
         return redirect(url_for('adminplans'))
 
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
     plansData = db.listplanspaginated(page=page, perpage=12, search=q)
+    allNodes = db.listallnodes()
+    # attach each node's existing storage pools (from storagepools table)
+    for n in allNodes:
+        n['pools'] = db.liststoragepools(nodeid=n['id'])
+    for plan in plansData['plans']:
+        plan['assigned_node_ids'] = db.getplannodeids(plan['id'])
+        plan['assigned_pool_ids'] = db.getplanstoragepoolids(plan['id'])
+        plan['assigned_nodes'] = db.listplannodes(plan['id'])
+        plan['assigned_pools'] = db.listplanstoragepools(plan['id'])
+
+    defaultNodeType = allNodes[0].get('type', 'docker') if allNodes else 'docker'
+    defaultNodeId = allNodes[0]['id'] if allNodes else None
+    defaultPoolId = None
+    if allNodes and allNodes[0].get('pools'):
+        defaultPoolId = allNodes[0]['pools'][0]['id']
 
     return render_template(
         "adminplans.html", 
         allPlans=plansData['plans'],
         pagination=plansData,
         search=q or '',
+        allNodes=allNodes,
+        defaultNodeType=defaultNodeType,
+        defaultNodeId=defaultNodeId,
+        defaultPoolId=defaultPoolId,
         **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo)
     )
@@ -1643,10 +1670,12 @@ def adminplans():
 @loginrequired
 @adminrequired
 def adminupdateplans(planUuid):
-    # Retrieve form data
-    # Note: Use request.form.get() for inputs, 
-    # check for checkbox values if you add them later (they might return 'on')
-    
+    db.ensureplanassignmenttables()
+    plan = db.getplanbyuuid(planUuid)
+    if not plan:
+        flash("Plan not found.", "error")
+        return redirect(url_for('adminplans'))
+
     db.updateplan(
         uuid=planUuid,
         name=request.form.get("name"),
@@ -1655,14 +1684,17 @@ def adminupdateplans(planUuid):
         swap=int(request.form.get("swap")),
         disk=int(request.form.get("disk")),
         description=request.form.get("description"),
-        ipv4=int(request.form.get("ipv4", 0)),
-        ipv6=int(request.form.get("ipv6", 1)),
+        ipv4=1 if request.form.get("ipv4") else 0,
+        ipv6=1 if request.form.get("ipv6") else 0,
         price=float(request.form.get("price")),
-        active=int(request.form.get("active", 1)),
+        active=1 if request.form.get("active") else 0,
         stock=int(request.form.get("stock", -1)),
         netmbps=int(request.form.get("netmbps", 0)),
         node_type=request.form.get("node_type", "docker")
     )
+    nodeIds = request.form.getlist("node_ids")
+    db.setplannodes(plan["id"], nodeIds)
+    db.setplanstoragepools(plan["id"], request.form.getlist("storagepool_ids"), nodeids=nodeIds)
     
     auditlog("plan.update", "plan", planUuid, f"Updated plan '{request.form.get('name')}'")
     return redirect(url_for('adminplans'))
@@ -1682,7 +1714,14 @@ def adminnodes():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
     nodesData = db.listnodespaginated(page=page, perpage=12, search=q)
-    
+    for n in nodesData['nodes']:
+        try:
+            services.probenode(n, timeout=3)
+            fresh = db.getnode(n['uuid'])
+            if fresh:
+                n['status'] = fresh['status']
+        except Exception:
+            pass
     return render_template(
         "adminnodes.html", 
         allNodes=nodesData['nodes'],
@@ -1794,6 +1833,12 @@ def adminnodeprofile(nodeUuid):
         flash("Node not found.", "error")
         return redirect(url_for('adminnodes'))
 
+    try:
+        services.probenode(node, timeout=3)
+        node = db.getnode(nodeUuid) or node
+    except Exception:
+        pass
+
     nodeType = node.get('type', 'docker')
     tab = request.args.get('tab', 'overview')
 
@@ -1823,122 +1868,122 @@ def adminnodeprofile(nodeUuid):
         **paneladmininfo(g.userinfo)
     )
 
+@app.route("/dashboard/admin/nodes/status")
+@loginrequired
+@adminrequired
+def adminnodesstatus():
+    """Probe all (or listed) nodes; return uuid→status. Updates online/offline in DB."""
+    uuids = request.args.getlist("uuid")
+    nodes = db.listallnodes() if not uuids else [n for n in db.listallnodes() if n["uuid"] in set(uuids)]
+    out = {}
+    for n in nodes:
+        try:
+            services.probenode(n, timeout=3)
+            fresh = db.getnode(n["uuid"]) or n
+            out[n["uuid"]] = fresh.get("status", "offline")
+        except Exception:
+            out[n["uuid"]] = "offline"
+    return jsonify({"statuses": out})
+
+
 @app.route("/dashboard/admin/nodes/<string:nodeUuid>/stats")
 @loginrequired
 @adminrequired
 def adminnodestats(nodeUuid):
-    """API endpoint to fetch live node stats."""
+    """API endpoint to fetch live node stats. Sets online/offline from reachability."""
     node = db.getnode(nodeUuid)
     if not node:
         return jsonify({"error": "Node not found"}), 404
-    
+
     nodeType = node.get('type', 'docker')
-    
+    ok, raw = services.probenode(node, timeout=5)
+    fresh = db.getnode(nodeUuid) or node
+    live_status = fresh.get('status', 'offline')
+
+    if not ok:
+        return jsonify({
+            "error": "Node unreachable",
+            "node_status": live_status,
+        }), 503
+
     if nodeType == 'docker':
-        # Fetch stats from Docker node agent
-        result = services.nodeapi(node, "/node/stats", method="GET", timeout=5)
-        if not result or result.get('error'):
-            return jsonify({"error": result.get('error', 'Node unreachable') if result else "Node unreachable"}), 503
-        return jsonify(result.get('stats', {}))
-    
-    elif nodeType == 'proxmox':
-        # Fetch stats from Proxmox API
+        stats = dict(raw or {})
+        stats['node_status'] = live_status
+        return jsonify(stats)
+
+    if nodeType == 'proxmox':
+        status = raw or {}
+        cpu_val = status.get('cpu', 0)
+        cpu_percent = round(cpu_val * 100, 1) if isinstance(cpu_val, (int, float)) else 0
+
+        memory_info = status.get('memory', {})
+        if isinstance(memory_info, dict):
+            mem_total = memory_info.get('total', 0)
+            mem_used = memory_info.get('used', 0)
+            mem_free = memory_info.get('free', 0)
+        else:
+            mem_total = status.get('memtotal', status.get('maxmem', 0))
+            mem_used = status.get('memused', status.get('mem', 0))
+            mem_free = mem_total - mem_used
+
+        mem_percent = round((mem_used / mem_total * 100), 1) if mem_total > 0 else 0
+
+        rootfs_info = status.get('rootfs', {})
+        if isinstance(rootfs_info, dict):
+            disk_total = rootfs_info.get('total', 0)
+            disk_used = rootfs_info.get('used', 0)
+            disk_free = rootfs_info.get('free', rootfs_info.get('avail', 0))
+        else:
+            disk_total = status.get('maxdisk', 0)
+            disk_used = status.get('disk', 0)
+            disk_free = disk_total - disk_used
+
+        disk_percent = round((disk_used / disk_total * 100), 1) if disk_total > 0 else 0
+
+        loadavg = status.get('loadavg', [0, 0, 0])
+        if isinstance(loadavg, list) and len(loadavg) >= 3:
+            load_1, load_5, load_15 = loadavg[0], loadavg[1], loadavg[2]
+        else:
+            load_1 = load_5 = load_15 = 0
+
+        stats = {
+            'cpu_percent': cpu_percent,
+            'memory_total': mem_total,
+            'memory_used': mem_used,
+            'memory_free': mem_free,
+            'memory_percent': mem_percent,
+            'disk_total': disk_total,
+            'disk_used': disk_used,
+            'disk_free': disk_free,
+            'disk_percent': disk_percent,
+            'load_1': load_1,
+            'load_5': load_5,
+            'load_15': load_15,
+            'uptime': status.get('uptime', 0),
+            'node_status': live_status,
+        }
+
         try:
             from utils.proxmox import getproxmoxclient
             pve = getproxmoxclient(node)
             node_name = node.get('proxmoxnode', 'pve')
-            
-            # Get node status - returns current resource usage
-            status = pve.nodes(node_name).status.get()
-            
-            # Proxmox returns different keys, handle both formats
-            # CPU is returned as decimal (0.05 = 5%)
-            cpu_val = status.get('cpu', 0)
-            if isinstance(cpu_val, (int, float)):
-                cpu_percent = round(cpu_val * 100, 1)
+            rrd = pve.nodes(node_name).rrddata.get(timeframe='hour', cf='AVERAGE')
+            if rrd and len(rrd) > 0:
+                latest = rrd[-1]
+                net_in_rate = latest.get('netin', 0) or 0
+                net_out_rate = latest.get('netout', 0) or 0
+                uptime = status.get('uptime', 0)
+                stats['network_rx_bytes'] = int(net_in_rate * uptime) if uptime > 0 else 0
+                stats['network_tx_bytes'] = int(net_out_rate * uptime) if uptime > 0 else 0
             else:
-                cpu_percent = 0
-            
-            # Memory - can be dict or separate keys
-            memory_info = status.get('memory', {})
-            if isinstance(memory_info, dict):
-                mem_total = memory_info.get('total', 0)
-                mem_used = memory_info.get('used', 0)
-                mem_free = memory_info.get('free', 0)
-            else:
-                # Alternative format with separate keys
-                mem_total = status.get('memtotal', status.get('maxmem', 0))
-                mem_used = status.get('memused', status.get('mem', 0))
-                mem_free = mem_total - mem_used
-            
-            mem_percent = round((mem_used / mem_total * 100), 1) if mem_total > 0 else 0
-            
-            # Disk/rootfs - can be dict or separate keys
-            rootfs_info = status.get('rootfs', {})
-            if isinstance(rootfs_info, dict):
-                disk_total = rootfs_info.get('total', 0)
-                disk_used = rootfs_info.get('used', 0)
-                disk_free = rootfs_info.get('free', rootfs_info.get('avail', 0))
-            else:
-                # Alternative format
-                disk_total = status.get('maxdisk', 0)
-                disk_used = status.get('disk', 0)
-                disk_free = disk_total - disk_used
-            
-            disk_percent = round((disk_used / disk_total * 100), 1) if disk_total > 0 else 0
-            
-            # Load average
-            loadavg = status.get('loadavg', [0, 0, 0])
-            if isinstance(loadavg, list) and len(loadavg) >= 3:
-                load_1, load_5, load_15 = loadavg[0], loadavg[1], loadavg[2]
-            else:
-                load_1 = load_5 = load_15 = 0
-            
-            # Format stats to match our format
-            stats = {
-                'cpu_percent': cpu_percent,
-                'memory_total': mem_total,
-                'memory_used': mem_used,
-                'memory_free': mem_free,
-                'memory_percent': mem_percent,
-                'disk_total': disk_total,
-                'disk_used': disk_used,
-                'disk_free': disk_free,
-                'disk_percent': disk_percent,
-                'load_1': load_1,
-                'load_5': load_5,
-                'load_15': load_15,
-                'uptime': status.get('uptime', 0)
-            }
-            
-            # Try to get network stats from RRD data
-            try:
-                # Get RRD data for the last data point (current stats)
-                # timeframe 'hour' with CF 'AVERAGE' gives us current rates
-                rrd = pve.nodes(node_name).rrddata.get(timeframe='hour', cf='AVERAGE')
-                if rrd and len(rrd) > 0:
-                    # Get the most recent data point
-                    latest = rrd[-1]
-                    # netin and netout are in bytes/sec, multiply by uptime for cumulative estimate
-                    net_in_rate = latest.get('netin', 0) or 0
-                    net_out_rate = latest.get('netout', 0) or 0
-                    uptime = status.get('uptime', 0)
-                    
-                    # Estimate cumulative bytes (rate * uptime)
-                    stats['network_rx_bytes'] = int(net_in_rate * uptime) if uptime > 0 else 0
-                    stats['network_tx_bytes'] = int(net_out_rate * uptime) if uptime > 0 else 0
-                else:
-                    stats['network_rx_bytes'] = 0
-                    stats['network_tx_bytes'] = 0
-            except:
                 stats['network_rx_bytes'] = 0
                 stats['network_tx_bytes'] = 0
-            
-            return jsonify(stats)
-        except Exception as e:
-            import traceback
-            return jsonify({"error": f"Proxmox API error: {str(e)}", "trace": traceback.format_exc()}), 503
-    
+        except Exception:
+            stats['network_rx_bytes'] = 0
+            stats['network_tx_bytes'] = 0
+
+        return jsonify(stats)
+
     return jsonify({"error": "Unknown node type"}), 400
 
 @app.route("/dashboard/admin/nodes/<string:nodeUuid>/images")

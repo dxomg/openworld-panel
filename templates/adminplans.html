@@ -15,6 +15,70 @@
     .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
     .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
     .type-inactive { background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid #64748b; }
+    .hint { display: block; margin-top: 4px; font-size: 11px; color: var(--text-dim); }
+    .modal-backdrop .modal-panel {
+        max-width: 860px;
+        width: min(860px, 96vw);
+        max-height: 92vh;
+        overflow-y: auto;
+    }
+    .plan-form-layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 28px 32px;
+        align-items: start;
+    }
+    .plan-form-col {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-width: 0;
+    }
+    .plan-form-col-title {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--text-dim);
+        margin: 0 0 2px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border-soft);
+    }
+    .assign-select {
+        width: 100%;
+        min-height: 160px;
+        background: var(--bg-raise);
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: var(--radius);
+        font-family: var(--font-mono);
+        font-size: 13px;
+        padding: 8px;
+        outline: none;
+    }
+    .assign-select option { padding: 6px 8px; }
+    .assign-select option:disabled { color: var(--text-dim); }
+    .plan-flags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px 18px;
+        background: var(--bg-raise);
+        padding: 10px 12px;
+        border-radius: var(--radius);
+        border: 1px solid var(--border-soft);
+    }
+    .plan-flags label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text);
+    }
+    @media (max-width: 700px) {
+        .plan-form-layout { grid-template-columns: 1fr; gap: 20px; }
+    }
 </style>
 <div class="page">
     <section class="hero">
@@ -65,6 +129,14 @@
                         {% if plan.stock == -1 %}Unlimited{% elif plan.stock == 0 %}Out{% else %}{{ plan.stock }}{% endif %}
                     </span>
                 </div>
+                <div class="plan-spec">
+                    <span class="k">Nodes</span>
+                    <span class="v">{{ plan.assigned_node_ids|length if plan.assigned_node_ids else 0 }}</span>
+                </div>
+                <div class="plan-spec">
+                    <span class="k">Pools</span>
+                    <span class="v">{{ plan.assigned_pool_ids|length if plan.assigned_pool_ids else 0 }}</span>
+                </div>
             </div>
             
             <!-- Pushes the buttons to the bottom of the card -->
@@ -84,64 +156,83 @@
                     <button type="button" class="modal-close" onclick="closeViewPlanModal('{{ plan.uuid }}')">&times;</button>
                 </div>
                 <form action="{{ url_for('adminupdateplans', planUuid=plan.uuid) }}" method="POST">
-                    <!-- Increased gap from 12px to 20px for breathing room -->
-                    <div class="form-grid" style="grid-template-columns: 1fr; gap: 20px;">
-                        
-                        <div class="field">
-                            <label>Plan Name</label>
-                            <input type="text" name="name" value="{{ plan.name }}" required>
-                        </div>
-                        
-                        <div class="field">
-                            <label>Description</label>
-                            <!-- Added inline styles so the textarea matches your standard inputs -->
-                            <textarea name="description" rows="2" style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none; resize: vertical;">{{ plan.description }}</textarea>
-                        </div>
-                        
-                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                            <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" value="{{ plan.cpu }}" required></div>
-                            <div class="field"><label>RAM (MB)</label><input type="number" name="ram" value="{{ plan.ram }}" required></div>
-                        </div>
-                        
-                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                            <div class="field"><label>Swap (MB)</label><input type="number" name="swap" value="{{ plan.swap }}" required></div>
-                            <div class="field"><label>Disk (MB)</label><input type="number" name="disk" value="{{ plan.disk }}" required></div>
-                        </div>
-                        
-                        <div class="field">
-                            <label>Price ($)</label>
-                            <input type="number" step="0.01" name="price" value="{{ plan.price }}" required>
-                        </div>
-                        
-                        <div class="field">
-                            <label>Stock (-1 = unlimited)</label>
-                            <input type="number" name="stock" value="{{ plan.stock }}" min="-1">
+                    <div class="plan-form-layout">
+                        <div class="plan-form-col">
+                            <div class="plan-form-col-title">Plan details</div>
+                            <div class="field">
+                                <label>Plan Name</label>
+                                <input type="text" name="name" value="{{ plan.name }}" required>
+                            </div>
+                            <div class="field">
+                                <label>Description</label>
+                                <textarea name="description" rows="2" style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none; resize: vertical;">{{ plan.description if plan.description else 'Basic VPS plan' }}</textarea>
+                            </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" value="{{ plan.cpu }}" required></div>
+                                <div class="field"><label>RAM (MB)</label><input type="number" name="ram" value="{{ plan.ram }}" required></div>
+                            </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div class="field"><label>Swap (MB)</label><input type="number" name="swap" value="{{ plan.swap }}" required></div>
+                                <div class="field"><label>Disk (MB)</label><input type="number" name="disk" value="{{ plan.disk }}" required></div>
+                            </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div class="field"><label>Price ($)</label><input type="number" step="0.01" name="price" value="{{ plan.price }}" required></div>
+                                <div class="field"><label>Stock (-1 = ∞)</label><input type="number" name="stock" value="{{ plan.stock }}" min="-1"></div>
+                            </div>
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div class="field">
+                                    <label>Node Type</label>
+                                    <select name="node_type" required>
+                                        <option value="docker" {% if plan.node_type == 'docker' %}selected{% endif %}>Docker</option>
+                                        <option value="proxmox" {% if plan.node_type == 'proxmox' %}selected{% endif %}>Proxmox</option>
+                                    </select>
+                                </div>
+                                <div class="field">
+                                    <label>Network Mbps (0 = ∞)</label>
+                                    <input type="number" name="netmbps" value="{{ plan.netmbps or 0 }}" min="0">
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label>Options</label>
+                                <div class="plan-flags">
+                                    <label><input type="checkbox" name="ipv4" value="1" {% if plan.ipv4 %}checked{% endif %}> IPv4</label>
+                                    <label><input type="checkbox" name="ipv6" value="1" {% if plan.ipv6 %}checked{% endif %}> IPv6</label>
+                                    <label><input type="checkbox" name="active" value="1" {% if plan.active %}checked{% endif %}> Active</label>
+                                </div>
+                            </div>
                         </div>
 
-                        <div class="field">
-                            <label>Node Type</label>
-                            <select name="node_type" required style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none;">
-                                <option value="docker" {% if plan.node_type == 'docker' %}selected{% endif %}>Docker</option>
-                                <option value="proxmox" {% if plan.node_type == 'proxmox' %}selected{% endif %}>Proxmox</option>
-                            </select>
-                        </div>
-
-                        <div class="field">
-                            <label>Network Mbps (0 = unlimited)</label>
-                            <input type="number" name="netmbps" value="{{ plan.netmbps or 0 }}" min="0">
-                        </div>
-                        
-                        <!-- Checkboxes wrapped in a subtle panel for visual grouping -->
-                        <div style="display:flex; justify-content: space-between; background: var(--bg-raise); padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border-soft);">
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
-                                <input type="checkbox" name="ipv4" value="1" {% if plan.ipv4 %}checked{% endif %}> IPv4
-                            </label>
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
-                                <input type="checkbox" name="ipv6" value="1" {% if plan.ipv6 %}checked{% endif %}> IPv6
-                            </label>
-                            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
-                                <input type="checkbox" name="active" value="1" {% if plan.active %}checked{% endif %}> Active
-                            </label>
+                        <div class="plan-form-col">
+                            <div class="plan-form-col-title">Nodes &amp; storage</div>
+                            <div class="field">
+                                <label>Nodes (Ctrl/Cmd+click)</label>
+                                <select name="node_ids" multiple class="assign-select plan-node-select" size="8">
+                                    {% for node in allNodes %}
+                                    <option value="{{ node.id }}"
+                                        data-node-type="{{ node.type|default('docker') }}"
+                                        {% if node.id in plan.assigned_node_ids %}selected{% endif %}>
+                                        {{ node.name }} — {{ node.type|default('docker') }} · {{ node.status }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                                <span class="hint">Only nodes matching plan node type.</span>
+                            </div>
+                            <div class="field">
+                                <label>Storage Pools (Ctrl/Cmd+click)</label>
+                                <select name="storagepool_ids" multiple class="assign-select plan-pool-select" size="8">
+                                    {% for node in allNodes %}
+                                        {% for pool in node.pools %}
+                                        <option value="{{ pool.id }}"
+                                            data-node-id="{{ node.id }}"
+                                            data-node-type="{{ node.type|default('docker') }}"
+                                            {% if pool.id in plan.assigned_pool_ids %}selected{% endif %}>
+                                            {{ pool.name }} on {{ node.name }} ({{ pool.size }}GB)
+                                        </option>
+                                        {% endfor %}
+                                    {% endfor %}
+                                </select>
+                                <span class="hint">Filtered by selected nodes. Proxmox needs ≥1 pool.</span>
+                            </div>
                         </div>
                     </div>
                     
@@ -179,55 +270,82 @@
                 <button type="button" class="modal-close" onclick="closeAddPlanModal()">&times;</button>
             </div>
             <form action="{{ url_for('adminplans') }}" method="POST">
-                <!-- Matched layout to Edit modal -->
-                <div class="form-grid" style="grid-template-columns: 1fr; gap: 20px;">
-                    <div class="field"><label>Plan Name</label><input type="text" name="name" required></div>
-                    
-                    <div class="field">
-                        <label>Description</label>
-                        <textarea name="description" rows="2" style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none; resize: vertical;"></textarea>
+                <div class="plan-form-layout">
+                    <div class="plan-form-col">
+                        <div class="plan-form-col-title">Plan details</div>
+                        <div class="field">
+                            <label>Plan Name</label>
+                            <input type="text" name="name" value="Starter" required>
+                        </div>
+                        <div class="field">
+                            <label>Description</label>
+                            <textarea name="description" rows="2" style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none; resize: vertical;">Basic VPS plan</textarea>
+                        </div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" value="1" min="1" required></div>
+                            <div class="field"><label>RAM (MB)</label><input type="number" name="ram" value="1024" min="128" required></div>
+                        </div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="field"><label>Swap (MB)</label><input type="number" name="swap" value="512" min="0" required></div>
+                            <div class="field"><label>Disk (MB)</label><input type="number" name="disk" value="10240" min="512" required></div>
+                        </div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="field"><label>Price ($)</label><input type="number" step="0.01" name="price" value="0" min="0" required></div>
+                            <div class="field"><label>Stock (-1 = ∞)</label><input type="number" name="stock" value="-1" min="-1"></div>
+                        </div>
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div class="field">
+                                <label>Node Type</label>
+                                <select name="node_type" required>
+                                    <option value="docker" {% if defaultNodeType != 'proxmox' %}selected{% endif %}>Docker</option>
+                                    <option value="proxmox" {% if defaultNodeType == 'proxmox' %}selected{% endif %}>Proxmox</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label>Network Mbps (0 = ∞)</label>
+                                <input type="number" name="netmbps" value="0" min="0">
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label>Options</label>
+                            <div class="plan-flags">
+                                <label><input type="checkbox" name="ipv4" value="1"> IPv4</label>
+                                <label><input type="checkbox" name="ipv6" value="1" checked> IPv6</label>
+                                <label><input type="checkbox" name="active" value="1" checked> Active</label>
+                            </div>
+                        </div>
                     </div>
 
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                        <div class="field"><label>CPU (Cores)</label><input type="number" name="cpu" required></div>
-                        <div class="field"><label>RAM (MB)</label><input type="number" name="ram" required></div>
-                    </div>
-                    
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
-                        <div class="field"><label>Swap (MB)</label><input type="number" name="swap" required></div>
-                        <div class="field"><label>Disk (MB)</label><input type="number" name="disk" required></div>
-                    </div>
-                    
-                    <div class="field"><label>Price ($)</label><input type="number" step="0.01" name="price" required></div>
-
-                    <div class="field">
-                        <label>Stock (-1 = unlimited)</label>
-                        <input type="number" name="stock" value="-1" min="-1">
-                    </div>
-
-                    <div class="field">
-                        <label>Node Type</label>
-                        <select name="node_type" required style="background: var(--bg-raise); border: 1px solid var(--border); padding: 10px 12px; color: var(--text); border-radius: var(--radius); font-family: var(--font-mono); font-size: 14px; outline: none;">
-                            <option value="docker" selected>Docker</option>
-                            <option value="proxmox">Proxmox</option>
-                        </select>
-                    </div>
-
-                    <div class="field">
-                        <label>Network Mbps (0 = unlimited)</label>
-                        <input type="number" name="netmbps" value="0" min="0">
-                    </div>
-
-                    <div style="display:flex; justify-content: space-between; background: var(--bg-raise); padding: 12px 16px; border-radius: var(--radius); border: 1px solid var(--border-soft);">
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
-                            <input type="checkbox" name="ipv4" value="1" checked> IPv4
-                        </label>
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
-                            <input type="checkbox" name="ipv6" value="1" checked> IPv6
-                        </label>
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-family: var(--font-mono); font-size: 13px; color: var(--text);">
-                            <input type="checkbox" name="active" value="1" checked> Active
-                        </label>
+                    <div class="plan-form-col">
+                        <div class="plan-form-col-title">Nodes &amp; storage</div>
+                        <div class="field">
+                            <label>Nodes (Ctrl/Cmd+click)</label>
+                            <select name="node_ids" multiple class="assign-select plan-node-select" size="8">
+                                {% for node in allNodes %}
+                                <option value="{{ node.id }}" data-node-type="{{ node.type|default('docker') }}"
+                                    {% if defaultNodeId and node.id == defaultNodeId %}selected{% endif %}>
+                                    {{ node.name }} — {{ node.type|default('docker') }} · {{ node.status }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <span class="hint">Only nodes matching plan node type. First node preselected.</span>
+                        </div>
+                        <div class="field">
+                            <label>Storage Pools (Ctrl/Cmd+click)</label>
+                            <select name="storagepool_ids" multiple class="assign-select plan-pool-select" size="8">
+                                {% for node in allNodes %}
+                                    {% for pool in node.pools %}
+                                    <option value="{{ pool.id }}"
+                                        data-node-id="{{ node.id }}"
+                                        data-node-type="{{ node.type|default('docker') }}"
+                                        {% if defaultPoolId and pool.id == defaultPoolId %}selected{% endif %}>
+                                        {{ pool.name }} on {{ node.name }} ({{ pool.size }}GB)
+                                    </option>
+                                    {% endfor %}
+                                {% endfor %}
+                            </select>
+                            <span class="hint">First pool on first node preselected. Proxmox needs ≥1 pool.</span>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-actions btn-row" style="margin-top: 28px;">
@@ -241,19 +359,73 @@
 
 <script>
     function openViewPlanModal(uuid) {
-        document.getElementById('viewPlanModal-' + uuid).classList.add('is-open');
+        const modal = document.getElementById('viewPlanModal-' + uuid);
+        modal.classList.add('is-open');
+        const form = modal.querySelector('form');
+        if (form) syncPlanAssign(form);
     }
     function closeViewPlanModal(uuid) {
         document.getElementById('viewPlanModal-' + uuid).classList.remove('is-open');
     }
     function openAddPlanModal() {
         document.getElementById('addPlanModal').classList.add('is-open');
+        const form = document.querySelector('#addPlanModal form');
+        if (form) syncPlanAssign(form);
     }
     function closeAddPlanModal() {
         document.getElementById('addPlanModal').classList.remove('is-open');
     }
-    
-    // Close when clicking the backdrop
+
+    function selectedValues(selectEl) {
+        return Array.from(selectEl.selectedOptions).map(o => o.value);
+    }
+
+    function syncPlanAssign(form) {
+        if (!form) return;
+        const typeSelect = form.querySelector('select[name="node_type"]');
+        const nodeType = typeSelect ? typeSelect.value : 'docker';
+        const nodeSelect = form.querySelector('.plan-node-select');
+        const poolSelect = form.querySelector('.plan-pool-select');
+        if (!nodeSelect || !poolSelect) return;
+
+        // Filter nodes by plan node_type
+        Array.from(nodeSelect.options).forEach(opt => {
+            const match = (opt.dataset.nodeType || 'docker') === nodeType;
+            opt.disabled = !match;
+            opt.hidden = !match;
+            if (!match) opt.selected = false;
+        });
+
+        const selectedNodeIds = new Set(selectedValues(nodeSelect));
+
+        // Filter pools: must match type AND belong to a selected node
+        // If no nodes selected yet, show all pools for matching type
+        Array.from(poolSelect.options).forEach(opt => {
+            const typeOk = (opt.dataset.nodeType || 'docker') === nodeType;
+            const nodeOk = selectedNodeIds.size === 0
+                ? typeOk
+                : selectedNodeIds.has(String(opt.dataset.nodeId));
+            const show = typeOk && nodeOk;
+            opt.disabled = !show;
+            opt.hidden = !show;
+            if (!show) opt.selected = false;
+        });
+    }
+
+    document.querySelectorAll('.modal-backdrop form').forEach(form => {
+        form.addEventListener('change', function(e) {
+            if (e.target.matches('select[name="node_type"], .plan-node-select')) {
+                syncPlanAssign(form);
+            }
+        });
+        // Before submit: drop disabled options so they never post
+        form.addEventListener('submit', function() {
+            form.querySelectorAll('.plan-node-select option:disabled, .plan-pool-select option:disabled').forEach(o => {
+                o.selected = false;
+            });
+        });
+    });
+
     window.onclick = function(event) {
         if (event.target.classList.contains('modal-backdrop')) {
             event.target.classList.remove('is-open');

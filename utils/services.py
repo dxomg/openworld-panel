@@ -342,6 +342,47 @@ def nodeapi(node, path, method="GET", data=None, timeout=10):
     except requests.RequestException as e:
         return {"error": str(e)}
 
+
+def setnoderunstatus(node, reachable):
+    """Flip online/offline from live reachability. Leave maintenance alone."""
+    current = node.get("status") or "offline"
+    if current == "maintenance":
+        return current
+    new = "online" if reachable else "offline"
+    if new != current and node.get("uuid"):
+        db.updatenode(node["uuid"], status=new)
+        node["status"] = new
+    return new
+
+
+def probenode(node, timeout=5):
+    """Probe node; update online/offline from result. Returns (reachable, stats_or_none)."""
+    node = dict(node) if not isinstance(node, dict) else node
+    nodeType = node.get("type", "docker")
+
+    if nodeType == "docker":
+        result = nodeapi(node, "/node/stats", method="GET", timeout=timeout)
+        ok = bool(result) and not result.get("error")
+        setnoderunstatus(node, ok)
+        return ok, (result.get("stats") if ok and result else None)
+
+    if nodeType == "proxmox":
+        try:
+            pve = getproxmoxclient(node)
+            node_name = node.get("proxmoxnode", "pve")
+            status = pve.nodes(node_name).status.get()
+            if not status:
+                setnoderunstatus(node, False)
+                return False, None
+            setnoderunstatus(node, True)
+            return True, status
+        except Exception:
+            setnoderunstatus(node, False)
+            return False, None
+
+    setnoderunstatus(node, False)
+    return False, None
+
 def performvpsaction(vpsId, action, actorUserId):
     """Sends a command (start, stop, restart) to the Node."""
     vps = getvpsdetails(vpsId)

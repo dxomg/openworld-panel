@@ -79,12 +79,12 @@
     {% if allNodes %}
     <div class="vps-grid">
         {% for node in allNodes %}
-        <div class="vps-card">
-            {% set sClass = 'status-running' if node.status == 'online' else 'status-unknown' %}
+        <div class="vps-card" data-node-uuid="{{ node.uuid }}">
+            {% set sClass = 'status-running' if node.status == 'online' else ('status-stopped' if node.status == 'offline' else 'status-unknown') %}
             
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; width: 100%;">
-                <span class="status-pill {{ sClass }}">
-                    <span class="dot"></span>{{ node.status|capitalize }}
+                <span class="status-pill {{ sClass }}" data-node-status>
+                    <span class="dot"></span><span data-node-status-text>{{ node.status|capitalize }}</span>
                 </span>
                 <div style="display: flex; gap: 6px; align-items: center; margin-left: auto;">
                     <span class="type-badge type-{{ node.type|default('docker') }}">{{ node.type|default('docker')|upper }}</span>
@@ -433,5 +433,36 @@
         
         openModal('editNodeModal');
     }
+
+    function setListNodeStatus(uuid, status) {
+        if (!status) return;
+        const card = document.querySelector('.vps-card[data-node-uuid="' + uuid + '"]');
+        if (!card) return;
+        const pill = card.querySelector('[data-node-status]');
+        const text = card.querySelector('[data-node-status-text]');
+        if (!pill || !text) return;
+        text.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        pill.classList.remove('status-running', 'status-stopped', 'status-unknown');
+        if (status === 'online') pill.classList.add('status-running');
+        else if (status === 'offline') pill.classList.add('status-stopped');
+        else pill.classList.add('status-unknown');
+    }
+
+    function refreshAllNodeStatuses() {
+        const cards = document.querySelectorAll('.vps-card[data-node-uuid]');
+        if (!cards.length) return;
+        const params = new URLSearchParams();
+        cards.forEach(c => params.append('uuid', c.dataset.nodeUuid));
+        fetch("{{ url_for('adminnodesstatus') }}?" + params.toString())
+            .then(r => r.json())
+            .then(data => {
+                const statuses = data.statuses || {};
+                Object.keys(statuses).forEach(uuid => setListNodeStatus(uuid, statuses[uuid]));
+            })
+            .catch(err => console.error('Failed to refresh node statuses:', err));
+    }
+
+    refreshAllNodeStatuses();
+    setInterval(refreshAllNodeStatuses, 10000);
 </script>
 {% endblock %}
