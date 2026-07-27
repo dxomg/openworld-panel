@@ -19,7 +19,7 @@
             {% else %}
             <span class="status-pill status-unknown"><span class="dot"></span>Closed</span>
             {% endif %}
-            <span class="tier-pill priority-{{ ticket.priority }}">{{ ticket.priority|upper }}</span>
+            <span class="priority-badge priority-{{ ticket.priority }}">{{ ticket.priority|upper }}</span>
         </div>
         <p style="opacity: 0.7; font-size: 14px;">Created {{ ticket.created }} &middot; Ticket #{{ ticket.uuid[:8] }}</p>
     </section>
@@ -27,7 +27,7 @@
     <!-- Ticket Messages -->
     <div style="display: flex; flex-direction: column; gap: 16px; margin-top: 32px;">
         {% for msg in messages %}
-        <div class="vps-card{% if msg.is_staff %} staff-message{% endif %}">
+        <div class="vps-card ticket-block{% if msg.is_staff %} staff-message{% endif %}">
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
                 <div>
                     <div style="font-weight: 600; font-size: 14px;">
@@ -50,12 +50,12 @@
         <div class="section-head">
             <h2>Add Reply</h2>
         </div>
-        <form action="{{ url_for('replyticket', ticket_uuid=ticket.uuid) }}" method="POST" class="vps-card">
-            <div class="field">
+        <form action="{{ url_for('replyticket', ticket_uuid=ticket.uuid) }}" method="POST" class="vps-card ticket-block">
+            <div class="field" style="width: 100%;">
                 <label>Your Message</label>
-                <textarea name="message" required rows="6" placeholder="Type your reply..." style="resize: vertical; min-height: 120px;"></textarea>
+                <textarea name="message" required rows="8" placeholder="Type your reply..." style="width: 100%; min-height: 160px; resize: vertical; box-sizing: border-box;"></textarea>
             </div>
-            <div style="display: flex; gap: 10px; margin-top: 16px;">
+            <div style="display: flex; gap: 10px; margin-top: 16px; width: 100%;">
                 <button type="submit" class="btn btn-primary">Send Reply</button>
                 <a href="{{ url_for('tickets') }}" class="btn">Cancel</a>
             </div>
@@ -70,6 +70,18 @@
 </div>
 
 <style>
+    .ticket-block {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+        gap: 0;
+    }
+    .ticket-block .field,
+    .ticket-block textarea {
+        width: 100%;
+        max-width: none;
+    }
     @media (max-width: 768px) {
         .vps-card {
             padding: 16px;
@@ -79,9 +91,9 @@
             font-size: 20px;
         }
         
-        .tier-pill {
+        .priority-badge {
             font-size: 9px;
-            padding: 3px 6px;
+            padding: 2px 6px;
         }
     }
 </style>

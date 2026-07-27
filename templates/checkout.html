@@ -10,6 +10,9 @@
         <div class="hero-eyebrow">Checkout</div>
         <h1>Invoice Summary</h1>
         <p>Review your order for <strong>{{ checkoutVps.hostname }}</strong>. Provisioning will begin immediately after payment.</p>
+        <p style="margin-top: 10px; color: var(--warn, #E8A33D); font-size: 0.95rem;">
+            You have <strong>30 minutes</strong> from your last visit to this page to complete payment. Unpaid orders expire automatically and free reserved stock.
+        </p>
     </div>
 
     <div style="max-width: 800px; margin: 40px auto;">
@@ -58,10 +61,15 @@
             <button onclick="openModal('paymentModal')" class="btn btn-primary" style="width: 100%; padding: 20px; font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px;">
                 Proceed to Payment →
             </button>
+            <form action="{{ url_for('cancelcheckout', vpsUuid=checkoutVps.uuid) }}" method="POST" style="margin-top: 12px;" onsubmit="return confirm('Cancel this checkout? Reserved stock will be released.');">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-danger" style="width: 100%; padding: 14px; background: transparent;">Cancel Checkout</button>
+            </form>
         </div>
         
         <p style="text-align: center; color: var(--text-faint); font-size: 0.8rem; margin-top: 24px;">
             Your payment is secure and encrypted. Digital services are delivered instantly upon confirmation.
+            Unpaid checkouts expire after 30 minutes.
         </p>
     </div>
 </div>

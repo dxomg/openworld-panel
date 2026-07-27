@@ -14,14 +14,25 @@
         align-items: flex-start;
         padding: 16px;
     }
+    .type-badge {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        flex-shrink: 0;
+    }
+    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+    .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
     .tier-pill {
         padding: 2px 8px;
         border-radius: 4px;
         font-size: 10px;
         font-weight: bold;
         text-transform: uppercase;
-        margin-left: 8px;
-        vertical-align: middle;
+        letter-spacing: 0.04em;
+        flex-shrink: 0;
     }
     .tier-free { background: rgba(255, 255, 255, 0.1); color: #aaa; border: 1px solid #444; }
     .tier-paid { background: rgba(255, 215, 0, 0.1); color: #ffd700; border: 1px solid #ffd700; }
@@ -71,17 +82,13 @@
         <div class="vps-card">
             {% set sClass = 'status-running' if node.status == 'online' else 'status-unknown' %}
             
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; width: 100%;">
                 <span class="status-pill {{ sClass }}">
                     <span class="dot"></span>{{ node.status|capitalize }}
                 </span>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <span class="tier-pill" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6;">
-                        {{ node.type|default('docker')|upper }}
-                    </span>
-                    <span class="tier-pill tier-{{ node.tier }}">
-                        {{ node.tier }}
-                    </span>
+                <div style="display: flex; gap: 6px; align-items: center; margin-left: auto;">
+                    <span class="type-badge type-{{ node.type|default('docker') }}">{{ node.type|default('docker')|upper }}</span>
+                    <span class="tier-pill tier-{{ node.tier }}">{{ node.tier }}</span>
                 </div>
             </div>
             

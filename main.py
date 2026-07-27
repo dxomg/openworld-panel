@@ -20,8 +20,6 @@ worker_thread = None
 from core import db
 from utils import services
 
-
-
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DEFAULT_CONFIG = {
@@ -110,14 +108,6 @@ def reloadconfig():
 
 config = loadorcreateconfig()
 
-db.ensurecolumn("images", "os_type", "TEXT NOT NULL DEFAULT 'linux'")
-db.ensurecolumn("jobs", "result", "TEXT")
-db.ensurecolumn("jobs", "updated", "TEXT")
-db.ensurecolumn("plans", "netmbps", "INTEGER NOT NULL DEFAULT 0")
-db.ensurevpssuspensiontable()
-db.ensurenetworkiptables()
-
-
 OS_TYPES = {
     "alpine": {"name": "Alpine", "icon": "https://cdn.simpleicons.org/alpinelinux/0D597F"},
     "debian": {"name": "Debian", "icon": "https://cdn.simpleicons.org/debian/A81D33"},
@@ -141,9 +131,6 @@ def getpaypalurl():
 
 def getverifyurl():
     return "https://ipnpb.sandbox.paypal.com/cgi-bin/webscr" if config['paypal']['sandbox'] else "https://ipnpb.paypal.com/cgi-bin/webscr"
-
-
-
 
 def daystoseconds(days: int) -> int:
     return int(days) * 86400
@@ -285,10 +272,64 @@ def _deletevpsnode(vps):
 
 
 
+def _releaseunpaidreservation(vps):
+    """Release stock/storage/IPs for an unpaid checkout without destroying the row."""
+    db.unassignipbyvpsid(vps['id'])
+    db.updatevps(vps['uuid'], ipv4=None, ipv6=None)
+    if vps.get('storagepoolid') and vps.get('disk'):
+        db.increasestorageavailable(vps['storagepoolid'], vps['disk'])
+    if vps.get('planid'):
+        with db.getconnection() as conn:
+            conn.execute(
+                "UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock >= 0",
+                (vps['planid'],)
+            )
+
+
+def _rereserveunpaidreservation(vps):
+    """Re-take stock/storage/IPs when a late valid payment arrives for a soft-expired checkout."""
+    if vps.get('planid'):
+        with db.getconnection() as conn:
+            row = conn.execute("SELECT stock FROM plans WHERE id = ?", (vps['planid'],)).fetchone()
+            if row and row['stock'] == 0:
+                raise ValueError("Plan is out of stock")
+            conn.execute(
+                "UPDATE plans SET stock = stock - 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock > 0",
+                (vps['planid'],)
+            )
+    if vps.get('storagepoolid') and vps.get('disk'):
+        with db.getconnection() as conn:
+            conn.execute(
+                "UPDATE storagepools SET used = used + ?, updated = CURRENT_TIMESTAMP WHERE id = ?",
+                (vps['disk'], vps['storagepoolid'])
+            )
+    plan = db.getplanbyid(vps['planid'])
+    if plan:
+        db.reserveplanipsforvps(vps, plan, network_type=vps.get('network_type', 'docker'))
+
+
+def _expireunpaidvps():
+    """Soft-expire unpaid pendingpayment VPS after timeout and restore stock/storage."""
+    expired = db.listexpiredpendingpaymentvps(maxageminutes=30)
+    for vps in expired:
+        _releaseunpaidreservation(vps)
+        db.updatevps(vps['uuid'], status='deleted')
+        auditlog("vps.expire_unpaid", "vps", vps['uuid'], f"Soft-expired unpaid pendingpayment VPS {vps.get('hostname')}")
+
+
 def _jobworker():
     """Background worker that processes queued jobs."""
+    lastExpire = 0
     while True:
         try:
+            now = time.time()
+            if now - lastExpire >= 60:
+                try:
+                    _expireunpaidvps()
+                except Exception:
+                    pass
+                lastExpire = now
+
             job = db.getnextpendingjob()
             if not job:
                 time.sleep(2)
@@ -499,6 +540,10 @@ def createvps():
             flash("You already have a free VPS. Free users can only create one free instance.", "error")
             return redirect(url_for('createvps'))
 
+        if isPaid and db.countpendingpaymentvps(g.userinfo["id"]) > 0:
+            flash("You already have an unpaid VPS checkout. Pay or wait for it to expire before creating another.", "error")
+            return redirect(url_for('dashboard'))
+
         image = db.getimagebyid(imageId)
         if not image or not image.get('active'):
             flash("Invalid image selected.", "error")
@@ -565,6 +610,18 @@ def createvps():
                 jobtype=None if isPaid else 'provision'
             )
 
+            # Hold required IPs immediately so payment can't succeed into an empty pool
+            if isPaid:
+                vpsRow = db.getvps(vpsUuid)
+                try:
+                    db.reserveplanipsforvps(vpsRow, plan, network_type=nodeNetType)
+                except ValueError as e:
+                    _releaseunpaidreservation(vpsRow)
+                    db.unassignipbyvpsid(vpsRow['id'])
+                    db.deletevpsrecord(vpsRow['id'])
+                    flash(str(e), "error")
+                    return redirect(url_for('createvps'))
+
             auditlog("vps.create", "vps", vpsUuid, f"Created VPS {hostname} with plan '{plan['name']}'")
 
             if isPaid:
@@ -592,6 +649,10 @@ def checkout(vpsUuid):
         flash("This instance is already being processed.", "info")
         return redirect(url_for('dashboard'))
 
+    # Visiting checkout restarts the 30-minute unpaid expiry timer
+    db.touchpendingpaymentvps(vpsUuid)
+    vpsRecord = db.getvps(vpsUuid)
+
     plan = db.getplanbyid(vpsRecord['planid'])
     methods = db.listallpaymentmethods()
     
@@ -603,6 +664,25 @@ def checkout(vpsUuid):
         methods=methods, 
         **paneluserinfo(g.userinfo)
     )
+
+@app.route("/checkout/<string:vpsUuid>/cancel", methods=["POST"])
+@loginrequired
+def cancelcheckout(vpsUuid):
+    vps = db.getvps(vpsUuid)
+    if not vps or str(vps['userid']) != str(g.userinfo['id']):
+        flash("Invoice not found.", "error")
+        return redirect(url_for('dashboard'))
+
+    if vps['status'] != 'pendingpayment':
+        flash("This checkout can no longer be cancelled.", "error")
+        return redirect(url_for('dashboard'))
+
+    _releaseunpaidreservation(vps)
+    db.updatevps(vpsUuid, status='deleted')
+    auditlog("vps.cancel_unpaid", "vps", vpsUuid, f"User cancelled unpaid checkout {vps.get('hostname')}")
+    flash("Checkout cancelled. Reserved stock has been released.", "success")
+    return redirect(url_for('dashboard'))
+
 
 @app.route("/checkout/processpayment", methods=["POST"])
 @loginrequired
@@ -723,7 +803,29 @@ def paypalipn():
         return "Insufficient amount", 400
 
     # 5. Success Action: Update Database
-    if vps['status'] == 'pendingpayment':
+    # Accept late IPN for soft-expired/cancelled unpaid checkouts (status deleted).
+    if vps['status'] in ('pendingpayment', 'deleted'):
+        if vps['status'] == 'deleted':
+            try:
+                _rereserveunpaidreservation(vps)
+            except ValueError as e:
+                app.logger.error(f"PayPal IPN: paid but resources unavailable for {vpsUuid}: {e}")
+                paypalMethod = db.getpaymentmethodbyslug("paypal")
+                db.addtransaction(
+                    uuid=str(uuid.uuid4()),
+                    userid=vps['userid'],
+                    transactionid=txnId,
+                    amount=float(amount),
+                    currency=request.form.get("mc_currency", "USD"),
+                    status="completed",
+                    paymentprocessorid=paypalMethod['id'] if paypalMethod else 1,
+                    vpsid=vps['id'],
+                    planid=vps['planid']
+                )
+                db.updatevps(vpsUuid, status='error')
+                auditlog("payment.paypal_resource_fail", "vps", vpsUuid, f"Paid ${amount} but resources unavailable: {e}")
+                return "OK", 200
+            app.logger.info(f"PayPal IPN: revived soft-expired checkout {vpsUuid}")
         db.updatevps(vpsUuid, status='creating')
         paypalMethod = db.getpaymentmethodbyslug("paypal")
         txnUuid = str(uuid.uuid4())
@@ -744,7 +846,7 @@ def paypalipn():
         enqueuejob(vps['id'], vpsUuid, vps['userid'], 'provision')
         app.logger.info(f"PayPal IPN: payment processed, provisioning queued for {vpsUuid}")
     else:
-        app.logger.info(f"PayPal IPN: VPS {vpsUuid} not in pendingpayment (status={vps['status']})")
+        app.logger.info(f"PayPal IPN: VPS {vpsUuid} not payable (status={vps['status']})")
 
     return "OK", 200
 
@@ -1628,25 +1730,29 @@ def adminnodescreate():
 @loginrequired
 @adminrequired
 def adminnodesupdate(nodeUuid):
+    node = db.getnode(nodeUuid)
+    if not node:
+        flash("Node not found.", "error")
+        return redirect(url_for('adminnodes'))
+
     try:
-        nodeType = request.form.get("type")
+        nodeType = request.form.get("type") or node.get("type", "docker")
         updateData = {
             "name": request.form.get("name"),
             "hostname": request.form.get("hostname"),
             "address": request.form.get("address"),
-            "url": request.form.get("url", ""),
-            "ram": int(request.form.get("ram", 0)),
-            "status": request.form.get("status"),
-            "tier": request.form.get("tier"),
-            "type": nodeType
+            "cpu": int(request.form.get("cpu", node.get("cpu") or 0)),
+            "ram": int(request.form.get("ram", node.get("ram") or 0)),
+            "status": request.form.get("status", node.get("status", "online")),
+            "tier": request.form.get("tier", node.get("tier", "free")),
         }
-        
-        newKey = request.form.get("apikey")
-        if newKey and newKey.strip() != "":
-            updateData["apikey"] = newKey
 
-        # Proxmox-specific updates
-        if nodeType == "proxmox":
+        if nodeType == "docker":
+            updateData["url"] = request.form.get("url", node.get("url") or "")
+            newKey = request.form.get("apikey")
+            if newKey and newKey.strip() != "":
+                updateData["apikey"] = newKey
+        elif nodeType == "proxmox":
             updateData["proxmoxhost"] = request.form.get("proxmoxhost")
             updateData["proxmoxuser"] = request.form.get("proxmoxuser")
             pvePass = request.form.get("proxmoxpassword")
@@ -1659,10 +1765,10 @@ def adminnodesupdate(nodeUuid):
         db.updatenode(nodeUuid, **updateData)
         auditlog("node.update", "node", nodeUuid, f"Updated node '{request.form.get('name')}'")
         flash("Node configuration updated.", "success")
-    except Exception as e:
+    except Exception:
         flash("Error updating node.", "danger")
 
-    return redirect(url_for('adminnodes'))
+    return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='overview'))
 
 @app.route("/dashboard/admin/nodes/delete/<string:nodeUuid>", methods=["POST"])
 @loginrequired

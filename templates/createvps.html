@@ -4,17 +4,18 @@
 {% block content %}
 <style>
     /* Badge styling for Free/Paid tiers */
-    .tier-badge {
-        font-size: 10px;
-        text-transform: uppercase;
-        padding: 2px 6px;
+    .type-badge {
+        padding: 2px 8px;
         border-radius: 4px;
+        font-size: 10px;
         font-weight: bold;
-        margin-left: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        flex-shrink: 0;
     }
-    .tier-free { background: rgba(255,255,255,0.1); color: #888; border: 1px solid #444; }
-    .tier-paid { background: rgba(255,215,0,0.1); color: #ffd700; border: 1px solid #ffd700; }
-    
+    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+    .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
+
     /* Plan card button resets */
     .plan-card-btn {
         background: none;
@@ -108,17 +109,20 @@
         {% for plan in plansList %} 
         <button type="button" class="plan-card-btn" onclick="openDeployModal('{{ plan|tojson|forceescape }}')" {% if plan.stock == 0 %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}>
             <div class="plan-card">
-                <div class="plan-card-head">
-                    <div class="plan-name">
-                        {{ plan.name }}
-                        {% if plan.price == 0 %}
-                            <span class="tier-badge tier-free">Free Tier</span>
-                        {% else %}
-                            <span class="tier-badge tier-paid">Premium</span>
-                        {% endif %}
+                <div class="plan-card-head" style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+                    <div style="min-width: 0;">
+                        <div class="plan-name" style="text-transform: none;">{{ plan.name }}</div>
+                        <div class="plan-price">
+                            {% if plan.price == 0 %}Free{% else %}${{ "%.2f"|format(plan.price) }}/mo{% endif %}
+                        </div>
                     </div>
-                    <div class="plan-price">
-                        {% if plan.price == 0 %}Free{% else %}${{ "%.2f"|format(plan.price) }}/mo{% endif %}
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
+                        {% if plan.price == 0 %}
+                        <span class="type-badge" style="background: rgba(255,255,255,0.08); color: #94a3b8; border: 1px solid #475569;">FREE</span>
+                        {% else %}
+                        <span class="type-badge" style="background: rgba(255,215,0,0.12); color: #ffd700; border: 1px solid #ffd700;">PAID</span>
+                        {% endif %}
+                        <span class="type-badge type-{{ plan.node_type|default('docker') }}">{{ plan.node_type|default('docker')|upper }}</span>
                     </div>
                 </div>
 
@@ -126,7 +130,6 @@
                     <div class="plan-spec"><span class="k">vCPU</span><span class="v">{{ plan.cpu }} vCore</span></div>
                     <div class="plan-spec"><span class="k">Memory</span><span class="v">{{ plan.ram }} MB</span></div>
                     <div class="plan-spec"><span class="k">Disk</span><span class="v">{{ plan.disk }} MB</span></div>
-                    <div class="plan-spec"><span class="k">Node Type</span><span class="v">{{ plan.node_type|capitalize }}</span></div>
                     <div class="plan-spec">
                         <span class="k">Network Speed</span>
                         <span class="v">{% if plan.netmbps %}{{ plan.netmbps }} Mbps{% else %}Unlimited{% endif %}</span>

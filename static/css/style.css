@@ -1755,36 +1755,43 @@ a { color: inherit; text-decoration: none; }
     }
 }
 
-/* ===== PRIORITY PILLS (TICKETING SYSTEM) ===== */
-.tier-pill {
+/* ===== PRIORITY BADGES (TICKETING) ===== */
+.priority-badge {
     display: inline-flex;
     align-items: center;
-    font-family: var(--font-mono);
+    padding: 4px 10px;
+    border-radius: 999px;
     font-size: 10px;
-    padding: 4px 8px;
-    border-radius: 20px;
+    font-weight: bold;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    font-weight: 600;
     flex-shrink: 0;
+    line-height: 1.2;
 }
 
-.priority-low {
-    background: rgba(255,255,255,0.05);
-    color: var(--text-dim);
-    border: 1px solid var(--border);
+.priority-badge.priority-low {
+    background: rgba(148,163,184,0.12);
+    color: #94a3b8;
+    border: 1px solid #64748b;
 }
 
-.priority-normal {
-    background: rgba(255,255,255,0.08);
-    color: var(--text);
-    border: 1px solid var(--border);
+.priority-badge.priority-normal {
+    background: rgba(59,130,246,0.15);
+    color: #60a5fa;
+    border: 1px solid #3b82f6;
 }
 
-.priority-high {
-    background: var(--danger-glow);
-    color: var(--danger);
-    border: 1px solid var(--danger);
+.priority-badge.priority-high {
+    background: rgba(234,88,12,0.15);
+    color: #f97316;
+    border: 1px solid #ea580c;
+}
+
+.priority-badge.priority-urgent,
+.priority-badge.priority-critical {
+    background: rgba(226,87,76,0.15);
+    color: #f87171;
+    border: 1px solid #e2574c;
 }
 
 .plan-card-btn {
@@ -1864,8 +1871,7 @@ a { color: inherit; text-decoration: none; }
 .tier-badge,
 .action-badge,
 .node-pill,
-.ip-status,
-.img-card-tag {
+.ip-status {
     display: inline-flex;
     align-items: center;
     gap: 6px;

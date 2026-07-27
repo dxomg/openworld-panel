@@ -50,12 +50,6 @@
         font-weight: 600;
         color: var(--text);
     }
-    .img-card-tag {
-        font-family: var(--font-mono);
-        font-size: 11px;
-        color: var(--text-dim);
-        margin-top: 2px;
-    }
     .img-card-desc {
         font-size: 12px;
         color: var(--text-dim);
@@ -156,7 +150,7 @@
                     <img class="os-icon" src="{{ img.os_meta.icon }}" alt="{{ img.os_meta.name }} logo">
                     <div style="min-width: 0;">
                         <div class="img-card-name">{{ img.name }}</div>
-                        <div class="img-card-tag">{{ img.os_type|default('linux') }} &middot; {{ img.image }}</div>
+                        <div style="margin-top: 2px; font-size: 12px; color: var(--text-dim); word-break: break-all;">{{ img.os_type|default('linux') }} · {{ img.image }}</div>
                     </div>
                 </div>
                 <span class="type-badge type-{{ img.node_type|default('docker') }}">

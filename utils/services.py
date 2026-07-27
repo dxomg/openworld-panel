@@ -122,7 +122,7 @@ def listvpsforuserpanel(userId, page=1, perPage=10, search=None):
     """Returns a paginated list of VPSs owned by the user with plan details."""
     with db.getconnection() as conn:
         offset = (page - 1) * perPage
-        where = "WHERE v.userid = ?"
+        where = "WHERE v.userid = ? AND v.status != 'deleted'"
         params = [userId]
 
         if search:
@@ -152,46 +152,6 @@ def listvpsforuserpanel(userId, page=1, perPage=10, search=None):
             "hasPrev": page > 1,
             "hasNext": (page * perPage) < total,
         }
-
-def provisionvps(userId, planId, imageId, hostname):
-    plan = None
-    with db.getconnection() as conn:
-        plan = conn.execute("SELECT * FROM plans WHERE id = ?", (planId,)).fetchone()
-        image = conn.execute("SELECT * FROM images WHERE id = ?", (imageId,)).fetchone()
-        node = conn.execute("SELECT * FROM nodes WHERE status = 'online' AND type = ? AND ram >= ? LIMIT 1", (plan['node_type'], plan['ram'],)).fetchone()
-        storage = conn.execute("SELECT * FROM storagepools WHERE nodeid = ? LIMIT 1", (node['id'],)).fetchone()
-
-    if not node or not storage:
-        raise ValueError("No available nodes have enough resources at this time.")
-
-    vpsUuid = str(uuid.uuid4())
-    rootPassword = secrets.token_urlsafe(16)
-
-    db.addvps(
-        uuid=vpsUuid,
-        userid=userId,
-        planid=planId,
-        imageid=imageId,
-        nodeid=node['id'],
-        storageid=storage['id'],
-        hostname=hostname,
-        password=rootPassword,
-        cpu=plan['cpu'],
-        ram=plan['ram'],
-        swap=plan['swap'],
-        disk=plan['disk'],
-        status='creating'
-    )
-
-    try:
-        provisiononnode(vpsUuid)
-    except ValueError:
-        pass
-
-    vpsData = db.getvps(vpsUuid)
-    res = dict(vpsData)
-    res['rootPassword'] = rootPassword
-    return res
 
 def getvpsdetails(vpsId):
     """Gets full VPS info including node and plan details."""
@@ -275,14 +235,23 @@ def provisionondocker(vpsUuid):
         if needsIpv4 and not (net and net.get('ipv4')):
             raise ValueError("Plan requires IPv4 but network does not support it")
 
-        if needsIpv6:
+        # Prefer IPs already held at checkout time
+        held = db.getassignedipsforvps(vps['id'])
+        if held.get('ipv6'):
+            assignedIpv6 = held['ipv6']['ip']
+            assignedIpIds.append((held['ipv6']['id'], 'ipv6'))
+        if held.get('ipv4'):
+            assignedIpv4 = held['ipv4']['ip']
+            assignedIpIds.append((held['ipv4']['id'], 'ipv4'))
+
+        if needsIpv6 and not assignedIpv6:
             availIpv6 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv6', vpsid=vps['id'])
             if not availIpv6:
                 raise ValueError("No IPv6 addresses available for this network")
             assignedIpv6 = availIpv6['ip']
             assignedIpIds.append((availIpv6['id'], 'ipv6'))
 
-        if needsIpv4:
+        if needsIpv4 and not assignedIpv4:
             availIpv4 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv4', vpsid=vps['id'])
             if not availIpv4:
                 for ipId, ipVersion in assignedIpIds:
@@ -558,14 +527,22 @@ def provisiononproxmox(vpsUuid):
         if needsIpv4 and not net.get('ipv4'):
             raise ValueError("Plan requires IPv4 but network does not support it")
 
-        if needsIpv6:
+        held = db.getassignedipsforvps(vps['id'])
+        if held.get('ipv6'):
+            assignedIpv6 = held['ipv6']['ip']
+            assignedIpIds.append((held['ipv6']['id'], 'ipv6'))
+        if held.get('ipv4'):
+            assignedIpv4 = held['ipv4']['ip']
+            assignedIpIds.append((held['ipv4']['id'], 'ipv4'))
+
+        if needsIpv6 and not assignedIpv6:
             availIpv6 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv6', vpsid=vps['id'])
             if not availIpv6:
                 raise ValueError("No IPv6 addresses available for this network")
             assignedIpv6 = availIpv6['ip']
             assignedIpIds.append((availIpv6['id'], 'ipv6'))
 
-        if needsIpv4:
+        if needsIpv4 and not assignedIpv4:
             availIpv4 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv4', vpsid=vps['id'])
             if not availIpv4:
                 for ipId, ipVersion in assignedIpIds:

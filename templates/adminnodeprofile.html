@@ -4,14 +4,25 @@
 
 {% block content %}
 <style>
+    .type-badge {
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: bold;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        flex-shrink: 0;
+    }
+    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
+    .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
     .tier-pill {
         padding: 2px 8px;
         border-radius: 4px;
         font-size: 10px;
         font-weight: bold;
         text-transform: uppercase;
-        margin-left: 8px;
-        vertical-align: middle;
+        letter-spacing: 0.04em;
+        flex-shrink: 0;
     }
     .tier-free { background: rgba(255, 255, 255, 0.1); color: #aaa; border: 1px solid #444; }
     .tier-paid { background: rgba(255, 215, 0, 0.1); color: #ffd700; border: 1px solid #ffd700; }
@@ -109,8 +120,10 @@
             <h1 style="margin: 0;">{{ node.name }}</h1>
             {% set sClass = 'status-running' if node.status == 'online' else 'status-unknown' %}
             <span class="status-pill {{ sClass }}"><span class="dot"></span>{{ node.status|capitalize }}</span>
-            <span class="tier-pill" style="background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid #3b82f6;">{{ nodeType|upper }}</span>
-            <span class="tier-pill tier-{{ node.tier }}">{{ node.tier }}</span>
+            <span style="display: inline-flex; gap: 6px; align-items: center; margin-left: 4px;">
+                <span class="type-badge type-{{ nodeType|default('docker') }}">{{ nodeType|default('docker')|upper }}</span>
+                <span class="tier-pill tier-{{ node.tier }}">{{ node.tier }}</span>
+            </span>
         </div>
         <p style="margin-top: 6px;">{{ node.address }} &middot; {{ node.hostname }}</p>
 
@@ -186,6 +199,8 @@
             <h2>Node Configuration</h2>
         </div>
         <form action="{{ url_for('adminnodesupdate', nodeUuid=node.uuid) }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; max-width: 700px;">
+            <input type="hidden" name="type" value="{{ nodeType }}">
+
             <div class="field" style="grid-column: span 2;">
                 <label>Display Name</label>
                 <input type="text" name="name" value="{{ node.name }}" required>
@@ -198,6 +213,7 @@
                 <label>IP Address</label>
                 <input type="text" name="address" value="{{ node.address }}" required>
             </div>
+
             {% if nodeType == 'docker' %}
             <div class="field" style="grid-column: span 2;">
                 <label>Node URL (Agent)</label>
@@ -210,22 +226,22 @@
             {% else %}
             <div class="field">
                 <label>Proxmox Host</label>
-                <input type="text" name="proxmoxhost" value="{{ node.proxmoxhost or '' }}">
+                <input type="text" name="proxmoxhost" value="{{ node.proxmoxhost or '' }}" placeholder="https://proxmox.example.com">
             </div>
             <div class="field">
                 <label>Proxmox Port</label>
                 <input type="number" name="proxmoxport" value="{{ node.proxmoxport or 8006 }}">
             </div>
             <div class="field">
-                <label>Username</label>
-                <input type="text" name="proxmoxuser" value="{{ node.proxmoxuser or '' }}">
+                <label>Proxmox Username</label>
+                <input type="text" name="proxmoxuser" value="{{ node.proxmoxuser or '' }}" placeholder="root@pam">
             </div>
             <div class="field">
-                <label>Password</label>
+                <label>Proxmox Password</label>
                 <input type="password" name="proxmoxpassword" placeholder="Leave blank to keep current">
             </div>
             <div class="field">
-                <label>Node Name</label>
+                <label>Proxmox Node Name</label>
                 <input type="text" name="proxmoxnode" value="{{ node.proxmoxnode or 'pve' }}">
             </div>
             <div class="field">
@@ -236,6 +252,7 @@
                 </select>
             </div>
             {% endif %}
+
             <div class="field">
                 <label>Billing Tier</label>
                 <select name="tier">
@@ -252,17 +269,22 @@
                 </select>
             </div>
             <div class="field">
-                <label>RAM Cap (MB)</label>
-                <input type="number" name="ram" value="{{ node.ram }}" required>
+                <label>Total CPU (Cores)</label>
+                <input type="number" name="cpu" value="{{ node.cpu }}" min="1" required>
+            </div>
+            <div class="field">
+                <label>Total RAM (MB)</label>
+                <input type="number" name="ram" value="{{ node.ram }}" min="1" required>
             </div>
             <div class="field">
                 <label>Node Type</label>
-                <select name="type" disabled>
-                    <option value="docker" {% if nodeType == 'docker' %}selected{% endif %}>Docker</option>
-                    <option value="proxmox" {% if nodeType == 'proxmox' %}selected{% endif %}>Proxmox</option>
-                </select>
-                <input type="hidden" name="type" value="{{ nodeType }}">
+                <input type="text" value="{{ nodeType|upper }}" disabled>
             </div>
+            <div class="field">
+                <label>Disk Capacity</label>
+                <input type="text" value="{{ node.disk or 0 }} GB (from storage pools)" disabled>
+            </div>
+
             <div style="grid-column: span 2; margin-top: 10px;">
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </div>
