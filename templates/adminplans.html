@@ -76,6 +76,42 @@
         font-size: 12px;
         color: var(--text);
     }
+    .assign-pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 4px;
+    }
+    .assign-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        background: var(--bg-raise);
+        border: 1px solid var(--border);
+        color: var(--text);
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .assign-pill-empty { color: var(--text-dim); border-style: dashed; }
+    .assign-summary {
+        margin-bottom: 10px;
+        padding: 8px 10px;
+        background: var(--bg-raise);
+        border: 1px solid var(--border-soft);
+        border-radius: var(--radius);
+    }
+    .assign-summary-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-dim);
+        margin-bottom: 5px;
+    }
     @media (max-width: 700px) {
         .plan-form-layout { grid-template-columns: 1fr; gap: 20px; }
     }
@@ -129,13 +165,24 @@
                         {% if plan.stock == -1 %}Unlimited{% elif plan.stock == 0 %}Out{% else %}{{ plan.stock }}{% endif %}
                     </span>
                 </div>
-                <div class="plan-spec">
-                    <span class="k">Nodes</span>
-                    <span class="v">{{ plan.assigned_node_ids|length if plan.assigned_node_ids else 0 }}</span>
+            </div>
+
+            <div style="padding-top: 10px; border-top: 1px solid var(--border-soft); margin-top: 4px;">
+                <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 5px;">NODES ({{ plan.assigned_nodes|length if plan.assigned_nodes else 0 }})</div>
+                <div class="assign-pills">
+                    {% for n in plan.assigned_nodes %}
+                    <span class="assign-pill" title="{{ n.name }} — {{ n.type|default('docker') }} · {{ n.status }}">{{ n.name }}</span>
+                    {% else %}
+                    <span class="assign-pill assign-pill-empty">None</span>
+                    {% endfor %}
                 </div>
-                <div class="plan-spec">
-                    <span class="k">Pools</span>
-                    <span class="v">{{ plan.assigned_pool_ids|length if plan.assigned_pool_ids else 0 }}</span>
+                <div style="font-size: 10px; color: var(--text-dim); margin: 8px 0 5px;">POOLS ({{ plan.assigned_pools|length if plan.assigned_pools else 0 }})</div>
+                <div class="assign-pills">
+                    {% for p in plan.assigned_pools %}
+                    <span class="assign-pill" title="{{ p.name }} on {{ p.node_name }} ({{ p.size }}GB)">{{ p.name }} · {{ p.node_name }}</span>
+                    {% else %}
+                    <span class="assign-pill assign-pill-empty">None</span>
+                    {% endfor %}
                 </div>
             </div>
             
@@ -204,6 +251,24 @@
 
                         <div class="plan-form-col">
                             <div class="plan-form-col-title">Nodes &amp; storage</div>
+                            <div class="assign-summary">
+                                <div class="assign-summary-label">Currently assigned nodes</div>
+                                <div class="assign-pills">
+                                    {% for n in plan.assigned_nodes %}
+                                    <span class="assign-pill">{{ n.name }}</span>
+                                    {% else %}
+                                    <span class="assign-pill assign-pill-empty">None</span>
+                                    {% endfor %}
+                                </div>
+                                <div class="assign-summary-label" style="margin-top: 8px;">Currently assigned pools</div>
+                                <div class="assign-pills">
+                                    {% for p in plan.assigned_pools %}
+                                    <span class="assign-pill">{{ p.name }} · {{ p.node_name }}</span>
+                                    {% else %}
+                                    <span class="assign-pill assign-pill-empty">None</span>
+                                    {% endfor %}
+                                </div>
+                            </div>
                             <div class="field">
                                 <label>Nodes (Ctrl/Cmd+click)</label>
                                 <select name="node_ids" multiple class="assign-select plan-node-select" size="8">
