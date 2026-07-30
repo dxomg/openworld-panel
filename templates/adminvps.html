@@ -3,92 +3,6 @@
 {% block title %}Global Deployments - {{ projectname }}{% endblock %}
 
 {% block content %}
-<style>
-    /* The "Less Crowded" Grid Layout */
-    .vps-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-        gap: 24px;
-        margin-top: 20px;
-    }
-
-    .vps-card {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 16px;
-        padding: 24px;
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        position: relative;
-        transition: all 0.2s ease;
-    }
-
-    .vps-card:hover {
-        border-color: var(--accent);
-        transform: translateY(-2px);
-        background: var(--panel-hover);
-    }
-
-    .vps-card-header {
-        width: 100%;
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-    }
-
-    .vps-hostname {
-        font-family: var(--font-mono);
-        font-size: 16px;
-        font-weight: 600;
-        color: var(--text);
-        word-break: break-all;
-    }
-
-    .vps-meta {
-        font-family: var(--font-mono);
-        font-size: 12px;
-        color: var(--text-faint);
-        line-height: 1.4;
-    }
-
-    /* Specs styling */
-    .vps-specs-row {
-        display: flex;
-        gap: 15px;
-        width: 100%;
-        padding-top: 16px;
-        border-top: 1px solid var(--border-soft);
-        margin-top: auto; /* Pushes specs to bottom */
-    }
-
-    .spec-group {
-        display: flex;
-        flex-direction: column;
-    }
-
-    .spec-label {
-        font-size: 10px;
-        color: var(--text-faint);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .spec-value {
-        font-family: var(--font-mono);
-        font-size: 13px;
-        color: var(--text-dim);
-    }
-
-    .vps-arrow {
-        position: absolute;
-        bottom: 24px;
-        right: 24px;
-        opacity: 0.2;
-    }
-</style>
-
 <!-- Admin Hero Section -->
 <section class="hero">
   <div class="hero-eyebrow">
@@ -102,10 +16,21 @@
 <!-- Section Head -->
 <div class="section-head">
   <h2>All Instances ({{ pagination.totalCount }})</h2>
-  <div class="admin-actions" style="display: flex; gap: 12px; align-items: center;">
+  <div class="admin-actions" style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
       <form method="GET" action="{{ url_for('adminvps') }}" style="display: flex; gap: 8px; align-items: center;">
           <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search instances...">
+          <select name="status" class="search-input" style="width: auto; min-width: 120px;" onchange="this.form.submit()">
+              <option value="" {% if not statusFilter %}selected{% endif %}>All status</option>
+              <option value="running" {% if statusFilter == 'running' %}selected{% endif %}>Running</option>
+              <option value="stopped" {% if statusFilter == 'stopped' %}selected{% endif %}>Stopped</option>
+              <option value="suspended" {% if statusFilter == 'suspended' %}selected{% endif %}>Suspended</option>
+              <option value="creating" {% if statusFilter == 'creating' %}selected{% endif %}>Creating</option>
+              <option value="pendingpayment" {% if statusFilter == 'pendingpayment' %}selected{% endif %}>Pending payment</option>
+          </select>
       </form>
+      {% if suspendedCount > 0 %}
+      <button type="button" class="btn btn-small btn-danger" onclick="toggleRemoveSuspendedModal(true)">Remove suspended ({{ suspendedCount }})</button>
+      {% endif %}
       <button onclick="toggleModal(true)" class="btn btn-primary btn-small">+ Create VPS</button>
   </div>
 </div>
@@ -161,7 +86,7 @@
 {% if pagination.totalPages > 1 %}
 <div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
     {% if pagination.hasPrev %}
-    <a href="{{ url_for('adminvps', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
+    <a href="{{ url_for('adminvps', page=pagination.currentPage - 1, q=search, status=statusFilter) }}" class="btn btn-small">← Previous</a>
     {% endif %}
     
     <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
@@ -169,7 +94,7 @@
     </span>
 
     {% if pagination.hasNext %}
-    <a href="{{ url_for('adminvps', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
+    <a href="{{ url_for('adminvps', page=pagination.currentPage + 1, q=search, status=statusFilter) }}" class="btn btn-small">Next →</a>
     {% endif %}
 </div>
 {% endif %}
@@ -179,6 +104,29 @@
   <div class="glyph">!</div>
   <h3>No Global Instances</h3>
   <p>No users have provisioned servers yet.</p>
+</div>
+{% endif %}
+
+{% if suspendedCount > 0 %}
+<div id="removeSuspendedModal" class="modal-backdrop">
+    <div class="modal-panel" style="max-width: 440px;">
+        <div class="modal-head">
+            <h3>Remove Suspended VPS</h3>
+            <button type="button" class="modal-close" onclick="toggleRemoveSuspendedModal(false)">&times;</button>
+        </div>
+        <p style="color: var(--text-dim); font-size: 14px; line-height: 1.5; margin: 0 0 8px;">
+            Queue permanent deletion for <strong style="color: var(--text);">{{ suspendedCount }}</strong> suspended instance{{ 's' if suspendedCount != 1 else '' }}.
+        </p>
+        <p style="color: #f87171; font-size: 13px; line-height: 1.45; margin: 0;">
+            This cannot be undone. Instances with pending jobs will be skipped.
+        </p>
+        <form method="POST" action="{{ url_for('adminvpsremovesuspended') }}">
+            <div class="modal-actions" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.05);">
+                <button type="button" class="btn" onclick="toggleRemoveSuspendedModal(false)">Cancel</button>
+                <button type="submit" class="btn btn-danger">Delete {{ suspendedCount }} VPS</button>
+            </div>
+        </form>
+    </div>
 </div>
 {% endif %}
 
@@ -301,6 +249,19 @@
             }, 150);
         }
     }
+    function toggleRemoveSuspendedModal(show) {
+        const modal = document.getElementById('removeSuspendedModal');
+        if (!modal) return;
+        if (show) {
+            modal.classList.add('is-open');
+            modal.style.display = 'flex';
+        } else {
+            modal.classList.remove('is-open');
+            setTimeout(() => {
+                if (!modal.classList.contains('is-open')) modal.style.display = 'none';
+            }, 150);
+        }
+    }
     function updateModalLocation() {
         const select = document.getElementById('nodeSelect');
         const option = select.options[select.selectedIndex];
@@ -338,8 +299,8 @@
         imageSelect.value = '';
     }
     window.onclick = function(event) {
-        let modal = document.getElementById('createModal');
-        if (event.target == modal) toggleModal(false);
+        if (event.target == document.getElementById('createModal')) toggleModal(false);
+        if (event.target == document.getElementById('removeSuspendedModal')) toggleRemoveSuspendedModal(false);
     }
 
     const adminNetSelect = document.getElementById('adminVpsNetSelect');

@@ -116,8 +116,7 @@
         .plan-form-layout { grid-template-columns: 1fr; gap: 20px; }
     }
 </style>
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Plan Management</h1>
         <p>Define VPS resource tiers and pricing.</p>
@@ -189,7 +188,7 @@
             <!-- Pushes the buttons to the bottom of the card -->
             <div class="btn-row" style="margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border-soft); justify-content: space-between;">
                 <button onclick="openViewPlanModal('{{ plan.uuid }}')" class="btn btn-small">Edit</button>
-                <form action="{{ url_for('admindeleteplans', planUuid=plan.uuid) }}" method="POST" style="margin: 0;" onsubmit="return confirm('Delete plan \'{{ plan.name }}\'? This cannot be undone.');">
+                <form action="{{ url_for('admindeleteplans', planUuid=plan.uuid) }}" method="POST" style="margin: 0;" data-confirm="Delete plan &quot;{{ plan.name }}&quot;? This cannot be undone." data-confirm-title="Delete Plan" data-confirm-label="Delete">
                     <button type="submit" class="btn btn-small btn-danger" style="background: transparent;">Delete</button>
                 </form>
             </div>
@@ -420,8 +419,6 @@
             </form>
         </div>
     </div>
-</div>
-
 <script>
     function openViewPlanModal(uuid) {
         const modal = document.getElementById('viewPlanModal-' + uuid);

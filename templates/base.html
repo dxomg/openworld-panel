@@ -11,13 +11,16 @@
 <body>
 <div class="grid-backdrop"></div>
 
+{% set is_admin = request.endpoint and request.endpoint.startswith('admin') %}
+{% set logged_in = g.userinfo is defined and g.userinfo %}
+{% set is_user_panel = logged_in and not is_admin and request.endpoint not in ['index', 'login', 'tos', 'privacy', None] %}
+
 <header class="topbar">
     <a href="{{ url_for('index') }}" class="brand">
         <span class="brand-mark">◈</span>
         <span class="brand-accent">{{ projectname }}</span>
     </a>
     
-    <!-- Mobile Hamburger Toggle -->
     <button class="nav-toggle" onclick="toggleMenu()" aria-label="Toggle navigation">
         <span class="bar"></span><span class="bar"></span><span class="bar"></span>
     </button>
@@ -25,35 +28,44 @@
 <nav class="topnav">
     {% if request.endpoint == 'index' %}
         {% include '_theme_dropdown.html' %}
-        <a href="{{ url_for('login') }}" class="btn">Login</a>
+        <a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
 
-    {% elif request.endpoint in ['dashboard', 'createvps', 'tickets', 'viewticket', 'createticket', 'replyticket'] %}
+    {% elif is_admin %}
+        {% include '_theme_dropdown.html' %}
+        <a href="{{ url_for('dashboard') }}" class="btn">← Back to Panel</a>
+        <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
+
+    {% elif is_user_panel or request.endpoint in ['dashboard', 'createvps', 'tickets', 'viewticket', 'createticket', 'replyticket', 'vpspanel', 'checkout', 'processpayment'] %}
         <a href="{{ url_for('dashboard') }}" class="btn {{ 'active' if request.endpoint == 'dashboard' else '' }}">Dashboard</a>
-        <a href="{{ url_for('tickets') }}" class="btn {{ 'active' if request.endpoint in ['tickets', 'viewticket'] else '' }}">Support</a>
+        <a href="{{ url_for('tickets') }}" class="btn {{ 'active' if request.endpoint in ['tickets', 'viewticket', 'createticket', 'replyticket'] else '' }}">Support</a>
         
-        {% if g.userinfo and g.userinfo.get('role') == 'admin' %}
+        {% if logged_in and g.userinfo.get('role') == 'admin' %}
             <a href="{{ url_for('admindashboard') }}" class="btn">Admin Console</a>
         {% endif %}
 
         {% include '_theme_dropdown.html' %}
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
 
-    {% elif request.endpoint and request.endpoint.startswith('admin') %}
+    {% elif request.endpoint == 'login' %}
         {% include '_theme_dropdown.html' %}
-        <a href="{{ url_for('dashboard') }}" class="btn">← Back to Panel</a>
+        <a href="{{ url_for('index') }}" class="btn">Home</a>
+
+    {% elif request.endpoint in ['banned'] or banreason is defined %}
+        {% include '_theme_dropdown.html' %}
         <a href="{{ url_for('logout') }}" class="btn btn-danger">Logout</a>
     {% endif %}
 </nav>
 </header>
 
-{% if request.endpoint and request.endpoint.startswith('admin') %}
+{% if is_admin %}
 <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Toggle admin menu">
     <span class="bar"></span><span class="bar"></span><span class="bar"></span>
 </button>
+<div class="sidebar-scrim" id="sidebarScrim" onclick="toggleSidebar()" hidden></div>
 <aside class="admin-sidebar" id="adminSidebar">
     <div class="sidebar-header">
         <span class="sidebar-title">ADMIN</span>
-        <button class="sidebar-close" onclick="window.location.href='{{ url_for('dashboard') }}'">&times;</button>
+        <button type="button" class="sidebar-close" onclick="toggleSidebar()" aria-label="Close menu">&times;</button>
     </div>
     <nav class="sidebar-nav">
         <a href="{{ url_for('admindashboard') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admindashboard' else '' }}">
@@ -99,12 +111,14 @@
 </aside>
 {% endif %}
 
-<main class="page{% if request.endpoint and request.endpoint.startswith('admin') %} has-sidebar{% endif %}">
+<main class="page{% if is_admin %} has-sidebar{% endif %}">
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             <div class="flash-stack">
                 {% for category, message in messages %}
-                    <div class="flash flash-{{ category }}"><span class="flash-dot"></span>{{ message }}</div>
+                    <div class="flash flash-{{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">
+                        <span class="flash-dot"></span>{{ message }}
+                    </div>
                 {% endfor %}
             </div>
         {% endif %}
@@ -118,21 +132,83 @@
     <span class="footer-dot">·</span>
     <span>2026</span>
     <span class="footer-dot">·</span>
-    <a href="{{ url_for('tos') }}" style="color: inherit; text-decoration: none; opacity: 0.8; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.8'">Terms of Service</a>
+    <a href="{{ url_for('tos') }}" class="footer-link">Terms of Service</a>
     <span class="footer-dot">·</span>
-    <a href="{{ url_for('privacy') }}" style="color: inherit; text-decoration: none; opacity: 0.8; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.8'">Privacy Policy</a>
+    <a href="{{ url_for('privacy') }}" class="footer-link">Privacy Policy</a>
 </footer>
 
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<div id="copyToast" class="copy-toast" hidden role="status">Copied</div>
+
+<div id="confirmModal" class="modal-backdrop" style="display: none;">
+    <div class="modal-panel" style="max-width: 440px;">
+        <div class="modal-head">
+            <h3 id="confirmModalTitle">Confirm</h3>
+            <button type="button" class="modal-close" onclick="closeConfirmModal()">&times;</button>
+        </div>
+        <p id="confirmModalMessage" style="color: var(--text-dim); font-size: 14px; line-height: 1.55; margin: 0; white-space: pre-wrap;"></p>
+        <div class="modal-actions" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft);">
+            <button type="button" class="btn" onclick="closeConfirmModal()">Cancel</button>
+            <button type="button" class="btn btn-danger" id="confirmModalOk">Confirm</button>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 <script>
     if (window.lucide) window.lucide.createIcons();
+
+    var _confirmOnOk = null;
 
     function toggleMenu() {
         document.querySelector('.topnav').classList.toggle('is-open');
     }
     function toggleSidebar() {
-        document.getElementById('adminSidebar').classList.toggle('is-open');
+        var sidebar = document.getElementById('adminSidebar');
+        var scrim = document.getElementById('sidebarScrim');
+        if (!sidebar) return;
+        var open = sidebar.classList.toggle('is-open');
+        if (scrim) {
+            if (open) scrim.removeAttribute('hidden');
+            else scrim.setAttribute('hidden', '');
+        }
     }
+    function openModal(id) {
+        var m = document.getElementById(id);
+        if (!m) return;
+        m.classList.add('is-open');
+        m.style.display = 'flex';
+        m.setAttribute('role', 'dialog');
+        m.setAttribute('aria-modal', 'true');
+        var focusable = m.querySelector('input, select, textarea, button:not(.modal-close)');
+        if (focusable) focusable.focus();
+    }
+    function closeModal(id) {
+        var m = typeof id === 'string' ? document.getElementById(id) : id;
+        if (!m) return;
+        m.classList.remove('is-open');
+        setTimeout(function() {
+            if (!m.classList.contains('is-open')) m.style.display = 'none';
+        }, 150);
+    }
+    function closeConfirmModal() {
+        _confirmOnOk = null;
+        closeModal('confirmModal');
+    }
+    function confirmAction(opts) {
+        opts = opts || {};
+        document.getElementById('confirmModalTitle').textContent = opts.title || 'Confirm';
+        document.getElementById('confirmModalMessage').textContent = opts.message || 'Are you sure?';
+        var ok = document.getElementById('confirmModalOk');
+        ok.textContent = opts.confirmLabel || 'Confirm';
+        ok.className = 'btn ' + (opts.danger === false ? 'btn-primary' : 'btn-danger');
+        _confirmOnOk = typeof opts.onConfirm === 'function' ? opts.onConfirm : null;
+        openModal('confirmModal');
+    }
+    document.getElementById('confirmModalOk').addEventListener('click', function() {
+        var fn = _confirmOnOk;
+        closeConfirmModal();
+        if (fn) fn();
+    });
     function toggleThemeDropdown(e) {
         if (e) e.stopPropagation();
         var dd = document.getElementById('themeDropdown');
@@ -145,8 +221,6 @@
         }
     });
 
-    // === CSRF Protection ===
-    // Auto-inject CSRF token into all forms
     (function() {
         function getCookie(name) {
             var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
@@ -166,53 +240,84 @@
         }
     })();
 
-    // Close sidebar on backdrop click
     document.addEventListener('click', function(e) {
         var sidebar = document.getElementById('adminSidebar');
         if (sidebar && sidebar.classList.contains('is-open')) {
-            if (!sidebar.contains(e.target) && !e.target.closest('.sidebar-toggle')) {
-                sidebar.classList.remove('is-open');
+            if (!sidebar.contains(e.target) && !e.target.closest('.sidebar-toggle') && !e.target.closest('.sidebar-scrim')) {
+                toggleSidebar();
             }
         }
     });
 
-    // === Foolproof UI Utilities ===
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal-backdrop.is-open').forEach(function(m) {
-                m.classList.remove('is-open');
+                closeModal(m);
             });
+            var sidebar = document.getElementById('adminSidebar');
+            if (sidebar && sidebar.classList.contains('is-open')) toggleSidebar();
         }
     });
 
-    // Close modal on backdrop click
     document.addEventListener('click', function(e) {
         if (e.target.classList.contains('modal-backdrop')) {
-            e.target.classList.remove('is-open');
+            closeModal(e.target);
         }
     });
 
-    // Loading state: disable submit button, show spinner text
+    // data-confirm on forms → global confirm modal (capture, before spinner)
     document.addEventListener('submit', function(e) {
         var form = e.target;
-        var btn = form.querySelector('button[type="submit"]');
+        if (!form || form.tagName !== 'FORM') return;
+        if (form.dataset.confirmOk === '1') {
+            delete form.dataset.confirmOk;
+            return;
+        }
+        var msg = form.getAttribute('data-confirm');
+        if (!msg) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        confirmAction({
+            title: form.getAttribute('data-confirm-title') || 'Confirm',
+            message: msg,
+            danger: form.getAttribute('data-confirm-danger') !== '0',
+            confirmLabel: form.getAttribute('data-confirm-label') || 'Confirm',
+            onConfirm: function() {
+                form.dataset.confirmOk = '1';
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else HTMLFormElement.prototype.submit.call(form);
+            }
+        });
+    }, true);
+
+    document.addEventListener('submit', function(e) {
+        var form = e.target;
+        if (form.getAttribute('data-confirm') && form.dataset.confirmOk !== '1') return;
+        var btn = form.querySelector('button[type="submit"]:not([disabled])') || form.querySelector('button[type="submit"]');
         if (btn && !btn.disabled) {
             btn.disabled = true;
             btn.setAttribute('data-original-text', btn.innerHTML);
             btn.innerHTML = '<span class="spinner"></span> Please wait...';
-            setTimeout(function() {
-                btn.disabled = false;
-                btn.innerHTML = btn.getAttribute('data-original-text') || btn.innerHTML;
-            }, 10000);
         }
     });
 
-    // Copy-to-clipboard: add data-copy to any element, copies silently
     document.addEventListener('click', function(e) {
         var el = e.target.closest('[data-copy]');
         if (!el) return;
+        e.preventDefault();
+        e.stopPropagation();
         var text = el.getAttribute('data-copy') || el.textContent;
-        navigator.clipboard.writeText(text.trim());
+        navigator.clipboard.writeText(text.trim()).then(function() {
+            var toast = document.getElementById('copyToast');
+            if (!toast) return;
+            toast.hidden = false;
+            toast.classList.add('is-visible');
+            clearTimeout(window._copyToastTimer);
+            window._copyToastTimer = setTimeout(function() {
+                toast.classList.remove('is-visible');
+                toast.hidden = true;
+            }, 1200);
+        });
     });
 </script>
 </body>

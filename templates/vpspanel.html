@@ -29,15 +29,15 @@
     {% endif %}
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/start" style="display:inline;">
-      <button type="submit" class="btn btn-primary btn-small">&#9654; Start</button>
+      <button type="submit" class="btn btn-primary btn-small" {% if instance.status == 'running' or instance.status == 'creating' %}disabled{% endif %}>Start</button>
     </form>
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/restart" style="display:inline;">
-      <button type="submit" class="btn btn-small">&#8635; Restart</button>
+      <button type="submit" class="btn btn-small" {% if instance.status != 'running' %}disabled{% endif %}>Restart</button>
     </form>
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/stop" style="display:inline;">
-      <button type="submit" class="btn btn-danger btn-small">&#9632; Stop</button>
+      <button type="submit" class="btn btn-danger btn-small" {% if instance.status != 'running' %}disabled{% endif %}>Stop</button>
     </form>
 
     {% if instance.node_type == 'proxmox' %}
@@ -63,26 +63,37 @@
         </div>
     </div>
 
-    <script>
-        function openModal(id) {
-            document.getElementById(id).classList.add('is-open');
-        }
-        
-        function closeModal(id) {
-            document.getElementById(id).classList.remove('is-open');
-        }
-    </script>
-
     {% if instance.plan_price and instance.plan_price > 0 %}
-    <button type="button" class="btn btn-small" onclick="openModal('reinstallModal')">&#8635; Reinstall</button>
+    <button type="button" class="btn btn-small" onclick="openModal('reinstallModal')">Reinstall</button>
     {% else %}
-    <form method="POST" action="{{ url_for('deletevps', vpsUuid=instance.uuid) }}" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete {{ instance.hostname }}? This cannot be undone.');">
-      <button type="submit" class="btn btn-danger btn-small" style="background: transparent;">&#x1F5D1; Delete</button>
-    </form>
+    <button type="button" class="btn btn-danger btn-small" onclick="openModal('deleteVpsModal')">Delete</button>
     {% endif %}
     {% endif %}
   </div>
 </div>
+
+{% if not (instance.plan_price and instance.plan_price > 0) and instance.status != 'suspended' %}
+<div id="deleteVpsModal" class="modal-backdrop">
+  <div class="modal-panel" style="max-width: 440px;">
+    <div class="modal-head">
+      <h3>Delete VPS</h3>
+      <button type="button" class="modal-close" onclick="closeModal('deleteVpsModal')">&times;</button>
+    </div>
+    <p style="color: var(--text-dim); font-size: 14px; line-height: 1.5; margin: 0 0 8px;">
+      Permanently delete <strong style="color: var(--text);">{{ instance.hostname }}</strong>?
+    </p>
+    <p style="color: var(--danger); font-size: 13px; line-height: 1.45; margin: 0;">
+      The instance, disk, and assigned IPs will be destroyed. This cannot be undone.
+    </p>
+    <form method="POST" action="{{ url_for('deletevps', vpsUuid=instance.uuid) }}">
+      <div class="modal-actions" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft);">
+        <button type="button" class="btn" onclick="closeModal('deleteVpsModal')">Cancel</button>
+        <button type="submit" class="btn btn-danger">Delete VPS</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 
 <!-- Active Job Banner -->
 <div id="jobBanner" style="display: none; margin-bottom: 20px; padding: 14px 18px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--font-mono); font-size: 13px; color: var(--text-dim);">
@@ -97,7 +108,7 @@
       <h3>Reinstall {{ instance.hostname }}</h3>
       <button type="button" class="modal-close" onclick="closeModal('reinstallModal')">&times;</button>
     </div>
-    <form method="POST" action="{{ url_for('reinstallvps', vpsUuid=instance.uuid) }}">
+    <form method="POST" action="{{ url_for('reinstallvps', vpsUuid=instance.uuid) }}" data-confirm="Reinstall {{ instance.hostname }}? A new root password will be generated. This cannot be undone." data-confirm-title="Reinstall VPS" data-confirm-label="Reinstall">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <div class="field">
         <label>Operating System</label>
@@ -110,16 +121,13 @@
       </div>
       <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
         <button type="button" onclick="closeModal('reinstallModal')" class="btn">Cancel</button>
-        <button type="submit" class="btn btn-primary" onclick="return confirm('Reinstall {{ instance.hostname }}? A new root password will be generated. This cannot be undone.');">Reinstall</button>
+        <button type="submit" class="btn btn-primary">Reinstall</button>
       </div>
     </form>
   </div>
 </div>
 
 <script>
-  function openModal(id) { document.getElementById(id).classList.add('is-open'); }
-  function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
-
   (function() {
     var vpsUuid = '{{ instance.uuid }}';
     var banner = document.getElementById('jobBanner');

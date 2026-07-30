@@ -75,6 +75,20 @@
         vertical-align: middle;
     }
     .sub-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .net-table th, .net-table td { padding: 8px 10px; }
+    .net-stack { white-space: nowrap; }
+    .net-line { line-height: 1.35; font-size: 12px; }
+    .net-line.mono { font-family: var(--font-mono); }
+    .net-line.dim, .dim { color: #666; font-size: 11px; }
+    .net-dns {
+        font-size: 11px;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .net-actions { white-space: nowrap; }
+    .net-actions .btn { margin-right: 4px; }
     .ip-status {
         display: inline-block;
         padding: 2px 8px;
@@ -109,8 +123,7 @@
     .empty-mini .glyph { font-size: 28px; margin-bottom: 8px; }
 </style>
 
-<div class="page">
-    <!-- Header -->
+<!-- Header -->
     <section class="hero" style="padding-bottom: 20px;">
         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
             <a href="{{ url_for('adminnodes') }}" style="color: var(--text-dim, #888); text-decoration: none; font-size: 13px;">&larr; Nodes</a>
@@ -300,12 +313,11 @@
 
         {% if networks %}
         <div style="overflow-x: auto;">
-            <table class="sub-table">
+            <table class="sub-table net-table">
                 <thead>
                     <tr>
                         <th>Name</th>
-                        <th>IPv6 Subnet</th>
-                        <th>IPv6 Gateway</th>
+                        <th>IPv6</th>
                         <th>IPv4</th>
                         <th>IPs</th>
                         <th>DNS</th>
@@ -316,20 +328,30 @@
                     {% for net in networks %}
                     <tr>
                         <td><strong>{{ net.name }}</strong></td>
-                        <td style="font-family: var(--font-mono); font-size: 12px;">{{ net.subnet or '—' }}</td>
-                        <td style="font-family: var(--font-mono); font-size: 12px;">{{ net.gateway or '—' }}</td>
-                        <td>
-                            {% if net.ipv4 %}
-                            <span style="color: #4ade80;">{{ net.ipv4_subnet or 'enabled' }}</span>
+                        <td class="net-stack">
+                            {% if net.ipv6 %}
+                            <div class="net-line mono">{{ net.subnet or '—' }}</div>
+                            <div class="net-line dim">gw {{ net.gateway or '—' }}</div>
                             {% else %}
-                            <span style="color: #666;">off</span>
+                            <span class="dim">off</span>
                             {% endif %}
                         </td>
-                        <td>{{ ipStats.get(net.id, {}).get('total', 0) }} total / {{ ipStats.get(net.id, {}).get('available', 0) }} free</td>
-                        <td style="font-size: 11px; max-width: 200px; overflow: hidden; text-overflow: ellipsis;">{{ net.dns or '—' }}</td>
-                        <td style="display: flex; gap: 6px;">
+                        <td class="net-stack">
+                            {% if net.ipv4 %}
+                            <div class="net-line mono">{{ net.ipv4_subnet or '—' }}</div>
+                            <div class="net-line dim">gw {{ net.ipv4_gateway or '—' }}</div>
+                            {% else %}
+                            <span class="dim">off</span>
+                            {% endif %}
+                        </td>
+                        <td class="net-stack">
+                            <div class="net-line">v4 {{ ipStats.get(net.id, {}).get('ipv4', {}).get('total', 0) }}/{{ ipStats.get(net.id, {}).get('ipv4', {}).get('available', 0) }}</div>
+                            <div class="net-line">v6 {{ ipStats.get(net.id, {}).get('ipv6', {}).get('total', 0) }}/{{ ipStats.get(net.id, {}).get('ipv6', {}).get('available', 0) }}</div>
+                        </td>
+                        <td class="net-dns">{{ net.dns or '—' }}</td>
+                        <td class="net-actions">
                             <button class="btn btn-small" onclick="openEditNetwork('{{ net|tojson|forceescape }}')">Edit</button>
-                            <form class="inline-form" action="{{ url_for('adminnodenetworkdelete', nodeUuid=node.uuid, netUuid=net.uuid) }}" method="POST" onsubmit="return confirm('Delete this network?');">
+                            <form class="inline-form" action="{{ url_for('adminnodenetworkdelete', nodeUuid=node.uuid, netUuid=net.uuid) }}" method="POST" data-confirm="Delete network &quot;{{ net.name }}&quot;?" data-confirm-title="Delete Network" data-confirm-label="Delete">
                                 <button type="submit" class="btn btn-small btn-danger">Delete</button>
                             </form>
                         </td>
@@ -431,7 +453,7 @@
                         <td>{{ (pool.size - (pool.used or 0) / 1024)|round(1) }} GB</td>
                         <td style="display: flex; gap: 6px;">
                             <button class="btn btn-small" onclick="openEditStorage('{{ pool|tojson|forceescape }}')">Edit</button>
-                            <form class="inline-form" action="{{ url_for('adminnodestoragedelete', nodeUuid=node.uuid, poolUuid=pool.uuid) }}" method="POST" onsubmit="return confirm('Delete this storage pool?');">
+                            <form class="inline-form" action="{{ url_for('adminnodestoragedelete', nodeUuid=node.uuid, poolUuid=pool.uuid) }}" method="POST" data-confirm="Delete storage pool &quot;{{ pool.name }}&quot;?" data-confirm-title="Delete Storage Pool" data-confirm-label="Delete">
                                 <button type="submit" class="btn btn-small btn-danger">Delete</button>
                             </form>
                         </td>
@@ -477,7 +499,7 @@
                         <td>{{ nodeImages|selectattr('imagestorageid', 'equalto', ist.id)|list|length }}</td>
                         <td style="display: flex; gap: 6px;">
                             <button class="btn btn-small" onclick="openEditImageStorage('{{ ist|tojson|forceescape }}')">Edit</button>
-                            <form class="inline-form" action="{{ url_for('adminnodeimagestoragedelete', nodeUuid=node.uuid, storageUuid=ist.uuid) }}" method="POST" onsubmit="return confirm('Delete this image storage?');">
+                            <form class="inline-form" action="{{ url_for('adminnodeimagestoragedelete', nodeUuid=node.uuid, storageUuid=ist.uuid) }}" method="POST" data-confirm="Delete image storage &quot;{{ ist.name }}&quot;?" data-confirm-title="Delete Image Storage" data-confirm-label="Delete">
                                 <button type="submit" class="btn btn-small btn-danger">Delete</button>
                             </form>
                         </td>
@@ -546,7 +568,6 @@
             <div id="imagesPagination" style="display: flex; gap: 8px; justify-content: center; align-items: center; margin-top: 16px;"></div>
         </div>
     </div>
-</div>
 
 <!-- ===== ADD NETWORK MODAL ===== -->
 <div id="addNetworkModal" class="modal-backdrop">
@@ -936,7 +957,7 @@
                     const delUrl = urls.deleteBase.replace('__UUID__', ip.uuid);
                     const delBtn = ip.assigned
                         ? '<span style="color: #666; font-size: 11px;">in use</span>'
-                        : `<form class="inline-form" action="${delUrl}" method="POST" onsubmit="return confirm('Delete this IP?');"><button type="submit" class="btn btn-small btn-danger">Delete</button></form>`;
+                        : `<form class="inline-form" action="${delUrl}" method="POST" data-confirm="Delete this IP?" data-confirm-title="Delete IP" data-confirm-label="Delete"><button type="submit" class="btn btn-small btn-danger">Delete</button></form>`;
                     tr.innerHTML = `<td style="font-family: var(--font-mono); font-size: 13px;">${ip.ip}</td><td>${status}</td><td>${vps}</td><td>${delBtn}</td>`;
                     tbody.appendChild(tr);
                 });
@@ -1017,7 +1038,7 @@
                     }
                     
                     const unassignUrl = "{{ url_for('adminosimageunassign', imageUuid='__UUID__') }}".replace('__UUID__', img.uuid);
-                    const unassignBtn = `<form class="inline-form" action="${unassignUrl}" method="POST" onsubmit="return confirm('Unassign this image from {{ node.name }}?');"><input type="hidden" name="nodeid" value="{{ node.id }}"><button type="submit" class="btn btn-small btn-danger">Unassign</button></form>`;
+                    const unassignBtn = `<form class="inline-form" action="${unassignUrl}" method="POST" data-confirm="Unassign this image from {{ node.name }}?" data-confirm-title="Unassign Image" data-confirm-label="Unassign"><input type="hidden" name="nodeid" value="{{ node.id }}"><button type="submit" class="btn btn-small btn-danger">Unassign</button></form>`;
                     
                     tr.innerHTML = `<td><strong>${img.name}</strong></td><td style="font-family: var(--font-mono); font-size: 12px;">${img.image}</td>${storageCol}<td>${status}</td><td>${unassignBtn}</td>`;
                     tbody.appendChild(tr);

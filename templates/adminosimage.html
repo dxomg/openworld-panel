@@ -102,8 +102,7 @@
     .node-pill .remove-btn:hover { opacity: 1; }
 </style>
 
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>OS Images</h1>
         <p>Create OS images once, then assign them to nodes that have the template.</p>
@@ -198,7 +197,7 @@
 
             <div style="display: flex; gap: 8px; margin-top: auto; padding-top: 9px; border-top: 1px solid var(--border-soft);">
                 <button class="btn btn-small" onclick="openEditModal('{{ img|tojson|forceescape }}')">Edit</button>
-                <form action="{{ url_for('adminosimagedelete', imageUuid=img.uuid) }}" method="POST" onsubmit="return confirm('Delete this image?');">
+                <form action="{{ url_for('adminosimagedelete', imageUuid=img.uuid) }}" method="POST" data-confirm="Delete image &quot;{{ img.name }}&quot;? This cannot be undone." data-confirm-title="Remove Image" data-confirm-label="Remove">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -229,7 +228,6 @@
         <p>Add your first OS image, then assign it to nodes that have the template.</p>
     </div>
     {% endif %}
-</div>
 
 <!-- ===== Add Image Modal ===== -->
 <div id="addImageModal" class="modal-backdrop">
@@ -370,7 +368,6 @@
         </form>
     </div>
 </div>
-
 <script>
     const STORAGE_URL = "{{ url_for('adminosimagestorages', nodeId=0) }}";
     const ASSIGN_URL = "{{ url_for('adminosimageassign', imageUuid='UUID') }}";

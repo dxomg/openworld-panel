@@ -62,8 +62,7 @@
     }
 </style>
 
-<div class="page">
-    <!-- ===== Admin Hero Section ===== -->
+<!-- ===== Admin Hero Section ===== -->
     <section class="hero">
         <div class="hero-eyebrow">
             <span class="pulse-dot"></span> 
@@ -86,19 +85,18 @@
 
     <div class="vps-grid">
         {% for user in allUsers %}
-        <div class="vps-card" style="opacity: {{ '0.7' if user.status == 'banned' else '1' }}; border: 1px solid {{ 'red' if user.status == 'banned' else 'var(--border)' }};">
+        <div class="vps-card{% if user.status == 'banned' %} user-card-banned{% endif %}">
             <div class="vps-id">
                 <div class="vps-hostname">
                     {{ user.username }}
                     {% if user.status == 'banned' %}
-                        <span class="badge" style="color: red; font-size: 12px; margin-left: 8px; padding: 2px 6px; border: 1px solid red; border-radius: 4px;">BANNED</span>
+                        <span class="badge-banned">Banned</span>
                     {% endif %}
                 </div>
                 <div class="vps-meta">{{ user.email }} &middot; Joined {{ user.created }}</div>
                 
-                <!-- Display reason if the user is currently banned and has an active record -->
                 {% if user.active_ban and user.status == 'banned' %}
-                    <div style="margin-top: 8px; font-size: 13px; color: #d9534f; background: #fdf0f0; padding: 8px; border-radius: 4px; border-left: 3px solid #d9534f;">
+                    <div class="ban-reason-inline">
                         <strong>Ban Reason:</strong> {{ user.active_ban.reason }}
                     </div>
                 {% endif %}
@@ -108,9 +106,8 @@
                 <button onclick="openViewUserModal('{{ user.id }}')" class="btn btn-small">View</button>
                 
                 {% if user.status == 'banned' %}
-                    <!-- Unban Form -->
-                    <form action="{{ url_for('adminunbanuser', userId=user.id) }}" method="POST" style="display: inline;">
-                        <button type="submit" class="btn btn-small" style="background-color: #5cb85c; color: white; border: none;" onclick="return confirm('Unban this user?');">Unban</button>
+                    <form action="{{ url_for('adminunbanuser', userId=user.id) }}" method="POST" style="display: inline;" data-confirm="Unban {{ user.username }}? They will regain access to the panel." data-confirm-title="Unban User" data-confirm-label="Unban" data-confirm-danger="0">
+                        <button type="submit" class="btn btn-small btn-success">Unban</button>
                     </form>
                 {% else %}
                     <!-- Ban Button -->
@@ -182,7 +179,7 @@
             <span class="btn btn-small" style="opacity: 0.4; pointer-events: none;">&laquo; Prev</span>
         {% endif %}
 
-        <span style="font-size: 14px; color: var(--muted, #888); padding: 0 8px;">
+        <span style="font-size: 14px; color: var(--text-dim); padding: 0 8px;">
             Page {{ pagination.currentPage }} of {{ pagination.totalPages }}
         </span>
 
@@ -193,7 +190,6 @@
         {% endif %}
     </div>
     {% endif %}
-</div>
 
 <!-- ===== Create User Modal ===== -->
 <div id="addUserModal" class="modal-backdrop">
@@ -210,7 +206,6 @@
         </form>
     </div>
 </div>
-
 <script>
     function openAddUserModal() { document.getElementById('addUserModal').classList.add('is-open'); }
     function closeAddUserModal() { document.getElementById('addUserModal').classList.remove('is-open'); }

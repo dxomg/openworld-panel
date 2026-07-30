@@ -25,6 +25,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG = {
     "general": {
         "projectname": "Openworld",
+        "theme": "catppuccin",
         "passwordlength": 24,
         "cookielength": 128,
         "defaultcookiettl": 7,
@@ -106,6 +107,7 @@ def reloadconfig():
     config = loadorcreateconfig()
 
 
+db.ensurejobssuspendtype()
 config = loadorcreateconfig()
 
 OS_TYPES = {
@@ -212,8 +214,11 @@ def _processjob(job):
     elif jobtype == 'suspend':
         vps = db.getvps(vpsUuid)
         if vps:
-            if vps['status'] == 'running':
+            # Status often already 'suspended' when job runs; still stop the instance
+            try:
                 services.performvpsaction(vps['id'], 'stop', actorUserId=job['userid'])
+            except Exception:
+                pass
             db.updatevps(vpsUuid, status='suspended')
 
     elif jobtype == 'delete':
@@ -452,6 +457,7 @@ def guestuserinfo():
         "logo": config["general"]["logo"],
         "projectname": config["general"]["projectname"],
         "globaltotalvps": db.countvps(),
+        "globaltotalnodes": db.countnodes(),
         "theme_class": get_theme_class(),
         "themes": THEMES,
         "current_theme": cookie_theme or db.getsetting("general.theme", "catppuccin"),
@@ -1328,9 +1334,23 @@ def adminbanuser(userId):
     # Invalidate all sessions for the banned user
     with db.getconnection() as conn:
         conn.execute("DELETE FROM sessions WHERE userid = ?", (userId,))
+
+    # Suspend all of the user's VPS
+    suspendReason = f"Owner banned: {reason}"
+    userVps = db.listvpspaginated(page=1, perpage=10000, userid=userId)["vps"]
+    suspendedCount = 0
+    for v in userVps:
+        if vpsissuspended(v) or v["status"] in ("deleted", "pendingpayment"):
+            continue
+        if db.haspendingjobs(v["uuid"]):
+            continue
+        db.addvpssuspension(str(uuid.uuid4()), v["id"], userId, adminId, suspendReason)
+        db.updatevps(v["uuid"], status="suspended")
+        enqueuejob(v["id"], v["uuid"], adminId, "suspend")
+        suspendedCount += 1
     
-    auditlog("user.ban", "user", userId, f"Banned user '{target['username']}': {reason}")
-    flash("User has been banned.", "success")
+    auditlog("user.ban", "user", userId, f"Banned user '{target['username']}': {reason} (suspended {suspendedCount} VPS)")
+    flash(f"User banned. {suspendedCount} VPS suspended.", "success")
     return redirect(url_for('adminusers'))
 
 
@@ -1357,7 +1377,9 @@ def adminunbanuser(userId):
 def adminvps():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
-    vpsData = db.listvpspaginated(page=page, perpage=12, search=q)
+    status = request.args.get('status', '').strip() or None
+    vpsData = db.listvpspaginated(page=page, perpage=12, search=q, status=status)
+    suspendedCount = db.listvpspaginated(page=1, perpage=1, status='suspended')['totalCount']
     
     users = db.listallusers()
     plans = db.listplans(active=1)
@@ -1379,9 +1401,30 @@ def adminvps():
         allNodes=allNodes,
         storagePools=storagePools,
         search=q or '',
+        statusFilter=status or '',
+        suspendedCount=suspendedCount,
         **paneluserinfo(g.userinfo), 
         **paneladmininfo(g.userinfo)
     )
+
+
+@app.route("/dashboard/admin/vps/remove-suspended", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminvpsremovesuspended():
+    suspended = db.listvpspaginated(page=1, perpage=10000, status='suspended')['vps']
+    queued = 0
+    skipped = 0
+    for v in suspended:
+        if db.haspendingjobs(v['uuid']):
+            skipped += 1
+            continue
+        db.updatevps(v['uuid'], status='deleted')
+        enqueuejob(v['id'], v['uuid'], g.userinfo['id'], 'delete')
+        auditlog("vps.delete", "vps", v['uuid'], f"Bulk-removed suspended VPS {v['hostname']}")
+        queued += 1
+    flash(f"Queued delete for {queued} suspended VPS." + (f" Skipped {skipped} with pending jobs." if skipped else ""), "success" if queued else "warning")
+    return redirect(url_for('adminvps'))
 
 @app.route("/dashboard/admin/vps/<vpsUuid>")
 @loginrequired
@@ -2769,6 +2812,16 @@ SETTINGS_SCHEMA = {
 }
 
 
+@app.route("/dashboard/admin/settings/reload", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminsettingsreload():
+    reloadconfig()
+    auditlog("settings.reload", "settings", None, "Reloaded config from database")
+    flash("Configuration reloaded from database.", "success")
+    return redirect(url_for('adminsettings'))
+
+
 @app.route("/dashboard/admin/settings", methods=["GET", "POST"])
 @loginrequired
 @adminrequired
@@ -2779,21 +2832,45 @@ def adminsettings():
             for key, meta in SETTINGS_SCHEMA[section].items():
                 flatkey = f"{section}.{key}"
                 if meta['type'] == 'bool':
-                    val = request.form.get(key) == 'on' or request.form.get(key) == '1'
+                    val = request.form.get(key) in ('on', '1', 'true', 'True')
                 elif meta['type'] == 'number':
-                    raw = request.form.get(key, '')
-                    val = int(raw) if raw else DEFAULT_CONFIG.get(section, {}).get(key, 0)
+                    raw = (request.form.get(key) or '').strip()
+                    try:
+                        val = int(raw) if raw else DEFAULT_CONFIG.get(section, {}).get(key, 0)
+                    except ValueError:
+                        val = DEFAULT_CONFIG.get(section, {}).get(key, 0)
+                elif meta['type'] == 'theme':
+                    val = request.form.get(key) or DEFAULT_CONFIG.get(section, {}).get(key, 'catppuccin')
+                    valid = {t['id'] for t in THEMES}
+                    if val not in valid:
+                        val = 'catppuccin'
                 else:
-                    val = request.form.get(key, '')
-                db.setsetting(flatkey, val, f"{section} → {key}")
+                    val = (request.form.get(key) or '').strip()
+                    if not val and key in DEFAULT_CONFIG.get(section, {}):
+                        # keep existing non-empty secret if password field left blank
+                        if meta['type'] == 'password':
+                            existing = db.getsetting(flatkey)
+                            if existing:
+                                continue
+                db.setsetting(flatkey, val, f"{section} → {meta.get('label', key)}")
             auditlog("settings.update", "settings", None, f"Updated {section} settings")
             reloadconfig()
             flash(f"{section.title()} settings saved.", "success")
+        else:
+            flash("Unknown settings section.", "error")
         return redirect(url_for('adminsettings'))
+
+    # Prefer live DB values for the form (config may lag if reload failed historically)
+    live = {}
+    for section, fields in SETTINGS_SCHEMA.items():
+        live[section] = {}
+        for key in fields:
+            default = DEFAULT_CONFIG.get(section, {}).get(key, '')
+            live[section][key] = db.getsetting(f"{section}.{key}", config.get(section, {}).get(key, default))
 
     return render_template(
         "adminsettings.html",
-        config=config,
+        config=live,
         schema=SETTINGS_SCHEMA,
         defaults=DEFAULT_CONFIG,
         current_theme_global=db.getsetting("general.theme", "catppuccin"),

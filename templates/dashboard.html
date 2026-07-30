@@ -3,116 +3,27 @@
 {% block title %}Dashboard - {{ projectname }}{% endblock %}
 
 {% block content %}
-<style>
-    /* Improved Grid for less crowding */
-    .vps-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); /* Larger cards */
-        gap: 24px; /* More space between cards */
-        margin-top: 10px;
-    }
-
-    .vps-card {
-        display: flex;
-        flex-direction: column; /* Stacked layout feels more premium/less crowded */
-        align-items: flex-start;
-        gap: 16px;
-        padding: 24px;
-        background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        position: relative;
-        transition: all 0.2s ease;
-    }
-
-    .vps-card:hover {
-        border-color: var(--accent);
-        transform: translateY(-2px);
-        background: var(--panel-hover);
-    }
-
-    .vps-card-header {
-        width: 100%;
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-    }
-
-    .vps-hostname {
-        font-family: var(--font-mono);
-        font-size: 16px;
-        font-weight: 600;
-        color: var(--text);
-    }
-
-    .vps-meta {
-        font-family: var(--font-mono);
-        font-size: 12px;
-        color: var(--text-faint);
-    }
-
-    /* Specs styling */
-    .vps-specs-row {
-        display: flex;
-        gap: 15px;
-        width: 100%;
-        padding-top: 16px;
-        border-top: 1px solid var(--border-soft);
-    }
-
-    .spec-group {
-        display: flex;
-        flex-direction: column;
-    }
-
-    .spec-label {
-        font-size: 10px;
-        color: var(--text-faint);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-
-    .spec-value {
-        font-family: var(--font-mono);
-        font-size: 13px;
-        color: var(--text-dim);
-    }
-
-    .vps-arrow {
-        position: absolute;
-        bottom: 24px;
-        right: 24px;
-        opacity: 0.3;
-    }
-</style>
-
-<!-- Dashboard Overview Hero -->
 <section class="hero">
   <div class="hero-eyebrow">
     <span class="pulse-dot"></span> {{ projectname }} Dashboard
   </div>
-  
   <h1>Welcome, {{ username }}</h1>
-  <p>Overview of your provisioned nodes and active compute resources.</p>
+  <p>Your instances and compute resources.</p>
 </section>
 
-<!-- Instances Section Header -->
-<div class="section-head">
-  <h2>Active Instances ({{ vpsData.totalCount }})</h2>
-  <div class="actions" style="display: flex; gap: 10px; align-items: center;">
-      <form method="GET" action="{{ url_for('dashboard') }}" style="display: flex; gap: 8px; align-items: center;">
-          <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search instances...">
-      </form>
-      <a href="{{ url_for('createvps') }}" class="btn btn-primary btn-small">+ Provision VPS</a>
+<div class="section-head dash-section-head">
+  <h2>Instances ({{ vpsData.totalCount }})</h2>
+  <div class="actions dash-actions">
+    <form method="GET" action="{{ url_for('dashboard') }}" class="dash-search">
+      <input type="search" name="q" class="search-input" value="{{ search }}" placeholder="Search hostname, IP, status…" aria-label="Search instances">
+    </form>
+    <a href="{{ url_for('createvps') }}" class="btn btn-primary btn-small">+ Provision VPS</a>
   </div>
 </div>
 
-<!-- Instance List or Empty State -->
 {% if vpsData.vps %}
-<div class="vps-grid">
-
+<div class="dash-list">
   {% for instance in vpsData.vps %}
-  {# Logic to determine status class #}
   {% if instance.status == 'running' %}
     {% set statusClass = 'status-running' %}
   {% elif instance.status == 'creating' %}
@@ -125,79 +36,77 @@
     {% set statusClass = 'status-stopped' %}
   {% endif %}
 
-  <a href="{{ url_for('checkout', vpsUuid=instance.uuid) if instance.status == 'pendingpayment' else url_for('vpspanel', vpsUuid=instance.uuid) }}" class="vps-card">
-    
-    <div class="vps-card-header">
-        <span>
-            <span class="vps-hostname">{{ instance.hostname }}</span><br>
-            {% if instance.ipv6 %}
-            <span class="vps-meta" data-copy="{{ instance.ipv6 }}" title="Click to copy">{{ instance.ipv6 }}</span>
-            {% elif instance.ipv4 %}
-            <span class="vps-meta" data-copy="{{ instance.ipv4 }}" title="Click to copy">{{ instance.ipv4 }}</span>
-            {% else %}
-            <span class="vps-meta">No IP assigned</span>
-            {% endif %}
-        </span>
-        
+  {% set href = url_for('checkout', vpsUuid=instance.uuid) if instance.status == 'pendingpayment' else url_for('vpspanel', vpsUuid=instance.uuid) %}
+
+  <a href="{{ href }}" class="dash-row{% if instance.status == 'pendingpayment' %} dash-row-pay{% elif instance.status == 'suspended' %} dash-row-suspended{% endif %}">
+    <div class="dash-row-main">
+      <div class="dash-row-title">
+        <span class="dash-hostname">{{ instance.hostname }}</span>
         <span class="status-pill {{ statusClass }}">
-          <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}
+          <span class="dot"></span>{% if instance.status == 'pendingpayment' %}Payment due{% else %}{{ instance.status|capitalize }}{% endif %}
         </span>
+      </div>
+      <div class="dash-row-meta">
+        {% if instance.ipv4 %}
+        <span class="dash-ip" data-copy="{{ instance.ipv4 }}" title="Click to copy IPv4"><span class="dash-ip-tag">v4</span> {{ instance.ipv4 }}</span>
+        {% endif %}
+        {% if instance.ipv6 %}
+        {% if instance.ipv4 %}<span class="dash-sep">·</span>{% endif %}
+        <span class="dash-ip" data-copy="{{ instance.ipv6 }}" title="Click to copy IPv6"><span class="dash-ip-tag">v6</span> {{ instance.ipv6 }}</span>
+        {% endif %}
+        {% if not instance.ipv4 and not instance.ipv6 %}
+        <span class="dash-ip dim">No IP</span>
+        {% endif %}
+        {% if instance.plan_name %}
+        <span class="dash-sep">·</span>
+        <span>{{ instance.plan_name }}</span>
+        {% endif %}
+        {% if instance.image_name %}
+        <span class="dash-sep">·</span>
+        <span>{{ instance.image_name }}</span>
+        {% endif %}
+      </div>
     </div>
 
-    <div class="vps-specs-row">
-      <div class="spec-group">
-          <span class="spec-label">CPU</span>
-          <span class="spec-value">{{ instance.cpu }} Core</span>
-      </div>
-      <div class="spec-group">
-          <span class="spec-label">Memory</span>
-          <span class="spec-value">{{ instance.ram }} MB</span>
-      </div>
-      <div class="spec-group">
-          <span class="spec-label">Storage</span>
-          <span class="spec-value">{{ (instance.disk // 1024)|string + ' GB' if instance.disk >= 1024 else instance.disk|string + ' MB' }}</span>
-      </div>
+    <div class="dash-row-specs" aria-hidden="true">
+      <span><strong>{{ instance.cpu }}</strong> vCPU</span>
+      <span><strong>{{ instance.ram }}</strong> MB</span>
+      <span><strong>{% if instance.disk >= 1024 %}{{ (instance.disk // 1024) }} GB{% else %}{{ instance.disk }} MB{% endif %}</strong></span>
     </div>
 
-    {% if instance.status == 'pendingpayment' %}
-    <span class="btn btn-primary btn-small" style="width: 100%; text-align: center; margin-top: 4px; pointer-events: none;">
-      Complete Payment →
-    </span>
-    {% else %}
-    <span class="vps-arrow">→</span>
-    {% endif %}
+    <div class="dash-row-cta">
+      {% if instance.status == 'pendingpayment' %}
+      <span class="btn btn-primary btn-small">Pay →</span>
+      {% else %}
+      <span class="dash-chevron" aria-hidden="true">→</span>
+      {% endif %}
+    </div>
   </a>
   {% endfor %}
-
 </div>
 
 {% if vpsData.totalPages > 1 %}
-<div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
-    {% if vpsData.hasPrev %}
-    <a href="{{ url_for('dashboard', page=vpsData.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
-    {% endif %}
-    
-    <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
-        PAGE {{ vpsData.currentPage }} / {{ vpsData.totalPages }}
-    </span>
-
-    {% if vpsData.hasNext %}
-    <a href="{{ url_for('dashboard', page=vpsData.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
-    {% endif %}
+<div class="pagination dash-pagination">
+  {% if vpsData.hasPrev %}
+  <a href="{{ url_for('dashboard', page=vpsData.currentPage - 1, q=search) }}" class="btn btn-small">← Previous</a>
+  {% endif %}
+  <span class="dash-page-label">Page {{ vpsData.currentPage }} / {{ vpsData.totalPages }}</span>
+  {% if vpsData.hasNext %}
+  <a href="{{ url_for('dashboard', page=vpsData.currentPage + 1, q=search) }}" class="btn btn-small">Next →</a>
+  {% endif %}
 </div>
 {% endif %}
 
 {% else %}
-
 <div class="empty-state">
   <div class="glyph">◈</div>
-  <h3>No VPS deployed</h3>
-  <p>You haven't provisioned any instances yet.</p>
-  <a href="{{ url_for('createvps') }}" class="btn btn-primary">
-    Deploy First VPS
-  </a>
+  <h3>{% if search %}No matches{% else %}No VPS yet{% endif %}</h3>
+  <p>{% if search %}Nothing matched “{{ search }}”.{% else %}Provision your first instance to get started.{% endif %}</p>
+  {% if search %}
+  <a href="{{ url_for('dashboard') }}" class="btn btn-small">Clear search</a>
+  {% else %}
+  <a href="{{ url_for('createvps') }}" class="btn btn-primary">Deploy First VPS</a>
+  {% endif %}
 </div>
-
 {% endif %}
-
 {% endblock %}

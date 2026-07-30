@@ -55,8 +55,7 @@
     }
 </style>
 
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Audit Log</h1>
         <p>Complete trail of every action performed across the panel.</p>
@@ -162,7 +161,6 @@
         <p>Actions will appear here as users interact with the panel.</p>
     </div>
     {% endif %}
-</div>
 
 <!-- Log Detail Modal -->
 <div id="logDetailModal" class="modal-backdrop">
@@ -171,32 +169,82 @@
             <h3>Event Details</h3>
             <button type="button" class="modal-close" onclick="closeModal('logDetailModal')">&times;</button>
         </div>
-        <div class="kv-list" id="logDetailBody"></div>
+        <div class="kv-list audit-detail-list" id="logDetailBody"></div>
         <div class="modal-actions" style="display: flex; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft);">
             <button type="button" onclick="closeModal('logDetailModal')" class="btn">Close</button>
         </div>
     </div>
 </div>
 
+<style>
+    .audit-detail-list .kv-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border-soft);
+    }
+    .audit-detail-list .kv-row:last-child { border-bottom: none; }
+    .audit-detail-list .k {
+        flex-shrink: 0;
+        color: var(--text-dim);
+        font-size: 12px;
+        font-family: var(--font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        min-width: 100px;
+    }
+    .audit-detail-list .v {
+        color: var(--text);
+        font-size: 13px;
+        text-align: right;
+        word-break: break-word;
+        max-width: 360px;
+        line-height: 1.45;
+    }
+    .audit-detail-list .v.mono {
+        font-family: var(--font-mono);
+        font-size: 12px;
+    }
+</style>
+
 <script>
-    function openModal(id) { document.getElementById(id).classList.add('is-open'); }
-    function closeModal(id) { document.getElementById(id).classList.remove('is-open'); }
+    function escapeHtml(str) {
+        if (str == null || str === '') return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
 
     function showLogDetail(log) {
         var body = document.getElementById('logDetailBody');
+        if (!body || !log) return;
+
+        var userLabel = log.username || 'system';
+        if (log.role && log.role !== 'system') userLabel += ' (' + log.role + ')';
+
         var rows = [
-            ['Time', log.created || ''],
-            ['ID', log.uuid || ''],
-            ['User', (log.username || 'system') + (log.role && log.role !== 'system' ? ' (' + log.role + ')' : '')],
-            ['Action', log.action || ''],
-            ['Target Type', log.target_type || '—'],
-            ['Target ID', log.target_id || '—'],
-            ['IP Address', log.ip || '—'],
-            ['Details', log.details || '—'],
+            ['Time', log.created || '—', false],
+            ['Event ID', log.uuid || '—', true],
+            ['User', userLabel, false],
+            ['Action', log.action || '—', true],
+            ['Target Type', log.target_type || '—', false],
+            ['Target ID', log.target_id || '—', true],
+            ['IP Address', log.ip || '—', true],
+            ['Details', log.details || '—', false],
         ];
+
         var html = '';
         rows.forEach(function(r) {
-            html += '<div class="kv-row"><span class="k">' + r[0] + '</span><span class="v" style="word-break: break-all; max-width: 340px; text-align: right;">' + r[1] + '</span></div>';
+            var valClass = r[2] ? 'v mono' : 'v';
+            html += '<div class="kv-row">'
+                + '<span class="k">' + escapeHtml(r[0]) + '</span>'
+                + '<span class="' + valClass + '">' + escapeHtml(r[1]) + '</span>'
+                + '</div>';
         });
         body.innerHTML = html;
         openModal('logDetailModal');

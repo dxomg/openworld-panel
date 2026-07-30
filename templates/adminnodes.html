@@ -40,8 +40,7 @@
     .proxmox-fields.visible { display: block; }
 </style>
 
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Node Infrastructure</h1>
         <p>Global oversight of node health and aggregate resource allocation.</p>
@@ -105,7 +104,7 @@
             <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
                 <a href="{{ url_for('adminnodeprofile', nodeUuid=node.uuid) }}" class="btn btn-primary btn-small">Manage</a>
                 
-                <form action="{{ url_for('adminnodesdelete', nodeUuid=node.uuid) }}" method="POST" onsubmit="return confirm('Delete this node? All associated VPS data in the DB may be affected.');">
+                <form action="{{ url_for('adminnodesdelete', nodeUuid=node.uuid) }}" method="POST" data-confirm="Delete node &quot;{{ node.name }}&quot;? Associated VPS data in the DB may be affected." data-confirm-title="Remove Node" data-confirm-label="Remove">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -136,7 +135,6 @@
         <p>Register a server to start provisioning instances.</p>
     </div>
     {% endif %}
-</div>
 
 <!-- ===== Add Node Modal ===== -->
 <div id="addNodeModal" class="modal-backdrop">
@@ -360,7 +358,6 @@
         </form>
     </div>
 </div>
-
 <script>
     function openModal(id) {
         document.getElementById(id).classList.add('is-open');

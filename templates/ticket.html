@@ -3,8 +3,7 @@
 {% block title %}Ticket: {{ ticket.subject }} - {{ projectname }}{% endblock %}
 
 {% block content %}
-<div class="page">
-    <div style="margin-bottom: 32px;">
+<div style="margin-bottom: 32px;">
         <a href="{{ url_for('tickets') }}" style="color: var(--text-dim); text-decoration: none; font-size: 13px;">&larr; Back to Tickets</a>
     </div>
 
@@ -33,7 +32,7 @@
                     <div style="font-weight: 600; font-size: 14px;">
                         {{ msg.username }}
                         {% if msg.is_staff or msg.role == 'admin' %}
-                        <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--accent); color: #06201D; font-weight: 700; margin-left: 6px;">STAFF</span>
+                        <span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); font-weight: 700; margin-left: 6px;">STAFF</span>
                         {% endif %}
                     </div>
                     <div style="font-size: 12px; color: var(--text-dim); margin-top: 2px;">{{ msg.created }}</div>
@@ -67,8 +66,6 @@
         <p>This ticket is closed. Contact support to reopen if needed.</p>
     </div>
     {% endif %}
-</div>
-
 <style>
     .ticket-block {
         display: flex;

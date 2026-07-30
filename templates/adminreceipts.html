@@ -9,8 +9,7 @@
         align-items: flex-start;
     }
 </style>
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Receipts</h1>
         <p>Manage billing receipts issued for completed transactions.</p>
@@ -73,7 +72,7 @@
                     onclick="openEditModal('{{ receipt|tojson|forceescape }}')">Edit</button>
 
                 <!-- Dedicated Delete Route -->
-                <form action="{{ url_for('adminreceiptsdelete', receiptUuid=receipt.uuid) }}" method="POST" onsubmit="return confirm('Delete this receipt? This cannot be undone.');">
+                <form action="{{ url_for('adminreceiptsdelete', receiptUuid=receipt.uuid) }}" method="POST" data-confirm="Delete this receipt? This cannot be undone." data-confirm-title="Remove Receipt" data-confirm-label="Remove">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -104,7 +103,6 @@
         <p>Add a receipt against a completed transaction to get started.</p>
     </div>
     {% endif %}
-</div>
 
 <!-- ===== Add Receipt Modal ===== -->
 <div id="addReceiptModal" class="modal-backdrop">
@@ -219,7 +217,6 @@
         </form>
     </div>
 </div>
-
 <script>
     function openModal(id) {
         document.getElementById(id).classList.add('is-open');

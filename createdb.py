@@ -552,7 +552,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     userid INTEGER NOT NULL,
 
     type TEXT NOT NULL
-        CHECK(type IN ('create','delete','reinstall','start','stop','restart','provision','enable_tun')),
+        CHECK(type IN ('create','delete','reinstall','start','stop','restart','provision','enable_tun','suspend')),
 
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK(status IN ('pending','running','completed','failed')),

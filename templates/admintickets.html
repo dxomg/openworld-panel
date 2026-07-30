@@ -3,19 +3,18 @@
 {% block title %}Support Tickets - Admin - {{ projectname }}{% endblock %}
 
 {% block content %}
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Support Tickets</h1>
         <p>Manage and respond to user support requests.</p>
 
         <div class="hero-stats">
             <div class="hero-stat">
-                <div class="num" style="color: #4ade80;">{{ openCount }}</div>
+                <div class="num" style="color: var(--accent);">{{ openCount }}</div>
                 <div class="label">Open</div>
             </div>
             <div class="hero-stat">
-                <div class="num" style="color: #60a5fa;">{{ repliedCount }}</div>
+                <div class="num" style="color: var(--info);">{{ repliedCount }}</div>
                 <div class="label">Replied</div>
             </div>
             <div class="hero-stat">
@@ -41,7 +40,7 @@
     <div class="vps-grid">
         {% for ticket in ticketData.tickets %}
         <div class="vps-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
                 {% if ticket.status == 'open' %}
                 <span class="status-pill status-running"><span class="dot"></span>Open</span>
                 {% elif ticket.status == 'replied' %}
@@ -65,8 +64,8 @@
             <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
                 <a href="{{ url_for('viewticket', ticket_uuid=ticket.uuid) }}" class="btn btn-primary btn-small">View & Reply</a>
                 {% if ticket.status != 'closed' %}
-                <form action="{{ url_for('admincloseticket', ticket_uuid=ticket.uuid) }}" method="POST" style="display: inline;">
-                    <button type="submit" class="btn btn-small" onclick="return confirm('Close this ticket?');">Close</button>
+                <form action="{{ url_for('admincloseticket', ticket_uuid=ticket.uuid) }}" method="POST" style="display: inline;" data-confirm="Close this ticket?" data-confirm-title="Close Ticket" data-confirm-label="Close" data-confirm-danger="0">
+                    <button type="submit" class="btn btn-small">Close</button>
                 </form>
                 {% endif %}
             </div>
@@ -95,8 +94,6 @@
         <p>Tickets matching your filter will appear here.</p>
     </div>
     {% endif %}
-</div>
-
 <style>
     @media (max-width: 768px) {
         .vps-grid {

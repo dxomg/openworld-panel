@@ -3,8 +3,7 @@
 {% block title %}Support Tickets - {{ projectname }}{% endblock %}
 
 {% block content %}
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow">
             <span class="pulse-dot"></span> Support
         </div>
@@ -31,7 +30,7 @@
     <div class="vps-grid">
         {% for ticket in ticketData.tickets %}
         <div class="vps-card">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
                 {% if ticket.status == 'open' %}
                 <span class="status-pill status-running"><span class="dot"></span>Open</span>
                 {% elif ticket.status == 'replied' %}
@@ -77,7 +76,6 @@
         <button onclick="openModal('createTicketModal')" class="btn btn-primary">Create Your First Ticket</button>
     </div>
     {% endif %}
-</div>
 
 <!-- Create Ticket Modal -->
 <div id="createTicketModal" class="modal-backdrop">
@@ -111,13 +109,4 @@
     </div>
 </div>
 
-<script>
-    function openModal(id) {
-        document.getElementById(id).classList.add('is-open');
-    }
-    
-    function closeModal(id) {
-        document.getElementById(id).classList.remove('is-open');
-    }
-</script>
 {% endblock %}

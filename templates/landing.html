@@ -27,7 +27,7 @@
     operator@openworld:~
   </div>
   <div class="terminal-body">
-<span class="prompt">$</span> create --image ubuntu-22.04 --cpu 4 --ram 8G
+<span class="prompt">$</span> create --image ubuntu-22.04 --cpu 1 --ram 512M --disk 5G
 <span class="flag">✔</span> Provisioning container payload...
 <span class="flag">✔</span> Establishing sysbox namespaces...
 <span class="flag">✔</span> Booting systemd init...
@@ -67,7 +67,7 @@ root@openworld-1:~# <span class="cursor"></span>
     <span style="font-size: 24px; color: var(--accent-dim); margin-bottom: 12px; display: block;">◩</span>
     <h3 style="font-size: 15px; font-family: var(--font-sans); color: var(--text); font-weight: 600;">Free Storage</h3>
     <p style="color: var(--text-dim); font-size: 13.5px; margin: 0;">
-      Some nodes have HDD some have SSD, but we provide 5Gb of storage for everyone.
+      Some nodes use HDD, some use SSD. Every free plan includes 5 GB of storage.
     </p>
   </div>
 
@@ -82,30 +82,27 @@ root@openworld-1:~# <span class="cursor"></span>
 
 <!-- Infrastructure Stats -->
 <div class="detail-grid">
-  <!-- Progress Bars -->
   <div class="panel">
-    <h3 style="margin-bottom: 24px;">Nodes</h3>
-    
-    <div class="metric">
-      <div class="metric-label"><span>Node1</span> <span class="metric-val">~42% utilized</span></div>
-      <div class="metric-track"><div class="metric-fill" style="width: 42%;"></div></div>
-    </div>
-    
-    <div class="metric" style="margin-top: 24px;">
-      <div class="metric-label"><span>Node2</span> <span class="metric-val">~85% utilized</span></div>
-      <!-- Uses the 'warn' class from your CSS for high usage -->
-      <div class="metric-track"><div class="metric-fill warn" style="width: 85%;"></div></div>
+    <h3 style="margin-bottom: 24px;">Platform</h3>
+    <div class="hero-stats" style="margin: 0;">
+      <div class="hero-stat">
+        <div class="num" style="color: var(--accent);">{{ globaltotalvps }}</div>
+        <div class="label">VPS Created</div>
+      </div>
+      <div class="hero-stat">
+        <div class="num" style="color: var(--accent);">{{ globaltotalnodes }}</div>
+        <div class="label">Nodes</div>
+      </div>
     </div>
   </div>
   
-  <!-- Key-Value Data -->
   <div class="panel">
     <h3 style="margin-bottom: 24px;">Free VPS Specs</h3>
     <div class="kv-list">
       <div class="kv-row"><span class="k">vCores</span> <span class="v" style="color: var(--accent);">1</span></div>
       <div class="kv-row"><span class="k">Memory</span> <span class="v" style="color: var(--accent);">512MB</span></div>
-      <div class="kv-row"><span class="k">Disk</span> <span class="v" style="color: var(--accent);">5GB</span></div>
-      <div class="kv-row"><span class="k">Network</span> <span class="v" style="color: var(--accent);">10Mibps</span></div>
+      <div class="kv-row"><span class="k">Disk</span> <span class="v" style="color: var(--accent);">5 GB</span></div>
+      <div class="kv-row"><span class="k">Network</span> <span class="v" style="color: var(--accent);">10 Mbps</span></div>
     </div>
   </div>
 </div>

@@ -2,8 +2,7 @@
 {% block title %}Checkout · {{ projectname }}{% endblock %}
 
 {% block content %}
-<div class="page">
-    <!-- Back button for user UX -->
+<!-- Back button for user UX -->
     <a href="{{ url_for('dashboard') }}" class="back-link">← Cancel and return</a>
 
     <div class="hero">
@@ -61,7 +60,7 @@
             <button onclick="openModal('paymentModal')" class="btn btn-primary" style="width: 100%; padding: 20px; font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px;">
                 Proceed to Payment →
             </button>
-            <form action="{{ url_for('cancelcheckout', vpsUuid=checkoutVps.uuid) }}" method="POST" style="margin-top: 12px;" onsubmit="return confirm('Cancel this checkout? Reserved stock will be released.');">
+            <form action="{{ url_for('cancelcheckout', vpsUuid=checkoutVps.uuid) }}" method="POST" style="margin-top: 12px;" data-confirm="Cancel this checkout? Reserved stock will be released." data-confirm-title="Cancel Checkout" data-confirm-label="Cancel Checkout">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger" style="width: 100%; padding: 14px; background: transparent;">Cancel Checkout</button>
             </form>
@@ -72,7 +71,6 @@
             Unpaid checkouts expire after 30 minutes.
         </p>
     </div>
-</div>
 
 <!-- ===== Payment Selection Modal ===== -->
 <div id="paymentModal" class="modal-backdrop">
@@ -227,20 +225,4 @@
     }
 </style>
 
-<script>
-    function openModal(id) {
-        document.getElementById(id).classList.add('is-open');
-    }
-    
-    function closeModal(id) {
-        document.getElementById(id).classList.remove('is-open');
-    }
-
-    // Modal accessibility: Close if clicking the dimmed background
-    window.onclick = function(event) {
-        if (event.target.classList.contains('modal-backdrop')) {
-            event.target.classList.remove('is-open');
-        }
-    }
-</script>
 {% endblock %}

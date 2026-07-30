@@ -9,8 +9,7 @@
         align-items: flex-start;
     }
 </style>
-<div class="page">
-    <section class="hero">
+<section class="hero">
         <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
         <h1>Payment Methods</h1>
         <p>Manage available payment processors and their status.</p>
@@ -71,7 +70,7 @@
                     onclick="openEditModal('{{ processor|tojson|forceescape }}')">Edit</button>
 
                 <!-- Dedicated Delete Route -->
-                <form action="{{ url_for('adminpaymentmethodsdelete', paymentmethodUuid=processor.uuid) }}" method="POST" onsubmit="return confirm('Delete this payment method? Existing transactions referencing it will be kept, but no new transactions can use it.');">
+                <form action="{{ url_for('adminpaymentmethodsdelete', paymentmethodUuid=processor.uuid) }}" method="POST" data-confirm="Delete payment method &quot;{{ processor.name }}&quot;? Existing transactions are kept, but no new ones can use it." data-confirm-title="Remove Payment Method" data-confirm-label="Remove">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>
             </div>
@@ -102,7 +101,6 @@
         <p>Add a payment processor to start accepting transactions.</p>
     </div>
     {% endif %}
-</div>
 
 <!-- ===== Add Processor Modal ===== -->
 <div id="addProcessorModal" class="modal-backdrop">
@@ -169,7 +167,6 @@
         </form>
     </div>
 </div>
-
 <script>
     function openModal(id) {
         document.getElementById(id).classList.add('is-open');

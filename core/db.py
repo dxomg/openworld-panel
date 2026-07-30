@@ -142,6 +142,44 @@ def ensureplanassignmenttables():
         """)
 
 
+def ensurejobssuspendtype():
+    """Add 'suspend' to jobs.type CHECK if missing (SQLite rebuild)."""
+    with getconnection() as conn:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone()
+        if not row or not row[0] or "'suspend'" in row[0]:
+            return
+        conn.executescript("""
+            CREATE TABLE jobs_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT UNIQUE NOT NULL,
+                vpsid INTEGER,
+                vpsuuid TEXT NOT NULL,
+                userid INTEGER NOT NULL,
+                type TEXT NOT NULL
+                    CHECK(type IN ('create','delete','reinstall','start','stop','restart','provision','enable_tun','suspend')),
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','running','completed','failed')),
+                payload TEXT,
+                result TEXT,
+                created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE CASCADE,
+                FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
+            );
+            INSERT INTO jobs_new (id, uuid, vpsid, vpsuuid, userid, type, status, payload, result, created, updated)
+            SELECT id, uuid, vpsid, vpsuuid, userid, type, status, payload, result, created,
+                   COALESCE(updated, created)
+            FROM jobs;
+            DROP TABLE jobs;
+            ALTER TABLE jobs_new RENAME TO jobs;
+            CREATE INDEX IF NOT EXISTS idxjobsuuid ON jobs(uuid);
+            CREATE INDEX IF NOT EXISTS idxjobsvps ON jobs(vpsuuid);
+            CREATE INDEX IF NOT EXISTS idxjobsstatus ON jobs(status);
+        """)
+
+
 def getplannodeids(planid):
     with getconnection() as conn:
         rows = conn.execute(
@@ -1050,7 +1088,7 @@ def listuserspaginated(page=1, perpage=20, search=None):
         "hasNext": page < math.ceil(totalUsers / perpage),
         "hasPrev": page > 1
     }
-def listvpspaginated(page=1, perpage=20, userid=None, search=None):
+def listvpspaginated(page=1, perpage=20, userid=None, search=None, status=None):
     offset = (page - 1) * perpage
     
     with getconnection() as conn:
@@ -1078,6 +1116,10 @@ def listvpspaginated(page=1, perpage=20, userid=None, search=None):
         if userid:
             conditions.append("v.userid = ?")
             params.append(userid)
+
+        if status:
+            conditions.append("v.status = ?")
+            params.append(status)
         
         if search:
             joins = " JOIN users u ON v.userid = u.id JOIN nodes n ON v.nodeid = n.id"
@@ -1142,6 +1184,10 @@ def getplanbyid(planid):
         row = conn.execute("SELECT * FROM plans WHERE id = ?", (planid,)).fetchone()
         return dict(row) if row else None
     
+def countnodes():
+    with getconnection() as conn:
+        return conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+
 def listallnodes():
     with getconnection() as conn:
         # Join with a count of VPS instances currently on that node
@@ -1687,14 +1733,15 @@ def getsetting(key, default=None):
 
 def setsetting(key, value, description=None):
     with getconnection() as conn:
-        if isinstance(value, (dict, list, bool)):
-            serialized = json.dumps(value)
-        else:
-            serialized = str(value)
+        # Always JSON-encode so strings stay strings (e.g. numeric Discord client IDs)
+        serialized = json.dumps(value)
         conn.execute("""
             INSERT INTO settings (key, value, description, updated)
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated = CURRENT_TIMESTAMP
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                description = COALESCE(excluded.description, settings.description),
+                updated = CURRENT_TIMESTAMP
         """, (key, serialized, description))
 
 def getallsettings():

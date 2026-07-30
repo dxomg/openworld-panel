@@ -1,23 +1,98 @@
 {% extends "base.html" %}
 
-{% block title %}Account Banned{% endblock %}
+{% block title %}Account Banned - {{ projectname }}{% endblock %}
 
 {% block content %}
-<div class="empty-state" style="max-width: 500px; margin: 100px auto; text-align: center;">
-    <div class="glyph" style="color: var(--danger); font-size: 48px;">⚠</div>
-    <h2 style="color: var(--danger);">Access Restricted</h2>
-    <p>Your account has been suspended from the Open World platform.</p>
-    
-    <div class="card" style="margin: 20px 0; background: var(--bg-card); border: 1px solid var(--danger);">
-        <p style="font-size: 14px; color: var(--text-dim); margin-bottom: 8px;">REASON FOR SUSPENSION:</p>
-        <p style="font-weight: 500;">{{ banreason }}</p>
+<style>
+    .ban-wrap {
+        max-width: 480px;
+        margin: 80px auto;
+        text-align: center;
+    }
+    .ban-icon {
+        width: 88px;
+        height: 88px;
+        margin: 0 auto 24px;
+        border-radius: 50%;
+        background: var(--danger-glow);
+        border: 1px solid var(--danger);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--danger);
+    }
+    .ban-icon i,
+    .ban-icon svg {
+        width: 40px;
+        height: 40px;
+        display: block;
+    }
+    .ban-title {
+        color: var(--danger);
+        font-size: 28px;
+        margin: 0 0 10px;
+        letter-spacing: -0.02em;
+    }
+    .ban-sub {
+        color: var(--text-dim);
+        font-size: 14px;
+        line-height: 1.55;
+        margin: 0 0 28px;
+    }
+    .ban-reason {
+        text-align: left;
+        background: var(--danger-glow);
+        border: 1px solid var(--danger);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+        margin-bottom: 28px;
+    }
+    .ban-reason-label {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--danger);
+        margin-bottom: 8px;
+    }
+    .ban-reason-text {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--text);
+        line-height: 1.5;
+        word-break: break-word;
+        margin: 0;
+    }
+    .ban-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+</style>
+
+<div class="ban-wrap">
+    <div class="ban-icon" aria-hidden="true">
+        <i data-lucide="x"></i>
+    </div>
+    <h1 class="ban-title">Account Banned</h1>
+    <p class="ban-sub">
+        Your access to {{ projectname }} has been revoked. You cannot manage instances or use panel features while this ban is active.
+    </p>
+
+    <div class="ban-reason">
+        <div class="ban-reason-label">Reason</div>
+        <p class="ban-reason-text">{{ banreason or 'No reason provided.' }}</p>
     </div>
 
-    <p style="font-size: 14px; margin-top: 20px;">
-        If you believe this is an error, please contact support in our discord
-            <a href="{{ discordserver }}" class="btn btn-active">
-      Discord
-    </a>
+    <p class="ban-sub" style="margin-bottom: 16px; font-size: 13px;">
+        Think this is a mistake? Reach out on Discord.
     </p>
+    <div class="ban-actions">
+        {% if discordserver %}
+        <a href="{{ discordserver }}" class="btn btn-primary" target="_blank" rel="noopener">Open Discord</a>
+        {% endif %}
+        <a href="{{ url_for('logout') }}" class="btn">Log out</a>
+    </div>
 </div>
 {% endblock %}
