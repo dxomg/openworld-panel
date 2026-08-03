@@ -1,0 +1,21 @@
+[Unit]
+Description=Openworld panel job worker
+After=network.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/openworld/client
+Environment=FLASK_SECRET_KEY=change-me-to-a-long-random-string
+# Optional: EnvironmentFile=-/opt/openworld/client/.env
+ExecStart=/opt/openworld/bin/python worker.py
+Restart=always
+RestartSec=5
+# Hardening (optional)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

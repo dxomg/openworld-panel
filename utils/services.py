@@ -1,15 +1,12 @@
 import uuid
 import secrets
-import requests
 import string
 import math
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from core import db
 from utils import proxmox as pveclient
-import paramiko
 
 # --- AUTH & SESSION SERVICES ---
 
@@ -28,6 +25,7 @@ def createsession(userId, ipAddress, userAgent, ttlDays):
     token = secrets.token_urlsafe(64)
     sessionUuid = str(uuid.uuid4())
     
+    # session expiry stored as ISO; compare in validatesession with aware UTC
     expires = (datetime.now(timezone.utc) + timedelta(days=ttlDays)).isoformat()
     
     db.addsession(
@@ -134,7 +132,7 @@ def listvpsforuserpanel(userId, page=1, perPage=10, search=None):
         total = totalRow["cnt"] if totalRow else 0
 
         query = f"""
-            SELECT v.*, p.name as plan_name, i.name as image_name 
+            SELECT v.*, p.name as plan_name, p.price as plan_price, i.name as image_name, i.os_type
             FROM vps v
             JOIN plans p ON v.planid = p.id
             JOIN images i ON v.imageid = i.id
@@ -143,8 +141,11 @@ def listvpsforuserpanel(userId, page=1, perPage=10, search=None):
             LIMIT ? OFFSET ?
         """
         rows = conn.execute(query, params + [perPage, offset]).fetchall()
+        vpsList = [dict(r) for r in rows]
+        for inst in vpsList:
+            _annotate_billing(inst)
         return {
-            "vps": [dict(r) for r in rows],
+            "vps": vpsList,
             "totalCount": total,
             "currentPage": page,
             "perPage": perPage,
@@ -171,176 +172,222 @@ def getvpsdetails(vpsId):
             WHERE v.id = ?
         """
         row = conn.execute(query, (vpsId,)).fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        details = dict(row)
+        _annotate_billing(details)
+        return details
+
+
+# Billing warning window before paid_until
+BILLING_WARN_DAYS = 7
+
+
+def _parse_paid_until(val):
+    from core import timeutil
+    return timeutil.parse_local(val)
+
+
+def _annotate_billing(inst, warn_days=None):
+    """
+    Attach billing_due / free_renew / labels for UI.
+    free_period_days = renew length only. warn_days = banner window (free + paid).
+    """
+    from core import timeutil
+
+    if warn_days is None:
+        try:
+            from core import appconfig
+            b = appconfig.load().get("billing") or {}
+            warn_days = max(0, int(b.get("warn_days") if b.get("warn_days") is not None else BILLING_WARN_DAYS))
+        except Exception:
+            warn_days = BILLING_WARN_DAYS
+
+    inst["billing_due"] = False
+    inst["billing_overdue"] = False
+    inst["billing_days_left"] = None
+    inst["billing_days_text"] = None
+    inst["billing_label"] = None
+    inst["is_free_plan"] = False
+    inst["can_renew_free"] = False
+    inst["timezone"] = timeutil.get_tz_name()
+    raw_until = inst.get("paid_until")
+    inst["paid_until_display"] = (
+        timeutil.format_local(raw_until, with_tz=True) if raw_until else None
+    )
+    try:
+        price = float(inst.get("plan_price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    inst["is_free_plan"] = price <= 0
+    if inst.get("status") in ("pendingpayment", "deleted", "creating"):
+        return inst
+
+    until = _parse_paid_until(inst.get("paid_until"))
+
+    if not until:
+        if price > 0:
+            inst["billing_due"] = True
+            inst["billing_days_left"] = 0
+            inst["billing_label"] = "Payment period unknown — contact support"
+        else:
+            inst["can_renew_free"] = True
+        return inst
+
+    now = timeutil.now()
+    delta = until - now
+    days_left = int(delta.total_seconds() // 86400)
+    inst["billing_days_left"] = days_left
+    if days_left < 0:
+        d = abs(days_left)
+        inst["billing_days_text"] = f"Expired {d} day{'s' if d != 1 else ''} ago"
+    elif days_left == 0:
+        inst["billing_days_text"] = "Ends today"
+    else:
+        inst["billing_days_text"] = f"Renews in {days_left} day{'s' if days_left != 1 else ''}"
+
+    if price <= 0:
+        inst["can_renew_free"] = True
+        if days_left < 0:
+            inst["billing_due"] = True
+            inst["billing_overdue"] = True
+            d = abs(days_left)
+            inst["billing_label"] = f"Free period expired {d} day{'s' if d != 1 else ''} ago — renew now"
+        elif days_left == 0:
+            inst["billing_due"] = True
+            inst["billing_label"] = "Free period ends today — renew now"
+        elif days_left <= warn_days:
+            inst["billing_due"] = True
+            inst["billing_label"] = f"Free renewal due in {days_left} day{'s' if days_left != 1 else ''}"
+        return inst
+
+    if days_left < 0:
+        inst["billing_due"] = True
+        inst["billing_overdue"] = True
+        d = abs(days_left)
+        inst["billing_label"] = f"Payment overdue by {d} day{'s' if d != 1 else ''}"
+    elif days_left == 0:
+        inst["billing_due"] = True
+        inst["billing_label"] = "Payment due today"
+    elif days_left <= warn_days:
+        inst["billing_due"] = True
+        inst["billing_label"] = f"Payment due in {days_left} day{'s' if days_left != 1 else ''}"
+    return inst
+
+
+# Panel power states that should track Proxmox live status
+_LIVE_SYNC_STATUSES = frozenset({"running", "stopped", "restarting", "error"})
+# Keep these as-is even if Proxmox says something else
+_NO_SYNC_STATUSES = frozenset({"creating", "pendingpayment", "deleted", "suspended"})
+
+_PROXMOX_TO_PANEL = {
+    "running": "running",
+    "stopped": "stopped",
+    "paused": "stopped",
+    "suspended": "stopped",
+}
+
+
+def _vps_node_and_vmid(vps):
+    """(node_dict, vmid) from a details/vps row, or (None, None)."""
+    if not vps:
+        return None, None
+    vmid = vps.get("vmid") or getvmidmapping(vps.get("uuid"))
+    if not vmid:
+        return None, None
+    with db.getconnection() as conn:
+        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps["nodeid"],)).fetchone()
+    if not node:
+        return None, None
+    return dict(node), vmid
+
+
+def getproxmoxlivestatus(vpsId, details=None):
+    """Query Proxmox for LXC power state. Returns 'running'|'stopped'|None."""
+    vps = details or getvpsdetails(vpsId)
+    if not vps:
+        return None
+    node, vmid = _vps_node_and_vmid(vps)
+    if not node or not vmid:
+        return None
+    try:
+        pve = getproxmoxclient(node)
+        node_name = node.get("proxmoxnode", "pve")
+        cur = pveclient.getlxcstatus(pve, node_name, vmid)
+        raw = (cur or {}).get("status") or ""
+        return _PROXMOX_TO_PANEL.get(raw, raw if raw in ("running", "stopped") else None)
+    except Exception:
+        return None
+
+
+def _metrics_from_lxc_status(status):
+    """Build panel metrics dict from Proxmox status.current (no RRD)."""
+    if not status or status.get("status") != "running":
+        return None
+    cpu_usage = status.get("cpu", 0) or 0
+    mem_usage = status.get("mem", 0) or 0
+    disk_usage = status.get("disk", 0) or 0
+    disk_max = status.get("maxdisk", 0) or 0
+    return {
+        "cpu": f"{cpu_usage * 100:.1f}%",
+        "ram": f"{mem_usage / (1024**2):.0f}MB",
+        "disk": f"{(disk_usage / disk_max * 100):.1f}%" if disk_max > 0 else "0%",
+        "diskUsed": f"{disk_usage / (1024**3):.1f}GB",
+        "diskTotal": f"{disk_max / (1024**3):.1f}GB",
+        "netIn": formatbytes(status.get("netin", 0)),
+        "netOut": formatbytes(status.get("netout", 0)),
+    }
+
+
+def fetchlivevps(vpsId, details=None):
+    """
+    One Proxmox round-trip: sync power status + metrics.
+    Returns (details_dict, metrics_or_none).
+    """
+    details = details or getvpsdetails(vpsId)
+    if not details:
+        return None, None
+
+    db_status = details.get("status")
+    if db_status in _NO_SYNC_STATUSES:
+        return details, None
+
+    node, vmid = _vps_node_and_vmid(details)
+    if not node or not vmid:
+        return details, None
+
+    try:
+        pve = getproxmoxclient(node)
+        node_name = node.get("proxmoxnode", "pve")
+        cur = pveclient.getlxcstatus(pve, node_name, vmid) or {}
+    except Exception:
+        return details, None
+
+    raw = (cur.get("status") or "").lower()
+    live = _PROXMOX_TO_PANEL.get(raw, raw if raw in ("running", "stopped") else None)
+    if live and live != db_status and db_status in _LIVE_SYNC_STATUSES:
+        db.updatevps(details["uuid"], status=live)
+        details["status"] = live
+    elif live and db_status in _LIVE_SYNC_STATUSES:
+        details["status"] = live
+
+    metrics = _metrics_from_lxc_status(cur)
+    return details, metrics
+
+
+def synclivestatus(vpsId, details=None):
+    """
+    Align DB status with Proxmox when safe.
+    Skips creating/pendingpayment/deleted/suspended.
+    Returns updated details dict (or original if no change / unreachable).
+    """
+    details, _ = fetchlivevps(vpsId, details=details)
+    return details
+
 
 def provisiononnode(vpsUuid):
-    """Provision a VPS on the node. Routes to Docker or Proxmox based on node type."""
-    vps = db.getvps(vpsUuid)
-    if not vps:
-        raise ValueError("VPS not found")
-
-    # Get node to check type
-    with db.getconnection() as conn:
-        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
-    if not node:
-        raise ValueError("Node not found")
-    node = dict(node)
-
-    nodeType = node.get('type', 'docker')
-    
-    if nodeType == 'proxmox':
-        return provisiononproxmox(vpsUuid)
-    else:
-        return provisionondocker(vpsUuid)
-
-def provisionondocker(vpsUuid):
-    """Provision a VPS container on Docker node."""
-    vps = db.getvps(vpsUuid)
-    if not vps:
-        raise ValueError("VPS not found")
-
-    vpsDetails = getvpsdetails(vps['id'])
-    if not vpsDetails:
-        raise ValueError("VPS details not found")
-
-    node = {
-        'address': vpsDetails.get('node_ip', ''),
-        'url': vpsDetails.get('node_url', ''),
-        'apikey': vpsDetails.get('node_apikey', ''),
-    }
-
-    # Get network info and assign IPs from pool
-    networkName = "bridge"
-    assignedIp = None
-    assignedIpv4 = None
-    assignedIpv6 = None
-    assignedIpIds = []
-    networkDns = ["1.1.1.1", "8.8.8.8", "2606:4700:4700::1111", "2001:4860:4860::8888"]
-    if vps.get('networkid'):
-        netTable = "proxmox_networks" if vps.get('network_type') == 'proxmox' else "docker_networks"
-        with db.getconnection() as conn:
-            net = conn.execute(f"SELECT * FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
-        if net:
-            net = dict(net)
-            networkName = net['name']
-            if net.get('dns'):
-                networkDns = [s.strip() for s in net['dns'].split(',') if s.strip()]
-
-        netType = vps.get('network_type', 'docker')
-
-        needsIpv6 = bool(vpsDetails.get('plan_ipv6'))
-        needsIpv4 = bool(vpsDetails.get('plan_ipv4'))
-        if needsIpv6 and not (net and net.get('ipv6')):
-            raise ValueError("Plan requires IPv6 but network does not support it")
-        if needsIpv4 and not (net and net.get('ipv4')):
-            raise ValueError("Plan requires IPv4 but network does not support it")
-
-        # Prefer IPs already held at checkout time
-        held = db.getassignedipsforvps(vps['id'])
-        if held.get('ipv6'):
-            assignedIpv6 = held['ipv6']['ip']
-            assignedIpIds.append((held['ipv6']['id'], 'ipv6'))
-        if held.get('ipv4'):
-            assignedIpv4 = held['ipv4']['ip']
-            assignedIpIds.append((held['ipv4']['id'], 'ipv4'))
-
-        if needsIpv6 and not assignedIpv6:
-            availIpv6 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv6', vpsid=vps['id'])
-            if not availIpv6:
-                raise ValueError("No IPv6 addresses available for this network")
-            assignedIpv6 = availIpv6['ip']
-            assignedIpIds.append((availIpv6['id'], 'ipv6'))
-
-        if needsIpv4 and not assignedIpv4:
-            availIpv4 = db.reserveipbyversion(vps['networkid'], network_type=netType, version='ipv4', vpsid=vps['id'])
-            if not availIpv4:
-                for ipId, ipVersion in assignedIpIds:
-                    db.unassignip(ipId, ipVersion)
-                raise ValueError("No IPv4 addresses available for this network")
-            assignedIpv4 = availIpv4['ip']
-            assignedIpIds.append((availIpv4['id'], 'ipv4'))
-
-        # Primary IP for container config (prefer IPv6)
-        assignedIp = assignedIpv6 or assignedIpv4
-
-    # Get storage pool name
-    poolName = "default"
-    if vps.get('storagepoolid'):
-        with db.getconnection() as conn:
-            pool = conn.execute("SELECT name FROM storagepools WHERE id = ?", (vps['storagepoolid'],)).fetchone()
-        if pool:
-            poolName = pool['name']
-
-    payload = {
-        "uuid": vpsUuid,
-        "hostname": vps['hostname'],
-        "cpu": vps['cpu'],
-        "ram": vps['ram'],
-        "swap": vps['swap'],
-        "diskMb": vps.get('disk', 20) or 20,
-        "network": networkName,
-        "ip": assignedIp,
-        "ipv4": assignedIpv4,
-        "ipv6": assignedIpv6,
-        "dns": networkDns,
-        "image": vpsDetails['image_path'],
-        "rootPassword": vps['password'],
-        "pool": poolName,
-        "netMbps": int(vpsDetails.get("netmbps") or 0),
-    }
-
-    result = nodeapi(node, "/vps", method="POST", data=payload, timeout=120)
-    if not result:
-        for ipId, ipVersion in assignedIpIds:
-            db.unassignip(ipId, ipVersion)
-        db.updatevps(vpsUuid, status='error')
-        raise ValueError("Node unreachable or failed to respond")
-
-    if result.get("error"):
-        for ipId, ipVersion in assignedIpIds:
-            db.unassignip(ipId, ipVersion)
-        db.updatevps(vpsUuid, status='error')
-        raise ValueError(f"Node error: {result['error']}")
-
-    if not result.get("containerId"):
-        for ipId, ipVersion in assignedIpIds:
-            db.unassignip(ipId, ipVersion)
-        db.updatevps(vpsUuid, status='error')
-        raise ValueError("Node did not return a container ID")
-
-    db.updatevps(vpsUuid, status='running', container=result["containerId"], ipv4=assignedIpv4, ipv6=assignedIpv6)
-    return result
-
-def nodeapi(node, path, method="GET", data=None, timeout=10):
-    """Call a node agent API endpoint."""
-    base = node.get('url', '').rstrip('/')
-    if not base:
-        base = node.get('address', '').rstrip('/')
-    if not base:
-        return None
-    if not base.startswith('http'):
-        base = f"http://{base}"
-    base = f"{base}/api/v1"
-    headers = {"X-API-Key": node['apikey'], "Content-Type": "application/json"}
-    try:
-        if method == "GET":
-            r = requests.get(f"{base}{path}", headers=headers, timeout=timeout)
-        elif method == "POST":
-            r = requests.post(f"{base}{path}", headers=headers, json=data, timeout=timeout)
-        elif method == "DELETE":
-            r = requests.delete(f"{base}{path}", headers=headers, timeout=timeout)
-        else:
-            return None
-        try:
-            return r.json()
-        except ValueError:
-            return {"error": f"node returned status {r.status_code}"}
-    except requests.ConnectionError:
-        return {"error": "node unreachable"}
-    except requests.Timeout:
-        return {"error": "node timeout"}
-    except requests.RequestException as e:
-        return {"error": str(e)}
+    """Provision a VPS as LXC on Proxmox."""
+    return provisiononproxmox(vpsUuid)
 
 
 def setnoderunstatus(node, reachable):
@@ -356,41 +403,33 @@ def setnoderunstatus(node, reachable):
 
 
 def probenode(node, timeout=5):
-    """Probe node; update online/offline from result. Returns (reachable, stats_or_none)."""
+    """Probe Proxmox node; update online/offline. Returns (reachable, stats_or_none)."""
     node = dict(node) if not isinstance(node, dict) else node
-    nodeType = node.get("type", "docker")
-
-    if nodeType == "docker":
-        result = nodeapi(node, "/node/stats", method="GET", timeout=timeout)
-        ok = bool(result) and not result.get("error")
-        setnoderunstatus(node, ok)
-        return ok, (result.get("stats") if ok and result else None)
-
-    if nodeType == "proxmox":
-        try:
-            pve = getproxmoxclient(node)
-            node_name = node.get("proxmoxnode", "pve")
-            status = pve.nodes(node_name).status.get()
-            if not status:
-                setnoderunstatus(node, False)
-                return False, None
-            setnoderunstatus(node, True)
-            return True, status
-        except Exception:
+    try:
+        pve = pveclient.getproxmoxclient(node, timeout=timeout)
+        node_name = node.get("proxmoxnode", "pve")
+        status = pve.nodes(node_name).status.get()
+        if not status:
             setnoderunstatus(node, False)
             return False, None
-
-    setnoderunstatus(node, False)
-    return False, None
+        setnoderunstatus(node, True)
+        return True, status
+    except Exception:
+        setnoderunstatus(node, False)
+        return False, None
 
 def performvpsaction(vpsId, action, actorUserId):
-    """Sends a command (start, stop, restart) to the Node."""
+    """Sends a command (start, stop, restart) to Proxmox; status from live API after."""
     vps = getvpsdetails(vpsId)
     if not vps:
         raise ValueError("VPS not found")
 
-    statusMap = {"start": "running", "stop": "stopped", "restart": "running"}
-    newStatus = statusMap.get(action, "error")
+    if vps.get("status") == "suspended":
+        raise ValueError("VPS is suspended")
+
+    # Reconcile before action so start works when panel was stale "running"
+    synclivestatus(vpsId)
+    vps = getvpsdetails(vpsId) or vps
 
     with db.getconnection() as conn:
         node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
@@ -399,32 +438,58 @@ def performvpsaction(vpsId, action, actorUserId):
         raise ValueError("Node not found")
     
     node = dict(node)
-    nodeType = node.get('type', 'docker')
+    vmid = getvmidmapping(vps['uuid']) or vps.get("vmid")
+    if not vmid:
+        raise ValueError("VMID not found for this VPS")
+    
+    pve = getproxmoxclient(node)
+    node_name = node.get('proxmoxnode', 'pve')
 
-    if nodeType == 'proxmox':
-        vmid = getvmidmapping(vps['uuid'])
-        if not vmid:
-            raise ValueError("VMID not found for this VPS")
-        
-        pve = getproxmoxclient(node)
-        node_name = node.get('proxmoxnode', 'pve')
-        
-        try:
-            if action == "start":
+    # Live state before command
+    try:
+        cur = pveclient.getlxcstatus(pve, node_name, vmid) or {}
+        live = (cur.get("status") or "").lower()
+    except Exception as e:
+        raise ValueError(f"Proxmox unreachable: {e}")
+
+    try:
+        if action == "start":
+            if live != "running":
                 pveclient.startlxc(pve, node_name, vmid)
-            elif action == "stop":
-                pveclient.stoplxc(pve, node_name, vmid)
-            elif action == "restart":
+        elif action == "stop":
+            if live == "running":
+                pveclient.stoplxc_wait(pve, node_name, vmid, timeout=90)
+        elif action == "restart":
+            if live == "running":
                 pveclient.restartlxc(pve, node_name, vmid)
             else:
-                raise ValueError("Invalid action")
-        except Exception as e:
-            raise ValueError(f"Proxmox action failed: {e}")
-    else:
-        if node.get('apikey'):
-            result = nodeapi(node, f"/vps/{vps['uuid']}/{action}", method="POST")
-            if result and "status" in result:
-                newStatus = result["status"]
+                pveclient.startlxc(pve, node_name, vmid)
+        else:
+            raise ValueError("Invalid action")
+    except Exception as e:
+        raise ValueError(f"Proxmox action failed: {e}")
+
+    # Prefer actual Proxmox state after command (with short wait)
+    newStatus = {"start": "running", "stop": "stopped", "restart": "running"}.get(action, "error")
+    for _ in range(8):
+        time.sleep(0.4)
+        try:
+            cur = pveclient.getlxcstatus(pve, node_name, vmid) or {}
+            live = (cur.get("status") or "").lower()
+            mapped = _PROXMOX_TO_PANEL.get(live)
+            if mapped:
+                if action == "start" and mapped == "running":
+                    newStatus = "running"
+                    break
+                if action == "stop" and mapped == "stopped":
+                    newStatus = "stopped"
+                    break
+                if action == "restart" and mapped == "running":
+                    newStatus = "running"
+                    break
+                newStatus = mapped
+        except Exception:
+            break
 
     db.updatevps(vps['uuid'], status=newStatus)
     return {"status": newStatus}
@@ -440,68 +505,10 @@ def formatbytes(value):
         value /= 1024
 
 
-def getlatestvpsmetric(vpsId):
-    """Fetch live metrics from the node."""
-    vps = getvpsdetails(vpsId)
-    if not vps:
-        return None
-
-    with db.getconnection() as conn:
-        node = conn.execute("SELECT * FROM nodes WHERE id = ?", (vps['nodeid'],)).fetchone()
-
-    if not node:
-        return None
-
-    node = dict(node)
-    nodeType = node.get('type', 'docker')
-
-    if nodeType == 'proxmox':
-        vmid = getvmidmapping(vps['uuid'])
-        if not vmid:
-            return None
-        
-        try:
-            pve = getproxmoxclient(node)
-            node_name = node.get('proxmoxnode', 'pve')
-            status = pveclient.getlxcstats(pve, node_name, vmid)
-        except Exception:
-            return None
-
-        if not status or status.get('status') != 'running':
-            return None
-
-        cpu_usage = status.get('cpu', 0)
-        mem_usage = status.get('mem', 0)
-        disk_usage = status.get('disk', 0)
-        disk_max = status.get('maxdisk', 0)
-
-        return {
-            "cpu": f"{cpu_usage * 100:.1f}%",
-            "ram": f"{mem_usage / (1024**2):.0f}MB",
-            "disk": f"{(disk_usage / disk_max * 100):.1f}%" if disk_max > 0 else "0%",
-            "diskUsed": f"{disk_usage / (1024**3):.1f}GB",
-            "diskTotal": f"{disk_max / (1024**3):.1f}GB",
-            "netIn": f"{formatbytes(status.get('netin', 0))}/s",
-            "netOut": f"{formatbytes(status.get('netout', 0))}/s",
-        }
-    else:
-        if not node.get('apikey'):
-            return None
-        
-        result = nodeapi(node, f"/vps/{vps['uuid']}/stats", method="GET")
-        if not result or not result.get("metrics"):
-            return None
-
-        m = result["metrics"]
-        return {
-            "cpu": m.get("cpu", "0%"),
-            "ram": m.get("memoryUsage", "0B"),
-            "disk": m.get("diskPercent", "0%"),
-            "diskUsed": m.get("diskUsed", "0B"),
-            "diskTotal": m.get("diskTotal", "0B"),
-            "netIn": m.get("netIn", "0B"),
-            "netOut": m.get("netOut", "0B"),
-        }
+def getlatestvpsmetric(vpsId, details=None):
+    """Fetch live metrics from Proxmox (status.current only — no RRD)."""
+    _, metrics = fetchlivevps(vpsId, details=details)
+    return metrics
 
 def listfirewallrulesforvps(vpsId):
     """Placeholder for firewall logic."""
@@ -514,9 +521,9 @@ def generaterandomhostname():
 def generaterandompassword():
     return secrets.token_urlsafe(16)
 
-def getproxmoxclient(node):
+def getproxmoxclient(node, timeout=10):
     """Create a ProxmoxAPI client from node config."""
-    return pveclient.getproxmoxclient(node)
+    return pveclient.getproxmoxclient(node, timeout=timeout)
 
 def provisiononproxmox(vpsUuid):
     """Provision a VPS as LXC container on Proxmox."""
@@ -548,10 +555,8 @@ def provisiononproxmox(vpsUuid):
     if vps.get('networkid'):
         netType = vps.get('network_type', 'proxmox')
 
-        # Get network to check ipv4/ipv6 flags
-        netTable = "proxmox_networks" if netType == 'proxmox' else "docker_networks"
         with db.getconnection() as conn:
-            net = conn.execute(f"SELECT * FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
+            net = conn.execute("SELECT * FROM proxmox_networks WHERE id = ?", (vps['networkid'],)).fetchone()
         net = dict(net) if net else {}
 
         if net.get('name'):

@@ -13,7 +13,6 @@
         letter-spacing: 0.04em;
         flex-shrink: 0;
     }
-    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
     .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
     .tier-pill {
         padding: 2px 8px;
@@ -134,7 +133,7 @@
             {% set sClass = 'status-running' if node.status == 'online' else ('status-stopped' if node.status == 'offline' else 'status-unknown') %}
             <span id="node-status-pill" class="status-pill {{ sClass }}"><span class="dot"></span><span id="node-status-text">{{ node.status|capitalize }}</span></span>
             <span style="display: inline-flex; gap: 6px; align-items: center; margin-left: 4px;">
-                <span class="type-badge type-{{ nodeType|default('docker') }}">{{ nodeType|default('docker')|upper }}</span>
+                <span class="type-badge type-{{ nodeType|default('proxmox') }}">{{ nodeType|default('proxmox')|upper }}</span>
                 <span class="tier-pill tier-{{ node.tier }}">{{ node.tier }}</span>
             </span>
         </div>
@@ -227,16 +226,6 @@
                 <input type="text" name="address" value="{{ node.address }}" required>
             </div>
 
-            {% if nodeType == 'docker' %}
-            <div class="field" style="grid-column: span 2;">
-                <label>Node URL (Agent)</label>
-                <input type="text" name="url" value="{{ node.url or '' }}" placeholder="http://1.2.3.4:1234">
-            </div>
-            <div class="field" style="grid-column: span 2;">
-                <label>API Key</label>
-                <input type="password" name="apikey" placeholder="Leave blank to keep current">
-            </div>
-            {% else %}
             <div class="field">
                 <label>Proxmox Host</label>
                 <input type="text" name="proxmoxhost" value="{{ node.proxmoxhost or '' }}" placeholder="https://proxmox.example.com">
@@ -264,7 +253,6 @@
                     <option value="1" {% if node.proxmoxssl %}selected{% endif %}>Yes</option>
                 </select>
             </div>
-            {% endif %}
 
             <div class="field">
                 <label>Billing Tier</label>
@@ -373,6 +361,7 @@
         <div class="section-head">
             <h2>IP Addresses</h2>
             <div style="display: flex; gap: 8px;">
+                <button type="button" id="bulkDeleteIpsBtn" onclick="bulkDeleteIps()" class="btn btn-danger btn-small" style="display: none;">Delete Selected</button>
                 <button onclick="openModal('addIpModal')" class="btn btn-small">+ Add IP</button>
                 <button onclick="openModal('generateIpsModal')" class="btn btn-primary btn-small">Bulk Generate</button>
             </div>
@@ -404,6 +393,7 @@
             <table class="sub-table">
                 <thead>
                     <tr>
+                        <th style="width: 36px;"><input type="checkbox" id="ipSelectAll" title="Select all free" onchange="toggleSelectAllIps(this)"></th>
                         <th>IP Address</th>
                         <th>Status</th>
                         <th>Assigned VPS</th>
@@ -890,7 +880,7 @@
         const base = "{{ url_for('adminnodenetworkcreate', nodeUuid=node.uuid) }}".replace('create', '');
         form.action = base + net.uuid + '/update';
         document.getElementById('edit_network_name').value = net.name;
-        document.getElementById('edit_network_name').readOnly = nodeType === 'docker';
+        document.getElementById('edit_network_name').readOnly = false;
         document.getElementById('edit_network_ipv6').value = String(net.ipv6 || 0);
         document.getElementById('edit_network_ipv4').value = String(net.ipv4 || 0);
         document.getElementById('edit_network_ipv6_subnet').value = net.subnet || '';
@@ -907,11 +897,50 @@
     _ipUrls[{{ net.id }}] = {
         list: "{{ url_for('adminnodeips', nodeUuid=node.uuid, netUuid=net.uuid) }}",
         deleteBase: "{{ url_for('adminnodeipdelete', nodeUuid=node.uuid, ipUuid='__UUID__') }}",
+        bulkDelete: "{{ url_for('adminnodeipsbulkdelete', nodeUuid=node.uuid) }}",
         name: "{{ net.name }}"
     };
     {% endfor %}
 
     let _currentIpPage = 1;
+
+    function updateBulkDeleteBtn() {
+        const n = document.querySelectorAll('.ip-check:checked').length;
+        const btn = document.getElementById('bulkDeleteIpsBtn');
+        if (!btn) return;
+        btn.style.display = n ? '' : 'none';
+        btn.textContent = n ? 'Delete Selected (' + n + ')' : 'Delete Selected';
+    }
+
+    function toggleSelectAllIps(el) {
+        document.querySelectorAll('.ip-check').forEach(c => { c.checked = el.checked; });
+        updateBulkDeleteBtn();
+    }
+
+    function bulkDeleteIps() {
+        const checks = document.querySelectorAll('.ip-check:checked');
+        if (!checks.length) return;
+        const sel = document.getElementById('ipNetworkSelect');
+        const urls = _ipUrls[parseInt(sel.value)];
+        if (!urls) return;
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = urls.bulkDelete;
+        form.dataset.confirm = 'Delete ' + checks.length + ' free IP(s)? Assigned IPs are skipped.';
+        form.dataset.confirmTitle = 'Bulk Delete IPs';
+        form.dataset.confirmLabel = 'Delete';
+        const csrf = (document.cookie.match(/(?:^| )csrf_token=([^;]+)/) || [])[1] || '';
+        form.innerHTML = '<input type="hidden" name="_csrf_token" value="' + csrf + '">';
+        checks.forEach(c => {
+            const inp = document.createElement('input');
+            inp.type = 'hidden';
+            inp.name = 'uuids';
+            inp.value = c.value;
+            form.appendChild(inp);
+        });
+        document.body.appendChild(form);
+        form.requestSubmit ? form.requestSubmit() : form.submit();
+    }
 
     function loadNetworkIps(page) {
         const sel = document.getElementById('ipNetworkSelect');
@@ -926,6 +955,10 @@
         document.getElementById('ipsLoading').style.display = 'block';
         document.getElementById('ipsTableWrap').style.display = 'none';
         document.getElementById('ipsEmpty').style.display = 'none';
+        const bulkBtn = document.getElementById('bulkDeleteIpsBtn');
+        if (bulkBtn) bulkBtn.style.display = 'none';
+        const selectAll = document.getElementById('ipSelectAll');
+        if (selectAll) selectAll.checked = false;
 
         fetch(urls.list + '?page=' + _currentIpPage + '&version=' + encodeURIComponent(version))
             .then(r => r.json())
@@ -955,10 +988,14 @@
                         : '<span class="ip-status ip-free">Free</span>';
                     const vps = ip.vps_hostname || '—';
                     const delUrl = urls.deleteBase.replace('__UUID__', ip.uuid);
+                    const csrf = (document.cookie.match(/(?:^| )csrf_token=([^;]+)/) || [])[1] || '';
+                    const check = ip.assigned
+                        ? '<input type="checkbox" disabled title="Assigned">'
+                        : `<input type="checkbox" class="ip-check" value="${ip.uuid}" onchange="updateBulkDeleteBtn()">`;
                     const delBtn = ip.assigned
                         ? '<span style="color: #666; font-size: 11px;">in use</span>'
-                        : `<form class="inline-form" action="${delUrl}" method="POST" data-confirm="Delete this IP?" data-confirm-title="Delete IP" data-confirm-label="Delete"><button type="submit" class="btn btn-small btn-danger">Delete</button></form>`;
-                    tr.innerHTML = `<td style="font-family: var(--font-mono); font-size: 13px;">${ip.ip}</td><td>${status}</td><td>${vps}</td><td>${delBtn}</td>`;
+                        : `<form class="inline-form" action="${delUrl}" method="POST" data-confirm="Delete this IP?" data-confirm-title="Delete IP" data-confirm-label="Delete"><input type="hidden" name="_csrf_token" value="${csrf}"><button type="submit" class="btn btn-small btn-danger">Delete</button></form>`;
+                    tr.innerHTML = `<td>${check}</td><td style="font-family: var(--font-mono); font-size: 13px;">${ip.ip}</td><td>${status}</td><td>${vps}</td><td>${delBtn}</td>`;
                     tbody.appendChild(tr);
                 });
 

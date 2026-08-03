@@ -1,14 +1,232 @@
-import sqlite3
 import math
 import uuid
 import random
 import json
+import sqlite3
+from datetime import date, datetime
+from decimal import Decimal
+
+from core import dbconfig
+
+try:
+    import pymysql
+    from pymysql.cursors import DictCursor
+except ImportError:
+    pymysql = None
+    DictCursor = None
+
+
+def _norm_value(v):
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(v, date):
+        return v.strftime("%Y-%m-%d")
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, bytes):
+        return v.decode("utf-8", errors="replace")
+    return v
+
+
+def _norm_row(row):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return {k: _norm_value(v) for k, v in row.items()}
+    # sqlite3.Row
+    return {k: _norm_value(row[k]) for k in row.keys()}
+
+
+def _scalar(row, default=0):
+    """First column value from a fetchone() row (dict or sequence)."""
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        if not row:
+            return default
+        return next(iter(row.values()))
+    try:
+        return row[0]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+class _Cursor:
+    def __init__(self, cur, engine):
+        self._cur = cur
+        self._engine = engine
+        self.lastrowid = 0
+        self.rowcount = -1
+
+    def execute(self, sql, params=None):
+        if params is None:
+            params = ()
+        if self._engine == "mysql":
+            sql = sql.replace("?", "%s")
+        self._cur.execute(sql, params)
+        self.lastrowid = getattr(self._cur, "lastrowid", 0) or 0
+        self.rowcount = getattr(self._cur, "rowcount", -1)
+        return self
+
+    def executemany(self, sql, seq):
+        if self._engine == "mysql":
+            sql = sql.replace("?", "%s")
+        self._cur.executemany(sql, seq)
+        self.rowcount = getattr(self._cur, "rowcount", -1)
+        return self
+
+    def fetchone(self):
+        return _norm_row(self._cur.fetchone())
+
+    def fetchall(self):
+        rows = self._cur.fetchall() or []
+        return [_norm_row(r) for r in rows]
+
+    def close(self):
+        self._cur.close()
+
+
+class _Conn:
+    def __init__(self, raw, engine):
+        self._raw = raw
+        self._engine = engine
+
+    @property
+    def engine(self):
+        return self._engine
+
+    def execute(self, sql, params=None):
+        cur = _Cursor(self._raw.cursor(), self._engine)
+        cur.execute(sql, params)
+        return cur
+
+    def executemany(self, sql, seq):
+        cur = _Cursor(self._raw.cursor(), self._engine)
+        cur.executemany(sql, seq)
+        return cur
+
+    def executescript(self, script):
+        if self._engine == "sqlite":
+            self._raw.executescript(script)
+            return
+        # MySQL: split on ; outside of naive multi-statement
+        for stmt in script.split(";"):
+            s = stmt.strip()
+            if s:
+                self.execute(s)
+
+    def commit(self):
+        self._raw.commit()
+
+    def rollback(self):
+        self._raw.rollback()
+
+    def close(self):
+        self._raw.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self._raw.commit()
+            else:
+                self._raw.rollback()
+        finally:
+            self._raw.close()
+        return False
+
+
+def getengine():
+    return dbconfig.engine()
+
+
+def is_mysql():
+    return dbconfig.is_mysql()
+
 
 def getconnection():
-    conn = sqlite3.connect("database.db")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+    cfg = dbconfig.load()
+    if cfg["engine"] == "mysql":
+        if pymysql is None:
+            raise RuntimeError("PyMySQL not installed. pip install PyMySQL")
+        m = cfg["mysql"]
+        raw = pymysql.connect(
+            host=m.get("host") or "127.0.0.1",
+            port=int(m.get("port") or 3306),
+            user=m.get("user") or "root",
+            password=m.get("password") or "",
+            database=m.get("database") or "openworld",
+            charset=m.get("charset") or "utf8mb4",
+            cursorclass=DictCursor,
+            autocommit=False,
+        )
+        conn = _Conn(raw, "mysql")
+        # Align MySQL session clock with app timezone (for CURRENT_TIMESTAMP defaults)
+        try:
+            from core import timeutil
+            off = timeutil.to_mysql_offset()
+            conn.execute(f"SET time_zone = '{off}'")
+        except Exception:
+            pass
+        return conn
+
+    path = dbconfig.sqlite_path()
+    raw = sqlite3.connect(path)
+    raw.execute("PRAGMA foreign_keys = ON")
+    raw.row_factory = sqlite3.Row
+    return _Conn(raw, "sqlite")
+
+
+def begin_immediate(conn):
+    if conn.engine == "mysql":
+        conn.execute("START TRANSACTION")
+    else:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def insert_ignore(conn, sql, params=None):
+    """sql should be 'INSERT INTO ...' (no OR IGNORE)."""
+    if conn.engine == "mysql":
+        sql = sql.replace("INSERT INTO", "INSERT IGNORE INTO", 1)
+    else:
+        sql = sql.replace("INSERT INTO", "INSERT OR IGNORE INTO", 1)
+    return conn.execute(sql, params)
+
+
+def expired_before_expr(minutes):
+    """
+    Return (sql_placeholder_or_literal, params) for checkout soft-expire.
+    Uses app timezone wall-clock so it matches general.timezone.
+    """
+    from datetime import timedelta
+    from core import timeutil
+
+    minutes = int(minutes)
+    cutoff = timeutil.now() - timedelta(minutes=minutes)
+    # Compare as string timestamps stored/coerced the same way
+    return "?", (cutoff.strftime("%Y-%m-%d %H:%M:%S"),)
+
+
+def table_columns(conn, table):
+    if conn.engine == "mysql":
+        rows = conn.execute(
+            "SELECT COLUMN_NAME AS name FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+            (table,),
+        ).fetchall()
+        return [r["name"] for r in rows]
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    # pragma returns cid, name, type, ... — after norm_row keys are indices? sqlite3.Row keys are names
+    # With our wrapper, PRAGMA returns rows as dicts with numeric? Actually Row keys are column names: cid, name, type, notnull, dflt_value, pk
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append(r.get("name") if "name" in r else r.get(1))
+        else:
+            out.append(r[1])
+    return out
 
 
 def _iptable(version):
@@ -81,7 +299,7 @@ def removeban(uuid):
 
 # --- PLAN FUNCTIONS ---
 
-def addplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1, netmbps=0, node_type='docker'):
+def addplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1, netmbps=0, node_type='proxmox'):
     with getconnection() as conn:
         conn.execute(
             """INSERT INTO plans (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock, netmbps, node_type) 
@@ -89,7 +307,7 @@ def addplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, 
             (uuid, name, cpu, ram, swap, disk, description, ipv4, ipv6, price, active, stock, netmbps, node_type)
         )
         
-def updateplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1, netmbps=0, node_type='docker'):
+def updateplan(uuid, name, cpu, ram, swap, disk, description=None, ipv4=0, ipv6=1, price=0.0, active=1, stock=-1, netmbps=0, node_type='proxmox'):
     with getconnection() as conn:
         conn.execute(
             """UPDATE plans 
@@ -113,42 +331,96 @@ def removeplan(uuid):
         conn.execute("DELETE FROM plans WHERE uuid = ?", (uuid,))
 
 
+def _ensure_index(conn, name, table, columns):
+    """Create index if missing. MySQL has no CREATE INDEX IF NOT EXISTS on many hosts."""
+    try:
+        if conn.engine == "mysql":
+            rows = conn.execute(
+                "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? LIMIT 1",
+                (table, name),
+            ).fetchone()
+            if rows:
+                return
+            conn.execute(f"CREATE INDEX {name} ON {table} ({columns})")
+        else:
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
+    except Exception as e:
+        msg = str(e).lower()
+        if "duplicate" in msg or "already exists" in msg:
+            return
+        raise
+
+
 def ensureplanassignmenttables():
     """Create plan_nodes / plan_storagepools if missing (live DB migrate)."""
     with getconnection() as conn:
-        conn.executescript("""
-            CREATE TABLE IF NOT EXISTS plan_nodes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                planid INTEGER NOT NULL,
-                nodeid INTEGER NOT NULL,
-                created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
-                FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE,
-                UNIQUE(planid, nodeid)
-            );
-            CREATE TABLE IF NOT EXISTS plan_storagepools (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                planid INTEGER NOT NULL,
-                storagepoolid INTEGER NOT NULL,
-                created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
-                FOREIGN KEY(storagepoolid) REFERENCES storagepools(id) ON DELETE CASCADE,
-                UNIQUE(planid, storagepoolid)
-            );
-            CREATE INDEX IF NOT EXISTS idxplannodesplan ON plan_nodes(planid);
-            CREATE INDEX IF NOT EXISTS idxplannodesnode ON plan_nodes(nodeid);
-            CREATE INDEX IF NOT EXISTS idxplanpoolsplan ON plan_storagepools(planid);
-            CREATE INDEX IF NOT EXISTS idxplanpoolspool ON plan_storagepools(storagepoolid);
-        """)
+        if conn.engine == "mysql":
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS plan_nodes (
+                    id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    planid INTEGER NOT NULL,
+                    nodeid INTEGER NOT NULL,
+                    created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(planid, nodeid),
+                    FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+                    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS plan_storagepools (
+                    id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    planid INTEGER NOT NULL,
+                    storagepoolid INTEGER NOT NULL,
+                    created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(planid, storagepoolid),
+                    FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+                    FOREIGN KEY(storagepoolid) REFERENCES storagepools(id) ON DELETE CASCADE
+                )
+            """)
+        else:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS plan_nodes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    planid INTEGER NOT NULL,
+                    nodeid INTEGER NOT NULL,
+                    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+                    FOREIGN KEY(nodeid) REFERENCES nodes(id) ON DELETE CASCADE,
+                    UNIQUE(planid, nodeid)
+                );
+                CREATE TABLE IF NOT EXISTS plan_storagepools (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    planid INTEGER NOT NULL,
+                    storagepoolid INTEGER NOT NULL,
+                    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(planid) REFERENCES plans(id) ON DELETE CASCADE,
+                    FOREIGN KEY(storagepoolid) REFERENCES storagepools(id) ON DELETE CASCADE,
+                    UNIQUE(planid, storagepoolid)
+                );
+            """)
+        _ensure_index(conn, "idxplannodesplan", "plan_nodes", "planid")
+        _ensure_index(conn, "idxplannodesnode", "plan_nodes", "nodeid")
+        _ensure_index(conn, "idxplanpoolsplan", "plan_storagepools", "planid")
+        _ensure_index(conn, "idxplanpoolspool", "plan_storagepools", "storagepoolid")
 
 
 def ensurejobssuspendtype():
-    """Add 'suspend' to jobs.type CHECK if missing (SQLite rebuild)."""
+    """Add 'suspend' to jobs.type CHECK if missing (SQLite rebuild only)."""
     with getconnection() as conn:
+        if conn.engine == "mysql":
+            # MySQL CHECK often not rewritten; jobs already include suspend on fresh create
+            return
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
         ).fetchone()
-        if not row or not row[0] or "'suspend'" in row[0]:
+        sqltext = (row or {}).get("sql") or (row or {}).get(0) if row else None
+        if isinstance(row, dict) and "sql" not in row and 0 in row:
+            sqltext = row[0]
+        if row and not sqltext:
+            # sqlite_master via wrapper: column name is sql
+            sqltext = list(row.values())[0] if row else None
+        if not row or not sqltext or "'suspend'" in str(sqltext):
             return
         conn.executescript("""
             CREATE TABLE jobs_new (
@@ -227,8 +499,9 @@ def setplannodes(planid, nodeids):
     with getconnection() as conn:
         conn.execute("DELETE FROM plan_nodes WHERE planid = ?", (planid,))
         for nid in nodeids:
-            conn.execute(
-                "INSERT OR IGNORE INTO plan_nodes (planid, nodeid) VALUES (?, ?)",
+            insert_ignore(
+                conn,
+                "INSERT INTO plan_nodes (planid, nodeid) VALUES (?, ?)",
                 (planid, nid),
             )
 
@@ -251,8 +524,9 @@ def setplanstoragepools(planid, poolids, nodeids=None):
                 poolids = [p for p in poolids if p in valid_ids]
         conn.execute("DELETE FROM plan_storagepools WHERE planid = ?", (planid,))
         for pid in poolids:
-            conn.execute(
-                "INSERT OR IGNORE INTO plan_storagepools (planid, storagepoolid) VALUES (?, ?)",
+            insert_ignore(
+                conn,
+                "INSERT INTO plan_storagepools (planid, storagepoolid) VALUES (?, ?)",
                 (planid, pid),
             )
 
@@ -271,7 +545,7 @@ def userhasfreevps(userid):
             JOIN plans p ON v.planid = p.id
             WHERE v.userid = ? AND p.price = 0 AND v.status != 'deleted'
         """, (userid,)).fetchone()
-        return row[0] > 0
+        return _scalar(row) > 0
 
 def countpendingpaymentvps(userid):
     with getconnection() as conn:
@@ -279,15 +553,16 @@ def countpendingpaymentvps(userid):
             "SELECT COUNT(*) FROM vps WHERE userid = ? AND status = 'pendingpayment'",
             (userid,)
         ).fetchone()
-        return row[0] if row else 0
+        return _scalar(row)
 
 def listexpiredpendingpaymentvps(maxageminutes=30):
     with getconnection() as conn:
-        rows = conn.execute("""
+        expr, params = expired_before_expr(maxageminutes)
+        rows = conn.execute(f"""
             SELECT * FROM vps
             WHERE status = 'pendingpayment'
-              AND COALESCE(updated, created) <= datetime('now', ?)
-        """, (f'-{int(maxageminutes)} minutes',)).fetchall()
+              AND COALESCE(updated, created) <= {expr}
+        """, params).fetchall()
         return [dict(r) for r in rows]
 
 def touchpendingpaymentvps(uuid):
@@ -300,7 +575,7 @@ def touchpendingpaymentvps(uuid):
 
 # --- IMAGE FUNCTIONS ---
 
-def addimage(uuid, name, image, description=None, active=1, node_type='docker', os_type='linux'):
+def addimage(uuid, name, image, description=None, active=1, node_type='proxmox', os_type='linux'):
     with getconnection() as conn:
         conn.execute("INSERT INTO images (uuid, name, image, os_type, description, active, node_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
                      (uuid, name, image, os_type, description, active, node_type))
@@ -393,7 +668,7 @@ def isimageassignedtonode(imageid, nodeid):
 
 # --- NODE FUNCTIONS ---
 
-def addnode(uuid, name, hostname, address, apikey, cpu, ram, status, tier, url='', nodeType='docker',
+def addnode(uuid, name, hostname, address, apikey, cpu, ram, status, tier, url='', nodeType='proxmox',
             proxmoxhost=None, proxmoxuser=None, proxmoxpassword=None, proxmoxnode='pve', proxmoxport=8006, proxmoxssl=0):
     with getconnection() as conn:
         conn.execute("""
@@ -476,11 +751,11 @@ def liststoragepoolspaginated(page=1, perpage=12, search=None, nodeType=None):
             where = ("WHERE " if not where else where + " AND ") + "(sp.name LIKE ? OR nd.name LIKE ?)"
             s = f"%{search}%"
             params.extend([s, s])
-        total = conn.execute(f"""
+        total = _scalar(conn.execute(f"""
             SELECT COUNT(*) FROM storagepools sp
             JOIN nodes nd ON sp.nodeid = nd.id
             {where}
-        """, params).fetchone()[0]
+""", params).fetchone())
         rows = conn.execute(f"""
             SELECT sp.*, nd.name as node_name
             FROM storagepools sp
@@ -517,7 +792,17 @@ def decreasestorageavailable(poolid, diskinMB):
 def increasestorageavailable(poolid, diskinMB):
     """Increase available storage when a VPS is deleted. VPS disk is in MB, pool used is in MB."""
     with getconnection() as conn:
-        conn.execute("UPDATE storagepools SET used = MAX(0, used - ?), updated = CURRENT_TIMESTAMP WHERE id = ?", (diskinMB, poolid))
+        # MySQL: MAX() is aggregate-only in expressions → use GREATEST()
+        if conn.engine == "mysql":
+            conn.execute(
+                "UPDATE storagepools SET used = GREATEST(0, used - ?), updated = CURRENT_TIMESTAMP WHERE id = ?",
+                (diskinMB, poolid),
+            )
+        else:
+            conn.execute(
+                "UPDATE storagepools SET used = MAX(0, used - ?), updated = CURRENT_TIMESTAMP WHERE id = ?",
+                (diskinMB, poolid),
+            )
 
 # --- IMAGE STORAGE FUNCTIONS ---
 
@@ -587,10 +872,10 @@ def getdefaultimagestorage(nodeid):
 
 # --- NETWORK FUNCTIONS ---
 
-def _nettable(network_type):
-    return "proxmox_networks" if network_type == "proxmox" else "docker_networks"
+def _nettable(network_type=None):
+    return "proxmox_networks"
 
-def addnetwork(uuid, nodeid, name, network_type='docker', subnet=None, gateway=None, ipv4=0, ipv6=1, ipv4_subnet=None, ipv4_gateway=None, dns='1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888'):
+def addnetwork(uuid, nodeid, name, network_type='proxmox', subnet=None, gateway=None, ipv4=0, ipv6=1, ipv4_subnet=None, ipv4_gateway=None, dns='1.1.1.1,8.8.8.8,2606:4700:4700::1111,2001:4860:4860::8888'):
     table = _nettable(network_type)
     with getconnection() as conn:
         conn.execute(f"""
@@ -598,7 +883,7 @@ def addnetwork(uuid, nodeid, name, network_type='docker', subnet=None, gateway=N
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (uuid, nodeid, name, subnet, gateway, ipv4, ipv6, ipv4_subnet, ipv4_gateway, dns))
 
-def getnetwork(uuid, network_type='docker'):
+def getnetwork(uuid, network_type='proxmox'):
     table = _nettable(network_type)
     with getconnection() as conn:
         row = conn.execute(f"""
@@ -609,7 +894,7 @@ def getnetwork(uuid, network_type='docker'):
         """, (uuid,)).fetchone()
         return dict(row) if row else None
 
-def getnetworkbyid(networkid, network_type='docker'):
+def getnetworkbyid(networkid, network_type='proxmox'):
     table = _nettable(network_type)
     with getconnection() as conn:
         row = conn.execute(f"""
@@ -620,14 +905,14 @@ def getnetworkbyid(networkid, network_type='docker'):
         """, (networkid,)).fetchone()
         return dict(row) if row else None
 
-def updatenetwork(uuid, network_type='docker', **kwargs):
+def updatenetwork(uuid, network_type='proxmox', **kwargs):
     table = _nettable(network_type)
     with getconnection() as conn:
         keys = [f"{k} = ?" for k in kwargs.keys()]
         values = list(kwargs.values()) + [uuid]
         conn.execute(f"UPDATE {table} SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
 
-def removenetwork(uuid, network_type='docker'):
+def removenetwork(uuid, network_type='proxmox'):
     table = _nettable(network_type)
     with getconnection() as conn:
         conn.execute(f"DELETE FROM {table} WHERE uuid = ?", (uuid,))
@@ -656,8 +941,8 @@ def listnetworks(nodeid=None, network_type=None):
                 r['network_type'] = network_type
         else:
             result = []
-            for t in ('docker_networks', 'proxmox_networks'):
-                ntype = 'proxmox' if 'proxmox' in t else 'docker'
+            for t in ('proxmox_networks',):
+                ntype = 'proxmox'
                 if nodeid:
                     r = conn.execute(f"""
                         SELECT n.*, nd.name as node_name
@@ -691,11 +976,11 @@ def listnetworkspaginated(page=1, perpage=12, search=None, network_type=None):
                 where = "WHERE (n.name LIKE ? OR nd.name LIKE ? OR n.subnet LIKE ?)"
                 s = f"%{search}%"
                 params = [s, s, s]
-            total = conn.execute(f"""
+            total = _scalar(conn.execute(f"""
                 SELECT COUNT(*) FROM {table} n
                 JOIN nodes nd ON n.nodeid = nd.id
                 {where}
-            """, params).fetchone()[0]
+""", params).fetchone())
             rows = conn.execute(f"""
                 SELECT n.*, nd.name as node_name
                 FROM {table} n
@@ -716,13 +1001,13 @@ def listnetworkspaginated(page=1, perpage=12, search=None, network_type=None):
                 params = [s, s, s]
             total = 0
             result = []
-            for t in ('docker_networks', 'proxmox_networks'):
-                ntype = 'proxmox' if 'proxmox' in t else 'docker'
-                cnt = conn.execute(f"""
+            for t in ('proxmox_networks',):
+                ntype = 'proxmox'
+                cnt = _scalar(conn.execute(f"""
                     SELECT COUNT(*) FROM {t} n
                     JOIN nodes nd ON n.nodeid = nd.id
                     {where}
-                """, params).fetchone()[0]
+""", params).fetchone())
                 total += cnt
                 r = conn.execute(f"""
                     SELECT n.*, nd.name as node_name
@@ -748,23 +1033,23 @@ def listnetworkspaginated(page=1, perpage=12, search=None, network_type=None):
             "hasNext": (page * perpage) < total,
         }
 
-def getnetworkbynamenodeid(name, nodeid, network_type='docker'):
+def getnetworkbynamenodeid(name, nodeid, network_type='proxmox'):
     table = _nettable(network_type)
     with getconnection() as conn:
         row = conn.execute(f"SELECT * FROM {table} WHERE name = ? AND nodeid = ?", (name, nodeid)).fetchone()
         return dict(row) if row else None
 
-def countvpsbynetwork(networkid, network_type='docker'):
+def countvpsbynetwork(networkid, network_type='proxmox'):
     with getconnection() as conn:
         row = conn.execute(
             "SELECT COUNT(*) FROM vps WHERE networkid = ? AND network_type = ? AND status != 'deleted'",
             (networkid, network_type)
         ).fetchone()
-        return row[0] if row else 0
+        return _scalar(row)
 
 # --- NETWORK IP FUNCTIONS ---
 
-def addnetworkip(uuid, networkid, ip, network_type='docker'):
+def addnetworkip(uuid, networkid, ip, network_type='proxmox'):
     table = _iptable(_ipversion(ip=ip))
     with getconnection() as conn:
         conn.execute(f"""
@@ -786,7 +1071,23 @@ def removenetworkip(uuid):
         conn.execute("DELETE FROM networkipv4 WHERE uuid = ?", (uuid,))
         conn.execute("DELETE FROM networkipv6 WHERE uuid = ?", (uuid,))
 
-def listnetworkips(networkid, network_type='docker', page=1, perpage=50, search=None, version='ipv6'):
+def removenetworkips(uuids):
+    """Delete unassigned IPs by uuid list. Returns count deleted."""
+    uuids = [u for u in (uuids or []) if u]
+    if not uuids:
+        return 0
+    deleted = 0
+    placeholders = ",".join("?" * len(uuids))
+    with getconnection() as conn:
+        for table in ("networkipv4", "networkipv6"):
+            result = conn.execute(
+                f"DELETE FROM {table} WHERE uuid IN ({placeholders}) AND assigned = 0",
+                uuids,
+            )
+            deleted += result.rowcount or 0
+    return deleted
+
+def listnetworkips(networkid, network_type='proxmox', page=1, perpage=50, search=None, version='ipv6'):
     table = _iptable(version)
     with getconnection() as conn:
         offset = (page - 1) * perpage
@@ -795,7 +1096,7 @@ def listnetworkips(networkid, network_type='docker', page=1, perpage=50, search=
         if search:
             where += " AND ni.ip LIKE ?"
             params.append(f"%{search}%")
-        total = conn.execute(f"SELECT COUNT(*) FROM {table} ni {where}", params).fetchone()[0]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM {table} ni {where}", params).fetchone())
         rows = conn.execute(f"""
             SELECT ni.*, ? as ip_version, v.hostname as vps_hostname
             FROM {table} ni
@@ -814,7 +1115,7 @@ def listnetworkips(networkid, network_type='docker', page=1, perpage=50, search=
             "hasNext": (page * perpage) < total,
         }
 
-def getavailableipbyversion(networkid, network_type='docker', version='ipv6'):
+def getavailableipbyversion(networkid, network_type='proxmox', version='ipv6'):
     """Get an available IP filtered by IPv4 or IPv6."""
     table = _iptable(version)
     with getconnection() as conn:
@@ -826,7 +1127,7 @@ def getavailableipbyversion(networkid, network_type='docker', version='ipv6'):
         """, (version, networkid, network_type)).fetchone()
         return dict(row) if row else None
 
-def planipavailabilityerror(plan, network, network_type='docker'):
+def planipavailabilityerror(plan, network, network_type='proxmox'):
     if plan.get('ipv6'):
         if not network.get('ipv6'):
             return "Plan requires IPv6 but selected network does not support it."
@@ -839,16 +1140,17 @@ def planipavailabilityerror(plan, network, network_type='docker'):
             return "No IPv4 addresses available for this network."
     return None
 
-def reserveipbyversion(networkid, network_type='docker', version='ipv6', vpsid=None):
+def reserveipbyversion(networkid, network_type='proxmox', version='ipv6', vpsid=None):
     """Atomically reserve one available IP for a VPS."""
     table = _iptable(version)
     with getconnection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+        begin_immediate(conn)
+        lock = " FOR UPDATE" if conn.engine == "mysql" else ""
         row = conn.execute(f"""
             SELECT *, ? as ip_version FROM {table}
             WHERE networkid = ? AND network_type = ? AND assigned = 0
             ORDER BY ip ASC
-            LIMIT 1
+            LIMIT 1{lock}
         """, (version, networkid, network_type)).fetchone()
         if not row:
             return None
@@ -889,7 +1191,7 @@ def getassignedipsforvps(vpsid):
             "ipv6": dict(ipv6) if ipv6 else None,
         }
 
-def reserveplanipsforvps(vps, plan, network_type='docker'):
+def reserveplanipsforvps(vps, plan, network_type='proxmox'):
     """Reserve required plan IPs for a VPS. Raises ValueError if unavailable."""
     assigned = {"ipv4": None, "ipv6": None}
     reserved = []
@@ -913,12 +1215,12 @@ def reserveplanipsforvps(vps, plan, network_type='docker'):
             unassignip(ipid, version)
         raise
 
-def countips(networkid, network_type='docker'):
+def countips(networkid, network_type='proxmox'):
     with getconnection() as conn:
-        ipv4 = conn.execute("SELECT COUNT(*) FROM networkipv4 WHERE networkid = ? AND network_type = ?", (networkid, network_type)).fetchone()[0]
-        ipv4assigned = conn.execute("SELECT COUNT(*) FROM networkipv4 WHERE networkid = ? AND network_type = ? AND assigned = 1", (networkid, network_type)).fetchone()[0]
-        ipv6 = conn.execute("SELECT COUNT(*) FROM networkipv6 WHERE networkid = ? AND network_type = ?", (networkid, network_type)).fetchone()[0]
-        ipv6assigned = conn.execute("SELECT COUNT(*) FROM networkipv6 WHERE networkid = ? AND network_type = ? AND assigned = 1", (networkid, network_type)).fetchone()[0]
+        ipv4 = _scalar(conn.execute("SELECT COUNT(*) FROM networkipv4 WHERE networkid = ? AND network_type = ?", (networkid, network_type)).fetchone())
+        ipv4assigned = _scalar(conn.execute("SELECT COUNT(*) FROM networkipv4 WHERE networkid = ? AND network_type = ? AND assigned = 1", (networkid, network_type)).fetchone())
+        ipv6 = _scalar(conn.execute("SELECT COUNT(*) FROM networkipv6 WHERE networkid = ? AND network_type = ?", (networkid, network_type)).fetchone())
+        ipv6assigned = _scalar(conn.execute("SELECT COUNT(*) FROM networkipv6 WHERE networkid = ? AND network_type = ? AND assigned = 1", (networkid, network_type)).fetchone())
         total = ipv4 + ipv6
         assigned = ipv4assigned + ipv6assigned
         return {
@@ -927,7 +1229,7 @@ def countips(networkid, network_type='docker'):
             "ipv6": {"total": ipv6, "assigned": ipv6assigned, "available": ipv6 - ipv6assigned},
         }
 
-def generateipsfornetwork(networkid, baseip, count, network_type='docker', isipv6=False):
+def generateipsfornetwork(networkid, baseip, count, network_type='proxmox', isipv6=False):
     """Generate a range of IPs for a network."""
     import ipaddress
     generated = []
@@ -956,7 +1258,7 @@ def generateipsfornetwork(networkid, baseip, count, network_type='docker', isipv
 
 # --- VPS FUNCTIONS ---
 
-def addvps(uuid, userid, planid, imageid, nodeid, storageid, hostname, password, cpu, ram, swap, disk, status='creating', networkid=None, network_type='docker', storagepoolid=None):
+def addvps(uuid, userid, planid, imageid, nodeid, storageid, hostname, password, cpu, ram, swap, disk, status='creating', networkid=None, network_type='proxmox', storagepoolid=None):
     with getconnection() as conn:
         conn.execute(
             """INSERT INTO vps (uuid, userid, planid, imageid, nodeid, storageid, networkid, network_type, storagepoolid, hostname, password, cpu, ram, swap, disk, status) 
@@ -967,8 +1269,11 @@ def addvps(uuid, userid, planid, imageid, nodeid, storageid, hostname, password,
 
 def createvpswithjob(uuid, userid, plan, imageid, nodeid, storageid, networkid, network_type, storagepoolid, hostname, password, status, jobtype=None):
     with getconnection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        stock = conn.execute("SELECT stock FROM plans WHERE id = ?", (plan['id'],)).fetchone()
+        begin_immediate(conn)
+        lock = " FOR UPDATE" if conn.engine == "mysql" else ""
+        stock = conn.execute(
+            f"SELECT stock FROM plans WHERE id = ?{lock}", (plan['id'],)
+        ).fetchone()
         if not stock:
             raise ValueError("Invalid plan selected.")
         if stock['stock'] == 0:
@@ -1000,34 +1305,115 @@ def getvps(uuid):
 def getallocatedresources():
     with getconnection() as conn:
         row = conn.execute(
-            "SELECT SUM(cpu), SUM(ram), SUM(disk) FROM vps WHERE status != 'deleted'"
-        ).fetchone()
+            "SELECT SUM(cpu) AS cpu, SUM(ram) AS ram, SUM(disk) AS disk FROM vps WHERE status != 'deleted'"
+        ).fetchone() or {}
+    cpu = row.get("cpu") or 0
+    ram = row.get("ram") or 0
+    disk = row.get("disk") or 0
     return {
-        "cpu": row[0] or 0,
-        "ram_gb": round((row[1] or 0) / 1024, 1) or 0,
-        "disk": round((row[2] or 0) / 1024, 1) or 0
+        "cpu": cpu,
+        "ram_gb": round(ram / 1024, 1) or 0,
+        "disk": round(disk / 1024, 1) or 0
     }
 
 def countusers():
     with getconnection() as conn:
-        return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-
+        return _scalar(conn.execute("SELECT COUNT(*) FROM users").fetchone())
 def countvps(userid=None):
     with getconnection() as conn:
         if userid is not None:
-            return conn.execute(
+            return _scalar(conn.execute(
                 "SELECT COUNT(*) FROM vps WHERE userid = ? AND status != 'deleted'",
                 (userid,)
-            ).fetchone()[0]
-        return conn.execute(
+            ).fetchone())
+        return _scalar(conn.execute(
             "SELECT COUNT(*) FROM vps WHERE status != 'deleted'"
-        ).fetchone()[0]
+        ).fetchone())
 
 def updatevps(uuid, **kwargs):
     with getconnection() as conn:
         keys = [f"{k} = ?" for k in kwargs.keys()]
         values = list(kwargs.values()) + [uuid]
         conn.execute(f"UPDATE vps SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
+
+
+def ensurevpspaiduntilcolumn():
+    """Add vps.paid_until if missing (live migrate)."""
+    with getconnection() as conn:
+        cols = set(table_columns(conn, "vps") or [])
+        if not cols or "paid_until" in cols:
+            return
+        try:
+            if conn.engine == "mysql":
+                conn.execute("ALTER TABLE vps ADD COLUMN paid_until DATETIME NULL")
+            else:
+                conn.execute("ALTER TABLE vps ADD COLUMN paid_until TEXT")
+        except Exception:
+            pass
+
+
+def extendvpspaiduntil(uuid, days=30, from_now=True):
+    """
+    Set/extend paid_until by `days` in app timezone (general.timezone).
+    from_now=True: max(now, current paid_until) + days (renewal-friendly).
+    """
+    ensurevpspaiduntilcolumn()
+    from datetime import datetime, timedelta
+    from core import timeutil
+
+    now = timeutil.now()
+    with getconnection() as conn:
+        row = conn.execute("SELECT paid_until FROM vps WHERE uuid = ?", (uuid,)).fetchone()
+        if not row:
+            return None
+        base = now
+        cur = row.get("paid_until") if isinstance(row, dict) else None
+        if cur:
+            existing = timeutil.parse_local(cur)
+            if existing and from_now and existing > now:
+                base = existing
+        until = base + timedelta(days=int(days))
+        until_s = until.strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            "UPDATE vps SET paid_until = ?, updated = CURRENT_TIMESTAMP WHERE uuid = ?",
+            (until_s, uuid),
+        )
+        return until_s
+
+
+def listoverduevps(include_free=True, include_paid=True):
+    """
+    Live VPS past paid_until (app timezone), not already suspended/deleted/pending.
+    """
+    ensurevpspaiduntilcolumn()
+    from core import timeutil
+
+    price_parts = []
+    if include_paid:
+        price_parts.append("p.price > 0")
+    if include_free:
+        price_parts.append("p.price <= 0")
+    if not price_parts:
+        return []
+    price_sql = "(" + " OR ".join(price_parts) + ")"
+    now_s = timeutil.now_str()
+    with getconnection() as conn:
+        rows = conn.execute(f"""
+            SELECT v.*, p.price as plan_price, p.name as plan_name
+            FROM vps v
+            JOIN plans p ON p.id = v.planid
+            WHERE {price_sql}
+              AND v.paid_until IS NOT NULL
+              AND v.paid_until < ?
+              AND v.status NOT IN ('suspended', 'deleted', 'pendingpayment', 'creating')
+        """, (now_s,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def listoverduepaidvps():
+    """Backward-compatible: paid only."""
+    return listoverduevps(include_free=False, include_paid=True)
+
 
 # --- SESSION FUNCTIONS ---
 
@@ -1062,7 +1448,7 @@ def listuserspaginated(page=1, perpage=20, search=None):
         params = [s, s, s, s]
 
     with getconnection() as conn:
-        totalUsers = conn.execute(f"SELECT COUNT(*) FROM users {where}", params).fetchone()[0]
+        totalUsers = _scalar(conn.execute(f"SELECT COUNT(*) FROM users {where}", params).fetchone())
         cursor = conn.execute(
             f"""
             SELECT id, uuid, discordid, username, email, role, status, verified, created
@@ -1129,8 +1515,7 @@ def listvpspaginated(page=1, perpage=20, userid=None, search=None, status=None):
 
         whereClause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         
-        totalVps = conn.execute(baseCount + joins + whereClause, params).fetchone()[0]
-        
+        totalVps = _scalar(conn.execute(baseCount + joins + whereClause, params).fetchone())
         finalQuery = dataQuery + whereClause + " ORDER BY v.created DESC LIMIT ? OFFSET ?"
         cursor = conn.execute(finalQuery, params + [perpage, offset])
         
@@ -1159,25 +1544,73 @@ def listallusers():
         rows = conn.execute("SELECT id, username FROM users ORDER BY username ASC").fetchall()
         return [dict(r) for r in rows]
 
+def ensurevpssuspensioncolumns():
+    """Add userid/lifted on vpssuspensions if missing (live migrate)."""
+    with getconnection() as conn:
+        cols = set(table_columns(conn, "vpssuspensions") or [])
+        if not cols:
+            return
+        if "userid" not in cols:
+            try:
+                if conn.engine == "mysql":
+                    conn.execute("ALTER TABLE vpssuspensions ADD COLUMN userid INTEGER NULL")
+                else:
+                    conn.execute("ALTER TABLE vpssuspensions ADD COLUMN userid INTEGER")
+            except Exception:
+                pass
+        if "lifted" not in cols:
+            try:
+                if conn.engine == "mysql":
+                    conn.execute("ALTER TABLE vpssuspensions ADD COLUMN lifted DATETIME NULL")
+                else:
+                    conn.execute("ALTER TABLE vpssuspensions ADD COLUMN lifted TEXT")
+            except Exception:
+                pass
+
+
 def getsuspensionbyvpsid(vpsid):
     """Used by listvpspaginated to show suspension reasons."""
+    ensurevpssuspensioncolumns()
     with getconnection() as conn:
-        row = conn.execute("SELECT * FROM vpssuspensions WHERE vpsid = ? AND lifted IS NULL", (vpsid,)).fetchone()
+        cols = set(table_columns(conn, "vpssuspensions") or [])
+        if "lifted" in cols:
+            row = conn.execute(
+                "SELECT * FROM vpssuspensions WHERE vpsid = ? AND lifted IS NULL ORDER BY id DESC LIMIT 1",
+                (vpsid,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM vpssuspensions WHERE vpsid = ? ORDER BY id DESC LIMIT 1",
+                (vpsid,),
+            ).fetchone()
         return dict(row) if row else None
 
 def addvpssuspension(uuid, vpsid, userid, adminid, reason):
+    ensurevpssuspensioncolumns()
     with getconnection() as conn:
-        conn.execute("""
-            INSERT INTO vpssuspensions (uuid, vpsid, userid, adminid, reason)
-            VALUES (?, ?, ?, ?, ?)
-        """, (uuid, vpsid, userid, adminid, reason))
+        cols = set(table_columns(conn, "vpssuspensions") or [])
+        if "userid" in cols:
+            conn.execute("""
+                INSERT INTO vpssuspensions (uuid, vpsid, userid, adminid, reason)
+                VALUES (?, ?, ?, ?, ?)
+            """, (uuid, vpsid, userid, adminid, reason))
+        else:
+            conn.execute("""
+                INSERT INTO vpssuspensions (uuid, vpsid, adminid, reason)
+                VALUES (?, ?, ?, ?)
+            """, (uuid, vpsid, adminid, reason))
 
 def liftvpssuspension(vpsid):
+    ensurevpssuspensioncolumns()
     with getconnection() as conn:
-        conn.execute("""
-            UPDATE vpssuspensions SET lifted = CURRENT_TIMESTAMP
-            WHERE vpsid = ? AND lifted IS NULL
-        """, (vpsid,))
+        cols = set(table_columns(conn, "vpssuspensions") or [])
+        if "lifted" in cols:
+            conn.execute("""
+                UPDATE vpssuspensions SET lifted = CURRENT_TIMESTAMP
+                WHERE vpsid = ? AND lifted IS NULL
+            """, (vpsid,))
+        else:
+            conn.execute("DELETE FROM vpssuspensions WHERE vpsid = ?", (vpsid,))
     
 def getplanbyid(planid):
     with getconnection() as conn:
@@ -1186,8 +1619,7 @@ def getplanbyid(planid):
     
 def countnodes():
     with getconnection() as conn:
-        return conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-
+        return _scalar(conn.execute("SELECT COUNT(*) FROM nodes").fetchone())
 def listallnodes():
     with getconnection() as conn:
         # Join with a count of VPS instances currently on that node
@@ -1352,7 +1784,7 @@ def addtransaction(uuid, userid, transactionid, amount, currency, status, paymen
         # Auto-generate receipt for completed transactions
         if status == "completed" and txnId:
             user = conn.execute("SELECT username, email FROM users WHERE id = ?", (userid,)).fetchone()
-            receiptCount = conn.execute("SELECT COUNT(*) FROM receipts").fetchone()[0]
+            receiptCount = _scalar(conn.execute("SELECT COUNT(*) FROM receipts").fetchone())
             receiptNumber = f"RCP-{(receiptCount + 1):06d}"
             conn.execute("""
                 INSERT INTO receipts (uuid, receiptnumber, transactionid, userid, amount, currency,
@@ -1402,7 +1834,7 @@ def deletereceipt(uuid):
 def generatereceiptnumber():
     with getconnection() as conn:
         row = conn.execute("SELECT COUNT(*) FROM receipts").fetchone()
-        count = (row[0] if row else 0) + 1
+        count = _scalar(row) + 1
         return f"RCP-{count:06d}"
 
 def gettransactionfull(tid):
@@ -1417,10 +1849,10 @@ def gettransactionfull(tid):
         return dict(row) if row else None
 
 
-def getsuitablenodeandstorage(planid, strategy='both', node_type='docker', imageid=None, disk_mb=0):
+def getsuitablenodeandstorage(planid, strategy='both', node_type='proxmox', imageid=None, disk_mb=0):
     """Pick node+storage from plan assignments (not free/paid tier).
 
-    Returns (node_id, storagepool_id). storagepool_id may be None for docker.
+    Returns (node_id, storagepool_id).
     """
     imageFilter = "AND EXISTS (SELECT 1 FROM node_images ni WHERE ni.nodeid = n.id AND ni.imageid = ?)" if imageid else ""
     imageParams = [imageid] if imageid else []
@@ -1497,8 +1929,7 @@ def getsuitablenodeandstorage(planid, strategy='both', node_type='docker', image
             LIMIT 1
         """, (planid, node_id, disk_mb or 0)).fetchone()
 
-        if not storage and node_type == 'proxmox':
-            # Assigned pool on node but capacity filter empty — try without capacity
+        if not storage:
             storage = conn.execute("""
                 SELECT sp.id
                 FROM storagepools sp
@@ -1532,7 +1963,7 @@ def listplanspaginated(page=1, perpage=12, search=None):
             where = "WHERE name LIKE ? OR description LIKE ?"
             s = f"%{search}%"
             params = [s, s]
-        total = conn.execute(f"SELECT COUNT(*) FROM plans {where}", params).fetchone()[0]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM plans {where}", params).fetchone())
         rows = conn.execute(f"SELECT * FROM plans {where} ORDER BY created DESC LIMIT ? OFFSET ?", params + [perpage, offset]).fetchall()
         return {
             "plans": [dict(r) for r in rows],
@@ -1556,7 +1987,7 @@ def listimagespaginated(page=1, perpage=12, search=None, node_type=None):
             where = ("WHERE " if not where else where + " AND ") + "(i.name LIKE ? OR i.image LIKE ? OR i.description LIKE ?)"
             s = f"%{search}%"
             params.extend([s, s, s])
-        total = conn.execute(f"SELECT COUNT(*) FROM images i {where}", params).fetchone()[0]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM images i {where}", params).fetchone())
         rows = conn.execute(f"""
             SELECT i.*,
             (SELECT COUNT(*) FROM vps WHERE imageid = i.id AND status != 'deleted') as vps_count,
@@ -1585,7 +2016,7 @@ def listnodespaginated(page=1, perpage=12, search=None):
             where = "WHERE n.name LIKE ? OR n.hostname LIKE ? OR n.address LIKE ? OR n.status LIKE ? OR n.tier LIKE ?"
             s = f"%{search}%"
             params = [s, s, s, s, s]
-        total = conn.execute(f"SELECT COUNT(*) FROM nodes n {where}", params).fetchone()[0]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM nodes n {where}", params).fetchone())
         rows = conn.execute(f"""
             SELECT n.*, 
             (SELECT COUNT(*) FROM vps WHERE nodeid = n.id AND status != 'deleted') as vps_count
@@ -1613,7 +2044,7 @@ def listpaymentmethodspaginated(page=1, perpage=12, search=None):
             where = "WHERE p.name LIKE ? OR p.slug LIKE ?"
             s = f"%{search}%"
             params = [s, s]
-        total = conn.execute(f"SELECT COUNT(*) FROM paymentmethods p {where}", params).fetchone()[0]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM paymentmethods p {where}", params).fetchone())
         rows = conn.execute(f"""
             SELECT p.*,
                    COUNT(t.id) AS transaction_count,
@@ -1645,11 +2076,11 @@ def listreceiptspaginated(page=1, perpage=12, search=None):
             where = "WHERE receipts.receiptnumber LIKE ? OR receipts.billingname LIKE ? OR receipts.billingemail LIKE ? OR users.username LIKE ? OR receipts.currency LIKE ?"
             s = f"%{search}%"
             params = [s, s, s, s, s]
-        total = conn.execute(f"""
+        total = _scalar(conn.execute(f"""
             SELECT COUNT(*) FROM receipts
             JOIN users ON users.id = receipts.userid
             {where}
-        """, params).fetchone()[0]
+""", params).fetchone())
         rows = conn.execute(f"""
             SELECT receipts.*, users.username, transactions.transactionid AS txn_public_id
             FROM receipts
@@ -1678,6 +2109,19 @@ def addauditlog(uuid, userid, username, role, action, target_type=None, target_i
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (uuid, userid, username, role, action, target_type, target_id, details, ip))
 
+def getlastfreerenewtime(vpsuuid):
+    """Returns the datetime of the latest free renewal audit log for a VPS, or None."""
+    with getconnection() as conn:
+        row = conn.execute("""
+            SELECT created FROM auditlog
+            WHERE action = 'vps.free_renew' AND target_id = ?
+            ORDER BY created DESC LIMIT 1
+        """, (vpsuuid,)).fetchone()
+        if row and row.get("created"):
+            from core import timeutil
+            return timeutil.parse_local(row["created"])
+        return None
+
 def listauditlogspaginated(page=1, perpage=25, search=None, action_filter=None, user_filter=None):
     with getconnection() as conn:
         offset = (page - 1) * perpage
@@ -1695,7 +2139,7 @@ def listauditlogspaginated(page=1, perpage=25, search=None, action_filter=None, 
             s = f"%{search}%"
             params.extend([s, s, s, s, s])
 
-        total = conn.execute(f"SELECT COUNT(*) FROM auditlog al {where}", params).fetchone()[0]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM auditlog al {where}", params).fetchone())
         rows = conn.execute(f"""
             SELECT al.*
             FROM auditlog al
@@ -1723,7 +2167,8 @@ def getauditlogactions():
 
 def getsetting(key, default=None):
     with getconnection() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        col = "`key`" if conn.engine == "mysql" else "key"
+        row = conn.execute(f"SELECT value FROM settings WHERE {col} = ?", (key,)).fetchone()
         if row:
             try:
                 return json.loads(row['value'])
@@ -1735,29 +2180,43 @@ def setsetting(key, value, description=None):
     with getconnection() as conn:
         # Always JSON-encode so strings stay strings (e.g. numeric Discord client IDs)
         serialized = json.dumps(value)
-        conn.execute("""
-            INSERT INTO settings (key, value, description, updated)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                description = COALESCE(excluded.description, settings.description),
-                updated = CURRENT_TIMESTAMP
-        """, (key, serialized, description))
+        if conn.engine == "mysql":
+            conn.execute("""
+                INSERT INTO settings (`key`, value, description, updated)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON DUPLICATE KEY UPDATE
+                    value = VALUES(value),
+                    description = COALESCE(VALUES(description), settings.description),
+                    updated = CURRENT_TIMESTAMP
+            """, (key, serialized, description))
+        else:
+            conn.execute("""
+                INSERT INTO settings (key, value, description, updated)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    description = COALESCE(excluded.description, settings.description),
+                    updated = CURRENT_TIMESTAMP
+            """, (key, serialized, description))
 
 def getallsettings():
     with getconnection() as conn:
-        rows = conn.execute("SELECT key, value, description FROM settings ORDER BY key").fetchall()
+        col = "`key`" if conn.engine == "mysql" else "key"
+        rows = conn.execute(
+            f"SELECT {col} AS k, value, description FROM settings ORDER BY {col}"
+        ).fetchall()
         result = {}
         for r in rows:
             try:
-                result[r['key']] = json.loads(r['value'])
+                result[r['k']] = json.loads(r['value'])
             except (json.JSONDecodeError, TypeError):
-                result[r['key']] = r['value']
+                result[r['k']] = r['value']
         return result
 
 def removesetting(key):
     with getconnection() as conn:
-        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        col = "`key`" if conn.engine == "mysql" else "key"
+        conn.execute(f"DELETE FROM settings WHERE {col} = ?", (key,))
 
 # --- JOB QUEUE FUNCTIONS ---
 
@@ -1774,30 +2233,92 @@ def getjob(uuid):
         return dict(row) if row else None
 
 def getnextpendingjob():
+    """
+    Atomically claim one pending job → running.
+    MySQL: FOR UPDATE SKIP LOCKED when available (multi-worker safe).
+    """
     with getconnection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("""
-            SELECT * FROM jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1
-        """).fetchone()
+        begin_immediate(conn)
+        row = None
+        if conn.engine == "mysql":
+            for lock in (" FOR UPDATE SKIP LOCKED", " FOR UPDATE", ""):
+                try:
+                    row = conn.execute(
+                        f"SELECT * FROM jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1{lock}"
+                    ).fetchone()
+                    break
+                except Exception:
+                    row = None
+                    continue
+        else:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+            ).fetchone()
         if not row:
             return None
-        columns = [r[1] for r in conn.execute("PRAGMA table_info(jobs)").fetchall()]
+        columns = table_columns(conn, "jobs")
         if "updated" in columns:
-            conn.execute("UPDATE jobs SET status = 'running', updated = CURRENT_TIMESTAMP WHERE id = ?", (row["id"],))
+            conn.execute(
+                "UPDATE jobs SET status = 'running', updated = CURRENT_TIMESTAMP WHERE id = ? AND status = 'pending'",
+                (row["id"],),
+            )
         else:
-            conn.execute("UPDATE jobs SET status = 'running' WHERE id = ?", (row["id"],))
-        job = dict(row)
-        job["status"] = "running"
-        return job
+            conn.execute(
+                "UPDATE jobs SET status = 'running' WHERE id = ? AND status = 'pending'",
+                (row["id"],),
+            )
+        # re-read in case lost race
+        claimed = conn.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],)).fetchone()
+        if not claimed or claimed.get("status") != "running":
+            return None
+        return dict(claimed)
 
 def updatejob(uuid, **kwargs):
     with getconnection() as conn:
         keys = [f"{k} = ?" for k in kwargs.keys()]
-        columns = [row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()]
+        columns = table_columns(conn, "jobs")
         if "updated" in columns:
             keys.append("updated = CURRENT_TIMESTAMP")
         values = list(kwargs.values()) + [uuid]
         conn.execute(f"UPDATE jobs SET {', '.join(keys)} WHERE uuid = ?", values)
+
+
+def reclaimstalejobs(stale_minutes=45):
+    """
+    Jobs left 'running' after crash/deploy → pending again.
+    Returns number reclaimed.
+    """
+    from core import timeutil
+    from datetime import timedelta
+
+    stale_minutes = max(5, int(stale_minutes or 45))
+    cutoff = (timeutil.now() - timedelta(minutes=stale_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+    with getconnection() as conn:
+        columns = table_columns(conn, "jobs")
+        if "updated" not in columns:
+            return 0
+        cur = conn.execute(
+            """
+            UPDATE jobs
+            SET status = 'pending', updated = CURRENT_TIMESTAMP,
+                result = COALESCE(result, 'reclaimed: stale running job')
+            WHERE status = 'running'
+              AND COALESCE(updated, created) < ?
+            """,
+            (cutoff,),
+        )
+        return max(0, cur.rowcount or 0)
+
+
+def countjobsbystatus():
+    with getconnection() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS c FROM jobs GROUP BY status"
+        ).fetchall()
+        out = {"pending": 0, "running": 0, "completed": 0, "failed": 0}
+        for r in rows:
+            out[r.get("status") or "?"] = int(r.get("c") or 0)
+        return out
 
 def getactivejobforvps(vpsuuid):
     """Get the most recent non-completed job for a VPS."""
@@ -1820,7 +2341,7 @@ def haspendingjobs(vpsuuid):
         row = conn.execute("""
             SELECT COUNT(*) FROM jobs WHERE vpsuuid = ? AND status IN ('pending', 'running')
         """, (vpsuuid,)).fetchone()
-        return row[0] > 0
+        return _scalar(row) > 0
 
 
 def deletevpsrecord(vpsid):
@@ -1831,6 +2352,29 @@ def deletevpsrecord(vpsid):
         conn.execute("UPDATE jobs SET vpsid = NULL WHERE vpsid = ?", (vpsid,))
         conn.execute("DELETE FROM vpssuspensions WHERE vpsid = ?", (vpsid,))
         conn.execute("DELETE FROM vps WHERE id = ?", (vpsid,))
+
+
+def listdeletedvpsneedingpurge(limit=20):
+    """
+    VPS marked deleted that still need node purge (had a CT) and no active delete job.
+    Skips checkout soft-deletes (no vmid) so late PayPal can still revive them.
+    """
+    with getconnection() as conn:
+        rows = conn.execute("""
+            SELECT v.*
+            FROM vps v
+            WHERE v.status = 'deleted'
+              AND v.vmid IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM jobs j
+                  WHERE j.vpsuuid = v.uuid
+                    AND j.type = 'delete'
+                    AND j.status IN ('pending', 'running')
+              )
+            ORDER BY v.updated ASC
+            LIMIT ?
+        """, (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
 
 
 def listimagesfornode(nodeid):
@@ -1853,13 +2397,13 @@ def countvpsfornode(nodeid):
             "SELECT COUNT(*) FROM vps WHERE nodeid = ? AND status != 'deleted'",
             (nodeid,)
         ).fetchone()
-        return row[0] if row else 0
+        return _scalar(row)
 
 def getnodediskcapacity(nodeid):
     """Sum of all storage pool sizes for a node (in GB)."""
     with getconnection() as conn:
         row = conn.execute("SELECT COALESCE(SUM(size), 0) FROM storagepools WHERE nodeid = ?", (nodeid,)).fetchone()
-        return row[0] if row else 0
+        return _scalar(row)
 # ===== TICKETING SYSTEM =====
 
 def createticket(uuid, userid, subject, priority='normal'):
@@ -1900,8 +2444,7 @@ def listtickets(userid=None, status=None, page=1, per_page=20):
         
         # Get total count
         count_query = f"SELECT COUNT(*) FROM tickets t {where_clause}"
-        total = conn.execute(count_query, params).fetchone()[0]
-        
+        total = _scalar(conn.execute(count_query, params).fetchone())
         # Get paginated tickets
         offset = (page - 1) * per_page
         params.extend([per_page, offset])
@@ -1985,7 +2528,7 @@ def counttickets(userid=None, status=None):
         
         query = f"SELECT COUNT(*) FROM tickets {where_clause}"
         row = conn.execute(query, params).fetchone()
-        return row[0] if row else 0
+        return _scalar(row)
 
 def getticketbyid(ticketid):
     """Get ticket by internal ID."""

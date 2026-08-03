@@ -12,7 +12,6 @@
         letter-spacing: 0.04em;
         flex-shrink: 0;
     }
-    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
     .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
     .type-inactive { background: rgba(148,163,184,0.12); color: #94a3b8; border: 1px solid #64748b; }
     .hint { display: block; margin-top: 4px; font-size: 11px; color: var(--text-dim); }
@@ -145,7 +144,7 @@
                     {% if not plan.active %}
                     <span class="type-badge type-inactive">Inactive</span>
                     {% endif %}
-                    <span class="type-badge type-{{ plan.node_type|default('docker') }}">{{ plan.node_type|default('docker')|upper }}</span>
+                    <span class="type-badge type-{{ plan.node_type|default('proxmox') }}">{{ plan.node_type|default('proxmox')|upper }}</span>
                 </div>
             </div>
             
@@ -170,7 +169,7 @@
                 <div style="font-size: 10px; color: var(--text-dim); margin-bottom: 5px;">NODES ({{ plan.assigned_nodes|length if plan.assigned_nodes else 0 }})</div>
                 <div class="assign-pills">
                     {% for n in plan.assigned_nodes %}
-                    <span class="assign-pill" title="{{ n.name }} — {{ n.type|default('docker') }} · {{ n.status }}">{{ n.name }}</span>
+                    <span class="assign-pill" title="{{ n.name }} — {{ n.type|default('proxmox') }} · {{ n.status }}">{{ n.name }}</span>
                     {% else %}
                     <span class="assign-pill assign-pill-empty">None</span>
                     {% endfor %}
@@ -226,13 +225,7 @@
                                 <div class="field"><label>Stock (-1 = ∞)</label><input type="number" name="stock" value="{{ plan.stock }}" min="-1"></div>
                             </div>
                             <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                                <div class="field">
-                                    <label>Node Type</label>
-                                    <select name="node_type" required>
-                                        <option value="docker" {% if plan.node_type == 'docker' %}selected{% endif %}>Docker</option>
-                                        <option value="proxmox" {% if plan.node_type == 'proxmox' %}selected{% endif %}>Proxmox</option>
-                                    </select>
-                                </div>
+                                <input type="hidden" name="node_type" value="proxmox">
                                 <div class="field">
                                     <label>Network Mbps (0 = ∞)</label>
                                     <input type="number" name="netmbps" value="{{ plan.netmbps or 0 }}" min="0">
@@ -273,9 +266,9 @@
                                 <select name="node_ids" multiple class="assign-select plan-node-select" size="8">
                                     {% for node in allNodes %}
                                     <option value="{{ node.id }}"
-                                        data-node-type="{{ node.type|default('docker') }}"
+                                        data-node-type="{{ node.type|default('proxmox') }}"
                                         {% if node.id in plan.assigned_node_ids %}selected{% endif %}>
-                                        {{ node.name }} — {{ node.type|default('docker') }} · {{ node.status }}
+                                        {{ node.name }} — {{ node.type|default('proxmox') }} · {{ node.status }}
                                     </option>
                                     {% endfor %}
                                 </select>
@@ -288,7 +281,7 @@
                                         {% for pool in node.pools %}
                                         <option value="{{ pool.id }}"
                                             data-node-id="{{ node.id }}"
-                                            data-node-type="{{ node.type|default('docker') }}"
+                                            data-node-type="{{ node.type|default('proxmox') }}"
                                             {% if pool.id in plan.assigned_pool_ids %}selected{% endif %}>
                                             {{ pool.name }} on {{ node.name }} ({{ pool.size }}GB)
                                         </option>
@@ -358,13 +351,7 @@
                             <div class="field"><label>Stock (-1 = ∞)</label><input type="number" name="stock" value="-1" min="-1"></div>
                         </div>
                         <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                            <div class="field">
-                                <label>Node Type</label>
-                                <select name="node_type" required>
-                                    <option value="docker" {% if defaultNodeType != 'proxmox' %}selected{% endif %}>Docker</option>
-                                    <option value="proxmox" {% if defaultNodeType == 'proxmox' %}selected{% endif %}>Proxmox</option>
-                                </select>
-                            </div>
+                            <input type="hidden" name="node_type" value="proxmox">
                             <div class="field">
                                 <label>Network Mbps (0 = ∞)</label>
                                 <input type="number" name="netmbps" value="0" min="0">
@@ -386,9 +373,9 @@
                             <label>Nodes (Ctrl/Cmd+click)</label>
                             <select name="node_ids" multiple class="assign-select plan-node-select" size="8">
                                 {% for node in allNodes %}
-                                <option value="{{ node.id }}" data-node-type="{{ node.type|default('docker') }}"
+                                <option value="{{ node.id }}" data-node-type="{{ node.type|default('proxmox') }}"
                                     {% if defaultNodeId and node.id == defaultNodeId %}selected{% endif %}>
-                                    {{ node.name }} — {{ node.type|default('docker') }} · {{ node.status }}
+                                    {{ node.name }} — {{ node.type|default('proxmox') }} · {{ node.status }}
                                 </option>
                                 {% endfor %}
                             </select>
@@ -401,7 +388,7 @@
                                     {% for pool in node.pools %}
                                     <option value="{{ pool.id }}"
                                         data-node-id="{{ node.id }}"
-                                        data-node-type="{{ node.type|default('docker') }}"
+                                        data-node-type="{{ node.type|default('proxmox') }}"
                                         {% if defaultPoolId and pool.id == defaultPoolId %}selected{% endif %}>
                                         {{ pool.name }} on {{ node.name }} ({{ pool.size }}GB)
                                     </option>
@@ -445,14 +432,14 @@
     function syncPlanAssign(form) {
         if (!form) return;
         const typeSelect = form.querySelector('select[name="node_type"]');
-        const nodeType = typeSelect ? typeSelect.value : 'docker';
+        const nodeType = typeSelect ? typeSelect.value : 'proxmox';
         const nodeSelect = form.querySelector('.plan-node-select');
         const poolSelect = form.querySelector('.plan-pool-select');
         if (!nodeSelect || !poolSelect) return;
 
         // Filter nodes by plan node_type
         Array.from(nodeSelect.options).forEach(opt => {
-            const match = (opt.dataset.nodeType || 'docker') === nodeType;
+            const match = (opt.dataset.nodeType || 'proxmox') === nodeType;
             opt.disabled = !match;
             opt.hidden = !match;
             if (!match) opt.selected = false;
@@ -463,7 +450,7 @@
         // Filter pools: must match type AND belong to a selected node
         // If no nodes selected yet, show all pools for matching type
         Array.from(poolSelect.options).forEach(opt => {
-            const typeOk = (opt.dataset.nodeType || 'docker') === nodeType;
+            const typeOk = (opt.dataset.nodeType || 'proxmox') === nodeType;
             const nodeOk = selectedNodeIds.size === 0
                 ? typeOk
                 : selectedNodeIds.has(String(opt.dataset.nodeId));

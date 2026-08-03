@@ -11,6 +11,34 @@
   <p>Your instances and compute resources.</p>
 </section>
 
+{% if billingDue %}
+{% set overdue_n = billingDue|selectattr('billing_overdue')|list|length %}
+<div class="billing-banner{% if overdue_n %} overdue{% endif %}" role="status">
+  <span class="billing-banner-dot"></span>
+  <div>
+    {% if overdue_n %}
+    <strong>Renewal / payment overdue</strong> on {{ overdue_n }} instance{% if overdue_n != 1 %}s{% endif %}.
+    Free VPS can be renewed with one click; paid plans need a new payment.
+    {% else %}
+    <strong>Renewal due soon</strong> for {{ billingDue|length }} instance{% if billingDue|length != 1 %}s{% endif %}.
+    Free VPS: open the instance and click <em>Renew free</em>. Paid: renew payment before the due date.
+    {% endif %}
+    <div style="margin-top: 6px; font-size: 12px; color: var(--text-dim);">
+      {% for v in billingDue[:5] %}
+      <div>
+        <a href="{{ url_for('vpspanel', vpsUuid=v.uuid) }}" style="color: var(--accent);">{{ v.hostname }}</a>
+        — {{ v.billing_label }}{% if v.paid_until_display %} (until {{ v.paid_until_display }}){% elif v.paid_until %} (until {{ v.paid_until }}){% endif %}
+        {% if v.can_renew_free %}
+        <a href="{{ url_for('vpspanel', vpsUuid=v.uuid) }}" class="btn btn-primary btn-small" style="padding: 2px 8px; font-size: 11px; margin-left: 8px; text-decoration: none;">Renew free →</a>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% if billingDue|length > 5 %}<div>…and {{ billingDue|length - 5 }} more</div>{% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="section-head dash-section-head">
   <h2>Instances ({{ vpsData.totalCount }})</h2>
   <div class="actions dash-actions">
@@ -38,13 +66,22 @@
 
   {% set href = url_for('checkout', vpsUuid=instance.uuid) if instance.status == 'pendingpayment' else url_for('vpspanel', vpsUuid=instance.uuid) %}
 
-  <a href="{{ href }}" class="dash-row{% if instance.status == 'pendingpayment' %} dash-row-pay{% elif instance.status == 'suspended' %} dash-row-suspended{% endif %}">
+  <a href="{{ href }}" class="dash-row{% if instance.status == 'pendingpayment' %} dash-row-pay{% elif instance.status == 'suspended' %} dash-row-suspended{% elif instance.billing_due %} dash-row-billing{% endif %}" data-vps-uuid="{{ instance.uuid }}">
     <div class="dash-row-main">
       <div class="dash-row-title">
         <span class="dash-hostname">{{ instance.hostname }}</span>
-        <span class="status-pill {{ statusClass }}">
-          <span class="dot"></span>{% if instance.status == 'pendingpayment' %}Payment due{% else %}{{ instance.status|capitalize }}{% endif %}
+        {% if instance.os_meta %}
+        <span class="dash-os-badge" title="{{ instance.os_meta.name }}">
+          {% if instance.os_meta.icon %}<img src="{{ instance.os_meta.icon }}" alt="" width="12" height="12">{% endif %}
+          <span>{{ instance.os_meta.name }}</span>
         </span>
+        {% endif %}
+        <span class="status-pill {{ statusClass }}" data-status-pill data-status="{{ instance.status }}">
+          <span class="dot"></span><span data-status-label>{% if instance.status == 'pendingpayment' %}Payment due{% else %}{{ instance.status|capitalize }}{% endif %}</span>
+        </span>
+        {% if instance.billing_due and instance.status != 'pendingpayment' %}
+        <span class="dash-billing-tag{% if instance.billing_overdue %} overdue{% endif %}">{{ instance.billing_label }}</span>
+        {% endif %}
       </div>
       <div class="dash-row-meta">
         {% if instance.ipv4 %}
@@ -64,6 +101,10 @@
         {% if instance.image_name %}
         <span class="dash-sep">·</span>
         <span>{{ instance.image_name }}</span>
+        {% endif %}
+        {% if instance.billing_days_text and instance.status != 'pendingpayment' %}
+        <span class="dash-sep">·</span>
+        <span class="{% if instance.billing_due %}dash-billing-tag{% if instance.billing_overdue %} overdue{% endif %}{% else %}dim{% endif %}">{{ instance.billing_days_text }}</span>
         {% endif %}
       </div>
     </div>
@@ -108,5 +149,58 @@
   <a href="{{ url_for('createvps') }}" class="btn btn-primary">Deploy First VPS</a>
   {% endif %}
 </div>
+{% endif %}
+
+{% if vpsData.vps %}
+<script>
+(function() {
+  var rows = document.querySelectorAll('.dash-row[data-vps-uuid]');
+  if (!rows.length) return;
+  var uuids = [];
+  rows.forEach(function(r) { uuids.push(r.getAttribute('data-vps-uuid')); });
+
+  function statusClass(s) {
+    if (s === 'running') return 'status-running';
+    if (s === 'creating') return 'status-creating';
+    if (s === 'pendingpayment') return 'status-pendingpayment';
+    if (s === 'suspended') return 'status-suspended';
+    return 'status-stopped';
+  }
+  function statusLabel(s) {
+    if (s === 'pendingpayment') return 'Payment due';
+    if (!s) return '--';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function apply(map) {
+    rows.forEach(function(row) {
+      var u = row.getAttribute('data-vps-uuid');
+      var s = map[u];
+      if (!s) return;
+      var pill = row.querySelector('[data-status-pill]');
+      var lab = row.querySelector('[data-status-label]');
+      if (pill) {
+        pill.className = 'status-pill ' + statusClass(s);
+        pill.setAttribute('data-status', s);
+      }
+      if (lab) lab.textContent = statusLabel(s);
+      row.classList.toggle('dash-row-pay', s === 'pendingpayment');
+      row.classList.toggle('dash-row-suspended', s === 'suspended');
+    });
+  }
+
+  function poll() {
+    fetch('/dashboard/vps-status?uuids=' + encodeURIComponent(uuids.join(',')))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data && data.statuses) apply(data.statuses);
+      })
+      .catch(function() {});
+  }
+
+  setInterval(poll, 8000);
+  setTimeout(poll, 1500);
+})();
+</script>
 {% endif %}
 {% endblock %}

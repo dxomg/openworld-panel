@@ -23,7 +23,6 @@
         letter-spacing: 0.04em;
         flex-shrink: 0;
     }
-    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
     .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
     .tier-pill {
         padding: 2px 8px;
@@ -36,8 +35,6 @@
     }
     .tier-free { background: rgba(255, 255, 255, 0.1); color: #aaa; border: 1px solid #444; }
     .tier-paid { background: rgba(255, 215, 0, 0.1); color: #ffd700; border: 1px solid #ffd700; }
-    .proxmox-fields { display: none; }
-    .proxmox-fields.visible { display: block; }
 </style>
 
 <section class="hero">
@@ -71,7 +68,7 @@
             <form method="GET" action="{{ url_for('adminnodes') }}" style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search nodes...">
             </form>
-            <button onclick="resetNodeTypePicker(); openModal('addNodeModal')" class="btn btn-primary btn-small">+ Add Node</button>
+            <button onclick="openModal('addNodeModal')" class="btn btn-primary btn-small">+ Add Node</button>
         </div>
     </div>
 
@@ -86,7 +83,7 @@
                     <span class="dot"></span><span data-node-status-text>{{ node.status|capitalize }}</span>
                 </span>
                 <div style="display: flex; gap: 6px; align-items: center; margin-left: auto;">
-                    <span class="type-badge type-{{ node.type|default('docker') }}">{{ node.type|default('docker')|upper }}</span>
+                    <span class="type-badge type-{{ node.type|default('proxmox') }}">{{ node.type|default('proxmox')|upper }}</span>
                     <span class="tier-pill tier-{{ node.tier }}">{{ node.tier }}</span>
                 </div>
             </div>
@@ -140,33 +137,12 @@
 <div id="addNodeModal" class="modal-backdrop">
     <div class="modal-panel">
         <div class="modal-head">
-            <h3 id="addNodeTitle">Select Node Type</h3>
+            <h3>Register Proxmox Node</h3>
             <button type="button" class="modal-close" onclick="closeModal('addNodeModal')">&times;</button>
         </div>
 
-        <!-- Step 1: Type Picker -->
-        <div id="add_typePicker" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px 0;">
-            <button type="button" class="type-card" onclick="pickNodeType('docker')" style="
-                background: rgba(59,130,246,0.08); border: 2px solid #333; border-radius: 12px;
-                padding: 28px 20px; cursor: pointer; text-align: center; transition: all 0.2s;
-            " onmouseover="this.style.borderColor='#3b82f6'" onmouseout="this.style.borderColor='#333'">
-                <div style="font-size: 32px; margin-bottom: 10px;">🐳</div>
-                <div style="font-weight: 600; font-size: 15px; margin-bottom: 4px;">Docker</div>
-                <div style="font-size: 12px; color: #888;">Container-based VPS via the node agent API</div>
-            </button>
-            <button type="button" class="type-card" onclick="pickNodeType('proxmox')" style="
-                background: rgba(234,88,12,0.08); border: 2px solid #333; border-radius: 12px;
-                padding: 28px 20px; cursor: pointer; text-align: center; transition: all 0.2s;
-            " onmouseover="this.style.borderColor='#ea580c'" onmouseout="this.style.borderColor='#333'">
-                <div style="font-size: 32px; margin-bottom: 10px;">🖧</div>
-                <div style="font-weight: 600; font-size: 15px; margin-bottom: 4px;">Proxmox</div>
-                <div style="font-size: 12px; color: #888;">LXC containers on a Proxmox VE host</div>
-            </button>
-        </div>
-
-        <!-- Step 2: Form (hidden until type selected) -->
-        <form id="add_nodeForm" action="{{ url_for('adminnodescreate') }}" method="POST" class="form-grid" style="display: none; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <input type="hidden" name="type" id="add_typeInput" value="">
+        <form id="add_nodeForm" action="{{ url_for('adminnodescreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <input type="hidden" name="type" value="proxmox">
 
             <div class="field" style="grid-column: span 2;">
                 <label>Display Name</label>
@@ -181,40 +157,27 @@
                 <input type="text" name="address" required placeholder="1.2.3.4">
             </div>
 
-            <!-- Docker-only fields -->
-            <div class="add_docker_fields field" style="grid-column: span 2;">
-                <label>Node URL (Agent)</label>
-                <input type="text" name="url" placeholder="http://1.2.3.4:1234">
-                <span class="hint">URL where the Docker node agent is reachable.</span>
-            </div>
-            <div class="add_docker_fields field" style="grid-column: span 2;">
-                <label>API Key</label>
-                <input type="password" name="apikey" placeholder="••••••••••••">
-                <span class="hint">Authentication key for the Docker node agent.</span>
-            </div>
-
-            <!-- Proxmox-only fields -->
-            <div class="add_proxmox_fields field">
+            <div class="field">
                 <label>Proxmox Host</label>
                 <input type="text" name="proxmoxhost" placeholder="https://proxmox.example.com">
             </div>
-            <div class="add_proxmox_fields field">
+            <div class="field">
                 <label>Proxmox Port</label>
                 <input type="number" name="proxmoxport" value="8006">
             </div>
-            <div class="add_proxmox_fields field">
+            <div class="field">
                 <label>Username</label>
                 <input type="text" name="proxmoxuser" placeholder="root@pam">
             </div>
-            <div class="add_proxmox_fields field">
+            <div class="field">
                 <label>Password</label>
                 <input type="password" name="proxmoxpassword" placeholder="••••••••">
             </div>
-            <div class="add_proxmox_fields field">
+            <div class="field">
                 <label>Node Name</label>
                 <input type="text" name="proxmoxnode" value="pve" placeholder="pve">
             </div>
-            <div class="add_proxmox_fields field">
+            <div class="field">
                 <label>Verify SSL</label>
                 <select name="proxmoxssl">
                     <option value="0">No</option>
@@ -222,7 +185,6 @@
                 </select>
             </div>
 
-            <!-- Shared fields -->
             <div class="field">
                 <label>Billing Tier</label>
                 <select name="tier">
@@ -247,12 +209,9 @@
                 <input type="number" name="ram" required value="16384">
             </div>
 
-            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: space-between; gap: 10px; margin-top: 10px;">
-                <button type="button" onclick="resetNodeTypePicker()" class="btn">&larr; Back</button>
-                <div style="display: flex; gap: 10px;">
-                    <button type="button" onclick="closeModal('addNodeModal')" class="btn">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Register Node</button>
-                </div>
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addNodeModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Register Node</button>
             </div>
         </form>
     </div>
@@ -279,14 +238,6 @@
                 <input type="text" name="address" id="edit_address" required>
             </div>
             <div class="field">
-                <label>Node URL</label>
-                <input type="text" name="url" id="edit_url" placeholder="http://1.2.3.4:1234">
-            </div>
-            <div class="field">
-                <label>API Key</label>
-                <input type="password" name="apikey" id="edit_apikey" placeholder="Leave blank to keep current">
-            </div>
-            <div class="field">
                 <label>RAM Cap (MB)</label>
                 <input type="number" name="ram" id="edit_ram" required>
             </div>
@@ -298,15 +249,9 @@
                     <option value="paid">Paid Node</option>
                 </select>
             </div>
-            <div class="field">
-                <label>Node Type</label>
-                <select name="type" id="edit_type" onchange="toggleProxmoxFields('edit')">
-                    <option value="docker">Docker</option>
-                    <option value="proxmox">Proxmox</option>
-                </select>
-            </div>
+            <input type="hidden" name="type" id="edit_type" value="proxmox">
             
-            <div class="field" style="grid-column: span 2;">
+            <div class="field">
                 <label>Status</label>
                 <select name="status" id="edit_status">
                     <option value="online">Online</option>
@@ -315,40 +260,32 @@
                 </select>
             </div>
 
-            <!-- Proxmox-specific fields -->
-            <div id="edit_proxmox_fields" class="proxmox-fields" style="grid-column: span 2;">
-                <div style="border-top: 1px solid #333; padding-top: 15px; margin-top: 10px;">
-                    <h4 style="margin-bottom: 15px; color: #60a5fa;">Proxmox Configuration</h4>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                        <div class="field">
-                            <label>Proxmox Host</label>
-                            <input type="text" name="proxmoxhost" id="edit_proxmoxhost" placeholder="https://proxmox.example.com">
-                        </div>
-                        <div class="field">
-                            <label>Proxmox Port</label>
-                            <input type="number" name="proxmoxport" id="edit_proxmoxport" value="8006">
-                        </div>
-                        <div class="field">
-                            <label>Username</label>
-                            <input type="text" name="proxmoxuser" id="edit_proxmoxuser" placeholder="root@pam">
-                        </div>
-                        <div class="field">
-                            <label>Password</label>
-                            <input type="password" name="proxmoxpassword" id="edit_proxmoxpassword" placeholder="Leave blank to keep current">
-                        </div>
-                        <div class="field">
-                            <label>Node Name</label>
-                            <input type="text" name="proxmoxnode" id="edit_proxmoxnode" value="pve" placeholder="pve">
-                        </div>
-                        <div class="field">
-                            <label>Verify SSL</label>
-                            <select name="proxmoxssl" id="edit_proxmoxssl">
-                                <option value="0">No</option>
-                                <option value="1">Yes</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
+            <div class="field">
+                <label>Proxmox Host</label>
+                <input type="text" name="proxmoxhost" id="edit_proxmoxhost" placeholder="https://proxmox.example.com">
+            </div>
+            <div class="field">
+                <label>Proxmox Port</label>
+                <input type="number" name="proxmoxport" id="edit_proxmoxport" value="8006">
+            </div>
+            <div class="field">
+                <label>Username</label>
+                <input type="text" name="proxmoxuser" id="edit_proxmoxuser" placeholder="root@pam">
+            </div>
+            <div class="field">
+                <label>Password</label>
+                <input type="password" name="proxmoxpassword" id="edit_proxmoxpassword" placeholder="Leave blank to keep current">
+            </div>
+            <div class="field">
+                <label>Node Name</label>
+                <input type="text" name="proxmoxnode" id="edit_proxmoxnode" value="pve" placeholder="pve">
+            </div>
+            <div class="field">
+                <label>Verify SSL</label>
+                <select name="proxmoxssl" id="edit_proxmoxssl">
+                    <option value="0">No</option>
+                    <option value="1">Yes</option>
+                </select>
             </div>
 
             <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
@@ -367,42 +304,6 @@
         document.getElementById(id).classList.remove('is-open');
     }
 
-    function pickNodeType(type) {
-        document.getElementById('add_typeInput').value = type;
-        document.getElementById('add_typePicker').style.display = 'none';
-        document.getElementById('add_nodeForm').style.display = 'grid';
-
-        const title = document.getElementById('addNodeTitle');
-        if (type === 'proxmox') {
-            title.textContent = 'Register Proxmox Node';
-            document.querySelectorAll('.add_proxmox_fields').forEach(el => el.style.display = '');
-            document.querySelectorAll('.add_docker_fields').forEach(el => el.style.display = 'none');
-        } else {
-            title.textContent = 'Register Docker Node';
-            document.querySelectorAll('.add_proxmox_fields').forEach(el => el.style.display = 'none');
-            document.querySelectorAll('.add_docker_fields').forEach(el => el.style.display = '');
-        }
-    }
-
-    function resetNodeTypePicker() {
-        document.getElementById('add_nodeForm').style.display = 'none';
-        document.getElementById('add_typePicker').style.display = 'grid';
-        document.getElementById('addNodeTitle').textContent = 'Select Node Type';
-        document.getElementById('add_typeInput').value = '';
-    }
-
-    function toggleProxmoxFields(prefix) {
-        const typeSelect = document.getElementById(prefix + '_type');
-        const fields = document.getElementById(prefix + '_proxmox_fields');
-        if (typeSelect && fields) {
-            if (typeSelect.value === 'proxmox') {
-                fields.classList.add('visible');
-            } else {
-                fields.classList.remove('visible');
-            }
-        }
-    }
-
     function openEditModal(nodeData) {
         const node = JSON.parse(nodeData);
         const form = document.getElementById('editNodeForm');
@@ -413,20 +314,16 @@
         document.getElementById('edit_name').value = node.name;
         document.getElementById('edit_hostname').value = node.hostname;
         document.getElementById('edit_address').value = node.address;
-        document.getElementById('edit_url').value = node.url || '';
         document.getElementById('edit_ram').value = node.ram;
         document.getElementById('edit_status').value = node.status;
         document.getElementById('edit_tier').value = node.tier;
-        document.getElementById('edit_type').value = node.type || 'docker';
+        document.getElementById('edit_type').value = 'proxmox';
         
         if (node.proxmoxhost) document.getElementById('edit_proxmoxhost').value = node.proxmoxhost;
         if (node.proxmoxport) document.getElementById('edit_proxmoxport').value = node.proxmoxport;
         if (node.proxmoxuser) document.getElementById('edit_proxmoxuser').value = node.proxmoxuser;
         if (node.proxmoxnode) document.getElementById('edit_proxmoxnode').value = node.proxmoxnode;
         document.getElementById('edit_proxmoxssl').value = node.proxmoxssl ? '1' : '0';
-        
-        toggleProxmoxFields('edit');
-        document.getElementById('edit_apikey').value = ""; 
         
         openModal('editNodeModal');
     }

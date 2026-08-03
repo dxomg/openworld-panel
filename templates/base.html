@@ -226,18 +226,27 @@
             var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
             return match ? match[2] : null;
         }
-        var token = getCookie('csrf_token');
-        if (token) {
-            document.querySelectorAll('form[method="POST"], form[method="post"]').forEach(function(form) {
-                if (!form.querySelector('input[name="_csrf_token"]')) {
-                    var input = document.createElement('input');
-                    input.type = 'hidden';
-                    input.name = '_csrf_token';
-                    input.value = token;
-                    form.appendChild(input);
-                }
-            });
+        function injectCsrf(form) {
+            if (!form || form.tagName !== 'FORM') return;
+            var method = (form.getAttribute('method') || 'get').toUpperCase();
+            if (method !== 'POST') return;
+            var token = getCookie('csrf_token');
+            if (!token) return;
+            var input = form.querySelector('input[name="_csrf_token"]');
+            if (!input) {
+                input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = '_csrf_token';
+                form.appendChild(input);
+            }
+            input.value = token;
         }
+        // Existing forms on load
+        document.querySelectorAll('form[method="POST"], form[method="post"]').forEach(injectCsrf);
+        // Dynamically added forms (IP delete, etc.)
+        document.addEventListener('submit', function(e) {
+            injectCsrf(e.target);
+        }, true);
     })();
 
     document.addEventListener('click', function(e) {

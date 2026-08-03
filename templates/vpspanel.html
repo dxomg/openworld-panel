@@ -15,29 +15,31 @@
                       else 'status-pendingpayment' if instance.status == 'pendingpayment' 
                       else 'status-suspended' if instance.status == 'suspended' 
                       else 'status-stopped' %}
-    <span class="status-pill {{ statusClass }}">
-      <span class="dot"></span>{{ 'Pending Payment' if instance.status == 'pendingpayment' else instance.status|capitalize }}
+    <span class="status-pill {{ statusClass }}" id="vpsStatusPill" data-status="{{ instance.status }}">
+      <span class="dot"></span><span id="vpsStatusLabel">{% if instance.status == 'pendingpayment' %}Pending Payment{% else %}{{ instance.status|capitalize }}{% endif %}</span>
     </span>
   </div>
 
-  <div class="btn-row">
+  <div class="btn-row" id="vpsActionRow">
     {% if instance.status == 'suspended' %}
-    <span class="hint">This VPS is suspended. Actions are disabled.</span>
+    <span class="hint" id="vpsSuspendedHint">This VPS is suspended. Actions are disabled.</span>
     {% else %}
     {% if instance.status == 'running' and (assignedIpv4 or assignedIpv6) %}
-    <button type="button" class="btn btn-console btn-small" onclick="openConsole('{{ instance.uuid }}')">&#9000; Console</button>
+    <button type="button" class="btn btn-console btn-small" id="btnConsole" onclick="openConsole('{{ instance.uuid }}')">&#9000; Console</button>
+    {% else %}
+    <button type="button" class="btn btn-console btn-small" id="btnConsole" onclick="openConsole('{{ instance.uuid }}')" style="display:none;">&#9000; Console</button>
     {% endif %}
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/start" style="display:inline;">
-      <button type="submit" class="btn btn-primary btn-small" {% if instance.status == 'running' or instance.status == 'creating' %}disabled{% endif %}>Start</button>
+      <button type="submit" class="btn btn-primary btn-small" id="btnStart" {% if instance.status == 'running' or instance.status == 'creating' %}disabled{% endif %}>Start</button>
     </form>
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/restart" style="display:inline;">
-      <button type="submit" class="btn btn-small" {% if instance.status != 'running' %}disabled{% endif %}>Restart</button>
+      <button type="submit" class="btn btn-small" id="btnRestart" {% if instance.status != 'running' %}disabled{% endif %}>Restart</button>
     </form>
 
     <form method="POST" action="/vps/{{ instance.uuid }}/action/stop" style="display:inline;">
-      <button type="submit" class="btn btn-danger btn-small" {% if instance.status != 'running' %}disabled{% endif %}>Stop</button>
+      <button type="submit" class="btn btn-danger btn-small" id="btnStop" {% if instance.status != 'running' %}disabled{% endif %}>Stop</button>
     </form>
 
     {% if instance.node_type == 'proxmox' %}
@@ -66,11 +68,64 @@
     {% if instance.plan_price and instance.plan_price > 0 %}
     <button type="button" class="btn btn-small" onclick="openModal('reinstallModal')">Reinstall</button>
     {% else %}
+    {% if instance.is_free_plan and instance.status != 'deleted' %}
+    <button type="button" class="btn btn-primary btn-small" onclick="openModal('renewFreeModal')">Renew free</button>
+    {% endif %}
     <button type="button" class="btn btn-danger btn-small" onclick="openModal('deleteVpsModal')">Delete</button>
     {% endif %}
     {% endif %}
   </div>
 </div>
+
+{% if instance.billing_due and instance.status != 'pendingpayment' %}
+<div class="billing-banner{% if instance.billing_overdue %} overdue{% endif %}" role="status">
+  <span class="billing-banner-dot"></span>
+  <div style="flex: 1;">
+    {% if instance.is_free_plan %}
+      {% if instance.billing_overdue %}
+      <strong>Free period expired.</strong> {{ instance.billing_label }}.
+      {% else %}
+      <strong>Free renewal due soon.</strong> {{ instance.billing_label }}.
+      {% if instance.paid_until %}Ends <strong>{{ instance.paid_until }}</strong>.{% endif %}
+      {% endif %}
+      Renew free of charge to keep this instance.
+    {% else %}
+      {% if instance.billing_overdue %}
+      <strong>Payment overdue.</strong> {{ instance.billing_label }}.
+      This instance may be suspended until payment is renewed.
+      {% else %}
+      <strong>Payment due soon.</strong> {{ instance.billing_label }}.
+      {% if instance.paid_until %}Period ends <strong>{{ instance.paid_until }}</strong>.{% endif %}
+      Renew to avoid automatic suspension.
+      {% endif %}
+    {% endif %}
+  </div>
+  {% if instance.can_renew_free %}
+  <button type="button" class="btn btn-primary btn-small" style="flex-shrink: 0;" onclick="openModal('renewFreeModal')">Renew free</button>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if instance.is_free_plan and instance.status != 'deleted' %}
+<div id="renewFreeModal" class="modal-backdrop">
+  <div class="modal-panel">
+    <div class="modal-head">
+      <h3>Renew Free VPS</h3>
+      <button type="button" class="modal-close" onclick="closeModal('renewFreeModal')">&times;</button>
+    </div>
+    <p style="color: var(--text-dim); font-size: 14px; line-height: 1.5; margin: 0 0 12px;">
+      Renew <strong style="color: var(--text);">{{ instance.hostname }}</strong> free of charge.
+    </p>
+    <form method="POST" action="{{ url_for('renewfreevps', vpsUuid=instance.uuid) }}">
+      {% include '_captcha.html' %}
+      <div class="modal-actions" style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-soft);">
+        <button type="button" class="btn" onclick="closeModal('renewFreeModal')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Confirm Renewal</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
 
 {% if not (instance.plan_price and instance.plan_price > 0) and instance.status != 'suspended' %}
 <div id="deleteVpsModal" class="modal-backdrop">
@@ -251,6 +306,20 @@
           <span class="v" data-copy="{{ instance.uuid }}" title="Click to copy">{{ instance.uuid }}</span>
         </div>
 
+        {% if instance.plan_price is defined %}
+        <div class="kv-row">
+          <span class="k">{% if instance.is_free_plan %}Renews until{% else %}Paid until{% endif %}</span>
+          <span class="v" style="{% if instance.billing_due %}color: var(--warn); font-weight: 600;{% endif %}">
+            {% if instance.paid_until_display %}{{ instance.paid_until_display }}{% elif instance.paid_until %}{{ instance.paid_until }}{% else %}—{% endif %}
+            {% if instance.billing_days_text %}
+            <span style="display:block; font-size: 11px; font-weight: 500; margin-top: 2px;{% if not instance.billing_due %} color: var(--text-dim);{% endif %}">{{ instance.billing_days_text }}</span>
+            {% elif instance.billing_label %}
+            <span style="display:block; font-size: 11px; font-weight: 500; margin-top: 2px;">{{ instance.billing_label }}</span>
+            {% endif %}
+          </span>
+        </div>
+        {% endif %}
+
       </div>
     </div>
 
@@ -313,25 +382,67 @@
 
 </div>
 
-{% if metrics_mode == 'dynamic' %}
 <script>
 (function() {
     var vpsUuid = {{ instance.uuid | tojson }};
-    var pollInterval = 5000;
-    var timer = null;
+    var hasIp = {{ 'true' if (assignedIpv4 or assignedIpv6) else 'false' }};
+    var lastStatus = {{ instance.status | tojson }};
+    var pollMs = 5000;
+
+    function statusClass(s) {
+        if (s === 'running') return 'status-running';
+        if (s === 'creating') return 'status-creating';
+        if (s === 'pendingpayment') return 'status-pendingpayment';
+        if (s === 'suspended') return 'status-suspended';
+        return 'status-stopped';
+    }
+
+    function statusLabel(s) {
+        if (s === 'pendingpayment') return 'Pending Payment';
+        if (!s) return '--';
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
+    function applyStatus(s) {
+        if (!s || s === lastStatus) {
+            // still update buttons if first paint mismatch
+        }
+        lastStatus = s;
+        var pill = document.getElementById('vpsStatusPill');
+        var label = document.getElementById('vpsStatusLabel');
+        if (pill) {
+            pill.className = 'status-pill ' + statusClass(s);
+            pill.setAttribute('data-status', s);
+        }
+        if (label) label.textContent = statusLabel(s);
+
+        var btnStart = document.getElementById('btnStart');
+        var btnRestart = document.getElementById('btnRestart');
+        var btnStop = document.getElementById('btnStop');
+        var btnConsole = document.getElementById('btnConsole');
+        var running = s === 'running';
+        var creating = s === 'creating';
+        var suspended = s === 'suspended';
+        if (btnStart) btnStart.disabled = running || creating || suspended;
+        if (btnRestart) btnRestart.disabled = !running || suspended;
+        if (btnStop) btnStop.disabled = !running || suspended;
+        if (btnConsole) btnConsole.style.display = (running && hasIp && !suspended) ? '' : 'none';
+    }
 
     function pct(s) {
         if (!s) return 0;
-        return parseFloat(s.replace('%','')) || 0;
+        return parseFloat(String(s).replace('%', '')) || 0;
     }
 
-    function updateMetrics() {
+    function poll() {
         fetch('/vps/' + vpsUuid + '/status')
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (data.error || !data.metrics) return;
-            var m = data.metrics;
+            if (data.error) return;
+            if (data.status) applyStatus(data.status);
 
+            var m = data.metrics;
+            if (!m) return;
             var cpuVal = document.querySelector('[data-metric="cpu"]');
             var cpuBar = document.querySelector('[data-metric="cpu-bar"]');
             if (cpuVal) cpuVal.textContent = m.cpu || '--';
@@ -358,10 +469,11 @@
         .catch(function() {});
     }
 
-    timer = setInterval(updateMetrics, pollInterval);
+    applyStatus(lastStatus);
+    poll();
+    setInterval(poll, pollMs);
 })();
 </script>
-{% endif %}
 
 <!-- Console Modal -->
 <div class="console-backdrop" id="consoleModal">

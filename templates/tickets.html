@@ -101,6 +101,7 @@
                 <label>Message</label>
                 <textarea name="message" required rows="6" placeholder="Describe your issue in detail..."></textarea>
             </div>
+            {% include '_captcha.html' %}
             <div class="modal-actions btn-row">
                 <button type="button" onclick="closeModal('createTicketModal')" class="btn">Cancel</button>
                 <button type="submit" class="btn btn-primary">Create Ticket</button>

@@ -36,12 +36,27 @@
         font-size: 10px;
         font-weight: 600;
         letter-spacing: 0.03em;
+        white-space: nowrap;
     }
-    .action-create { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid #22c55e; }
-    .action-update { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
-    .action-delete { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid #ef4444; }
-    .action-login { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid #a855f7; }
-    .action-other { background: rgba(255,255,255,0.08); color: var(--text-dim); border: 1px solid #555; }
+    /* green — create / success */
+    .action-create { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.45); }
+    /* blue — update / save / assign */
+    .action-update { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.45); }
+    /* red — delete / ban / fail / destroy */
+    .action-delete { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.45); }
+    /* purple — auth */
+    .action-login { background: rgba(168,85,247,0.15); color: #c084fc; border: 1px solid rgba(168,85,247,0.45); }
+    /* teal — power start / provision / enable */
+    .action-power-on { background: rgba(45,212,191,0.15); color: #2dd4bf; border: 1px solid rgba(45,212,191,0.45); }
+    /* amber — stop / suspend / warn */
+    .action-power-off { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.45); }
+    /* cyan — restart / reinstall / reload */
+    .action-restart { background: rgba(34,211,238,0.15); color: #22d3ee; border: 1px solid rgba(34,211,238,0.45); }
+    /* pink — payment / money */
+    .action-payment { background: rgba(244,114,182,0.15); color: #f472b6; border: 1px solid rgba(244,114,182,0.45); }
+    /* slate — settings / misc */
+    .action-settings { background: rgba(148,163,184,0.15); color: #94a3b8; border: 1px solid rgba(148,163,184,0.4); }
+    .action-other { background: rgba(255,255,255,0.06); color: var(--text-dim); border: 1px solid var(--border); }
     .audit-filters {
         display: flex;
         gap: 8px;
@@ -109,18 +124,28 @@
                         {% endif %}
                     </td>
                     <td>
-                        {% set parts = log.action.split('.') %}
-                        {% set verb = parts[-1] if parts else log.action %}
-                        {% if verb in ['create', 'generate'] %}
-                        <span class="action-badge action-create">{{ log.action }}</span>
-                        {% elif verb in ['update'] %}
-                        <span class="action-badge action-update">{{ log.action }}</span>
-                        {% elif verb in ['delete', 'ban'] %}
-                        <span class="action-badge action-delete">{{ log.action }}</span>
-                        {% elif verb in ['login', 'logout', 'login_failed'] %}
-                        <span class="action-badge action-login">{{ log.action }}</span>
+                        {% set act = log.action or '' %}
+                        {% set verb = act.split('.')[-1] if act else '' %}
+                        {% if verb in ['create', 'generate', 'assign', 'provision', 'add', 'reply'] or act.endswith('_success') %}
+                        <span class="action-badge action-create">{{ act }}</span>
+                        {% elif verb in ['update', 'save', 'edit'] %}
+                        <span class="action-badge action-update">{{ act }}</span>
+                        {% elif verb in ['delete', 'ban', 'destroy', 'remove', 'expire_unpaid', 'unassign', 'cancel_unpaid'] or 'failed' in act or verb == 'error' %}
+                        <span class="action-badge action-delete">{{ act }}</span>
+                        {% elif verb in ['login', 'logout', 'login_failed'] or act.startswith('auth.') %}
+                        <span class="action-badge action-login">{{ act }}</span>
+                        {% elif verb in ['start', 'enable', 'enable_tun', 'unsuspend', 'console', 'free_renew', 'free_period'] %}
+                        <span class="action-badge action-power-on">{{ act }}</span>
+                        {% elif verb in ['stop', 'suspend', 'suspend_unpaid', 'suspend_free_expired'] %}
+                        <span class="action-badge action-power-off">{{ act }}</span>
+                        {% elif verb in ['restart', 'reinstall', 'reload'] %}
+                        <span class="action-badge action-restart">{{ act }}</span>
+                        {% elif verb in ['paypal', 'payment', 'checkout', 'manual'] or act.startswith('payment.') %}
+                        <span class="action-badge action-payment">{{ act }}</span>
+                        {% elif verb in ['settings', 'theme', 'close'] or act.startswith('settings.') %}
+                        <span class="action-badge action-settings">{{ act }}</span>
                         {% else %}
-                        <span class="action-badge action-other">{{ log.action }}</span>
+                        <span class="action-badge action-other">{{ act }}</span>
                         {% endif %}
                     </td>
                     <td>
@@ -227,23 +252,43 @@
         var userLabel = log.username || 'system';
         if (log.role && log.role !== 'system') userLabel += ' (' + log.role + ')';
 
+        function actionBadgeClass(action) {
+            var act = action || '';
+            var parts = act.split('.');
+            var verb = parts.length ? parts[parts.length - 1] : act;
+            if (['create','generate','assign','provision'].indexOf(verb) >= 0 || act.indexOf('_success') >= 0) return 'action-create';
+            if (['update','save','edit'].indexOf(verb) >= 0) return 'action-update';
+            if (['delete','ban','destroy','remove','expire_unpaid','error'].indexOf(verb) >= 0 || act.indexOf('failed') >= 0) return 'action-delete';
+            if (['login','logout','login_failed'].indexOf(verb) >= 0 || act.indexOf('auth.') === 0) return 'action-login';
+            if (['start','enable','enable_tun','unsuspend'].indexOf(verb) >= 0) return 'action-power-on';
+            if (['stop','suspend'].indexOf(verb) >= 0) return 'action-power-off';
+            if (['restart','reinstall','reload'].indexOf(verb) >= 0) return 'action-restart';
+            if (['paypal','payment','checkout'].indexOf(verb) >= 0 || act.indexOf('payment.') === 0) return 'action-payment';
+            if (verb === 'settings' || act.indexOf('settings.') === 0) return 'action-settings';
+            return 'action-other';
+        }
+
+        var actionHtml = '<span class="action-badge ' + actionBadgeClass(log.action) + '">'
+            + escapeHtml(log.action || '—') + '</span>';
+
         var rows = [
-            ['Time', log.created || '—', false],
-            ['Event ID', log.uuid || '—', true],
-            ['User', userLabel, false],
-            ['Action', log.action || '—', true],
-            ['Target Type', log.target_type || '—', false],
-            ['Target ID', log.target_id || '—', true],
-            ['IP Address', log.ip || '—', true],
-            ['Details', log.details || '—', false],
+            ['Time', escapeHtml(log.created || '—'), false],
+            ['Event ID', escapeHtml(log.uuid || '—'), true],
+            ['User', escapeHtml(userLabel), false],
+            ['Action', actionHtml, false, true],
+            ['Target Type', escapeHtml(log.target_type || '—'), false],
+            ['Target ID', escapeHtml(log.target_id || '—'), true],
+            ['IP Address', escapeHtml(log.ip || '—'), true],
+            ['Details', escapeHtml(log.details || '—'), false],
         ];
 
         var html = '';
         rows.forEach(function(r) {
             var valClass = r[2] ? 'v mono' : 'v';
+            var val = r[3] ? r[1] : r[1];
             html += '<div class="kv-row">'
                 + '<span class="k">' + escapeHtml(r[0]) + '</span>'
-                + '<span class="' + valClass + '">' + escapeHtml(r[1]) + '</span>'
+                + '<span class="' + valClass + '">' + val + '</span>'
                 + '</div>';
         });
         body.innerHTML = html;

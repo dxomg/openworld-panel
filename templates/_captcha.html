@@ -1,0 +1,107 @@
+{% if captcha_enabled %}
+<div class="field captcha-field" style="margin: 16px 0;" id="captcha-container-{{ captcha_uid|default('default') }}">
+    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-dim);">Verification Code</label>
+    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <input type="hidden" name="captcha_id" id="captcha_id_{{ captcha_uid|default('default') }}" value="">
+        
+        <div style="border: 1px solid var(--border); border-radius: var(--radius); padding: 2px; background: #000; display: inline-flex; align-items: center; justify-content: center; min-width: 140px; min-height: 44px; position: relative;">
+            <img id="captcha_img_{{ captcha_uid|default('default') }}" alt="Captcha" style="height: 40px; display: none; border-radius: 4px; object-fit: contain;">
+            <span id="captcha_status_{{ captcha_uid|default('default') }}" style="font-size: 11px; color: var(--text-dim);">Connecting...</span>
+        </div>
+        
+        <input type="text" name="captcha_answer" id="captcha_ans_{{ captcha_uid|default('default') }}" required placeholder="Answer" autocomplete="off" style="width: 100px; text-align: center; font-family: var(--font-mono); font-size: 15px; font-weight: bold; letter-spacing: 0.05em; height: 44px;">
+        <button type="button" class="btn btn-small" id="captcha_refresh_{{ captcha_uid|default('default') }}" title="New Captcha" style="height: 44px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 16px;">↺</button>
+    </div>
+</div>
+
+<script>
+(function() {
+    const uid = "{{ captcha_uid|default('default') }}";
+    const wsUrl = "{{ captcha_ws_url }}";
+    
+    const idInput = document.getElementById("captcha_id_" + uid);
+    const img = document.getElementById("captcha_img_" + uid);
+    const status = document.getElementById("captcha_status_" + uid);
+    const ansInput = document.getElementById("captcha_ans_" + uid);
+    const refreshBtn = document.getElementById("captcha_refresh_" + uid);
+
+    let ws = null;
+    let expectingGif = false;
+
+    function initWS() {
+        if (!wsUrl) return;
+        if (ws) {
+            try { ws.close(); } catch(e) {}
+        }
+        if (status) { status.textContent = "Connecting..."; status.style.display = "inline-block"; }
+        if (img) img.style.display = "none";
+
+        try {
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = "arraybuffer";
+
+            ws.onopen = function() {
+                ws.send("new");
+            };
+
+            ws.onmessage = function(ev) {
+                if (typeof ev.data === "string") {
+                    const data = ev.data.trim();
+                    if (data === "rate") {
+                        if (status) { status.textContent = "Rate limited"; status.style.display = "inline-block"; }
+                        return;
+                    }
+                    if (data === "err") {
+                        ws.send("new");
+                        return;
+                    }
+
+                    try {
+                        const meta = JSON.parse(data);
+                        if (meta.id && idInput) {
+                            idInput.value = meta.id;
+                        }
+                        expectingGif = true;
+                    } catch(e) {}
+                    return;
+                }
+
+                if (expectingGif && ev.data) {
+                    const blob = new Blob([ev.data], { type: "image/gif" });
+                    if (img.src && img.src.startsWith("blob:")) {
+                        URL.revokeObjectURL(img.src);
+                    }
+                    img.src = URL.createObjectURL(blob);
+                    img.style.display = "block";
+                    if (status) status.style.display = "none";
+                    expectingGif = false;
+                }
+            };
+
+            ws.onerror = ws.onclose = function() {
+                if ((!img.src || img.style.display === "none") && status) {
+                    status.textContent = "Offline";
+                    status.style.display = "inline-block";
+                }
+            };
+        } catch(e) {
+            if (status) status.textContent = "Error";
+        }
+    }
+
+    if (refreshBtn) {
+        refreshBtn.onclick = function() {
+            if (ansInput) ansInput.value = "";
+            if (status) { status.textContent = "Loading..."; status.style.display = "inline-block"; }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send("new");
+            } else {
+                initWS();
+            }
+        };
+    }
+
+    initWS();
+})();
+</script>
+{% endif %}

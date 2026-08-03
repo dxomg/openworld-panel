@@ -162,7 +162,7 @@
                     <select name="imageid" id="adminVpsImageSelect" required>
                         <option value="" disabled selected>Select image...</option>
                         {% for image in images %}
-                        <option value="{{ image.id }}" data-type="{{ image.node_type|default('docker') }}">{{ image.name }}</option>
+                        <option value="{{ image.id }}" data-type="{{ image.node_type|default('proxmox') }}">{{ image.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -173,7 +173,7 @@
                     <select name="nodeid" id="adminVpsNodeSelect" required onchange="onNodeChange()">
                         <option value="" disabled selected>Select node...</option>
                         {% for node in allNodes %}
-                        <option value="{{ node.id }}" data-type="{{ node.type|default('docker') }}">{{ node.name }} ({{ node.type|default('docker')|upper }})</option>
+                        <option value="{{ node.id }}" data-type="{{ node.type|default('proxmox') }}">{{ node.name }} ({{ node.type|default('proxmox')|upper }})</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -205,7 +205,7 @@
                         <option value="{{ net.id }}" data-type="{{ net.network_type }}">{{ net.name }} ({{ net.node_name }}) [{{ net.network_type|upper }}]</option>
                         {% endfor %}
                     </select>
-                    <input type="hidden" name="network_type" id="adminVpsNetType" value="docker">
+                    <input type="hidden" name="network_type" id="adminVpsNetType" value="proxmox">
                 </div>
                 <div class="field">
                     <label>Storage Pool (Proxmox only)</label>
@@ -217,7 +217,7 @@
                         {% endif %}
                         {% endfor %}
                     </select>
-                    <span class="hint">Only applies to Proxmox nodes. Docker uses its configured storage path.</span>
+                    <span class="hint">Storage pool on the selected Proxmox node.</span>
                 </div>
                 <div class="field">
                     <label>Initial Status</label>
@@ -272,25 +272,18 @@
     function onNodeChange() {
         var sel = document.getElementById('adminVpsNodeSelect');
         var opt = sel.options[sel.selectedIndex];
-        var nodeType = opt.dataset.type || 'docker';
+        var nodeType = opt.dataset.type || 'proxmox';
         var poolField = document.getElementById('adminVpsPoolField');
         var poolSelect = document.getElementById('adminVpsPoolSelect');
         var imageSelect = document.getElementById('adminVpsImageSelect');
 
-        // Show/hide storage pool (proxmox only)
-        if (nodeType === 'proxmox') {
-            poolField.style.display = '';
-            for (var i = 0; i < poolSelect.options.length; i++) {
-                var o = poolSelect.options[i];
-                if (!o.value) continue;
-                o.style.display = o.dataset.nodeid == sel.value ? '' : 'none';
-            }
-        } else {
-            poolField.style.display = 'none';
-            poolSelect.value = '';
+        poolField.style.display = '';
+        for (var i = 0; i < poolSelect.options.length; i++) {
+            var o = poolSelect.options[i];
+            if (!o.value) continue;
+            o.style.display = o.dataset.nodeid == sel.value ? '' : 'none';
         }
 
-        // Filter images by node type
         for (var i = 0; i < imageSelect.options.length; i++) {
             var o = imageSelect.options[i];
             if (!o.value) continue;
@@ -307,7 +300,7 @@
     if (adminNetSelect) {
         adminNetSelect.addEventListener('change', function() {
             const opt = this.options[this.selectedIndex];
-            document.getElementById('adminVpsNetType').value = opt.dataset.type || 'docker';
+            document.getElementById('adminVpsNetType').value = opt.dataset.type || 'proxmox';
         });
     }
 </script>

@@ -18,96 +18,40 @@ from functools import wraps
 worker_thread = None
 
 from core import db
+from core import dbconfig
+from core import appconfig
+from core import timeutil
+from core import ratelimit
+from core import captcha
 from utils import services
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-DEFAULT_CONFIG = {
-    "general": {
-        "projectname": "Openworld",
-        "theme": "catppuccin",
-        "passwordlength": 24,
-        "cookielength": 128,
-        "defaultcookiettl": 7,
-        "favicon": "/static/favicon.ico",
-        "logo": "/static/logo.png",
-        "discord": "https://discord.gg/ZJrg5sGr5R"
-    },
-    "server": {
-        "host": "0.0.0.0",
-        "port": 5000,
-        "debug": True
-    },
-    "paypal": {
-        "email": "example@example.com",
-        "sandbox": True,
-        "base_url": "http://localhost:5000"
-    },
-    "discord": {
-        "clientid": "changeme",
-        "clientsecret": "changeme",
-        "redirecturl": "http://localhost:5000/discord-callback",
-        "discordbaseurl": "https://discord.com/api"
-    },
-    "loadbalancing": {
-        "strategy": "both"  # random | least_vps | resources | both
-    },
-    "console": {
-        "timeout": 10,
-        "metrics": "dynamic"
-    },
-    "network": {
-        "ip_source": "remote_addr"
-    },
-}
+DEFAULT_CONFIG = appconfig.DEFAULTS
 
 
 def loadorcreateconfig():
-    """Load config from DB, creating default settings when empty."""
-    dbSettings = db.getallsettings()
-    if not dbSettings:
-        _migrateconfigtodb(DEFAULT_CONFIG, DEFAULT_CONFIG)
-        dbSettings = db.getallsettings()
-
-    nested = {}
-    for flatkey, val in dbSettings.items():
-        parts = flatkey.split('.', 1)
-        if len(parts) == 2:
-            section, key = parts
-            if section not in nested:
-                nested[section] = {}
-            nested[section][key] = val
-        else:
-            nested[flatkey] = val
-
-    merged = {}
-    for section, defaults in DEFAULT_CONFIG.items():
-        merged[section] = {**defaults, **nested.get(section, {})}
-    for section in nested:
-        if section not in merged:
-            merged[section] = nested[section]
-    return merged
-
-
-def _migrateconfigtodb(cfg, defaults):
-    """Write a nested config dict into the DB as flat keys."""
-    for section, values in defaults.items():
-        if isinstance(values, dict):
-            for key, defaultval in values.items():
-                flatkey = f"{section}.{key}"
-                actual = cfg.get(section, {}).get(key, defaultval)
-                db.setsetting(flatkey, actual, f"{section} → {key}")
-        else:
-            db.setsetting(section, values, section)
+    """Load panel settings from config.json (migrate once from old DB settings)."""
+    if not os.path.isfile(appconfig.CONFIG_PATH):
+        try:
+            flat = db.getallsettings()
+            if flat:
+                return appconfig.migrate_from_db_flat(flat)
+        except Exception:
+            pass
+        return appconfig.save(appconfig.DEFAULTS)
+    return appconfig.load()
 
 
 def reloadconfig():
-    """Reload config from DB into the global dict."""
+    """Reload config.json into the global dict."""
     global config
     config = loadorcreateconfig()
 
 
 db.ensurejobssuspendtype()
+db.ensurevpssuspensioncolumns()
+db.ensurevpspaiduntilcolumn()
 config = loadorcreateconfig()
 
 OS_TYPES = {
@@ -196,20 +140,18 @@ def _processjob(job):
     elif jobtype == 'start':
         vps = db.getvps(vpsUuid)
         if vps:
+            # performvpsaction writes live Proxmox status
             services.performvpsaction(vps['id'], 'start', actorUserId=job['userid'])
-            db.updatevps(vpsUuid, status='running')
 
     elif jobtype == 'stop':
         vps = db.getvps(vpsUuid)
         if vps:
             services.performvpsaction(vps['id'], 'stop', actorUserId=job['userid'])
-            db.updatevps(vpsUuid, status='stopped')
 
     elif jobtype == 'restart':
         vps = db.getvps(vpsUuid)
         if vps:
             services.performvpsaction(vps['id'], 'restart', actorUserId=job['userid'])
-            db.updatevps(vpsUuid, status='running')
 
     elif jobtype == 'suspend':
         vps = db.getvps(vpsUuid)
@@ -222,25 +164,35 @@ def _processjob(job):
             db.updatevps(vpsUuid, status='suspended')
 
     elif jobtype == 'delete':
+        # Row stays status=deleted until node CT is gone, then hard-delete.
         vps = db.getvps(vpsUuid)
-        if vps:
+        if not vps:
+            return
+        if vps.get("status") != "deleted":
+            db.updatevps(vpsUuid, status="deleted")
+            vps = db.getvps(vpsUuid) or vps
+        vmid = services.getvmidmapping(vpsUuid) or vps.get("vmid")
+        if vmid:
             _deletevpsnode(vps)
-            db.unassignipbyvpsid(vps['id'])
-            if vps.get('storagepoolid') and vps.get('disk'):
-                db.increasestorageavailable(vps['storagepoolid'], vps['disk'])
-            if vps.get('planid'):
-                with db.getconnection() as conn:
-                    conn.execute("UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock >= 0", (vps['planid'],))
-            db.deletevpsrecord(vps['id'])
+        # Node clean (or never provisioned) — drop DB row
+        db.deletevpsrecord(vps["id"])
 
     elif jobtype == 'reinstall':
         vps = db.getvps(vpsUuid)
         if vps:
+            # Reinstall destroys CT then recreates — keep DB row
             _deletevpsnode(vps)
             db.unassignipbyvpsid(vps['id'])
             new_password = services.generaterandompassword()
             imageId = payload.get('imageId')
-            updatefields = {'status': 'creating', 'password': new_password, 'container': None, 'vmid': None}
+            updatefields = {
+                'status': 'creating',
+                'password': new_password,
+                'container': None,
+                'vmid': None,
+                'ipv4': None,
+                'ipv6': None,
+            }
             if imageId:
                 updatefields['imageid'] = imageId
             db.updatevps(vpsUuid, **updatefields)
@@ -259,21 +211,93 @@ def _processjob(job):
 
 
 def _deletevpsnode(vps):
-    """Delete VPS container from node (Docker or Proxmox)."""
+    """Delete VPS LXC from Proxmox node. Treats already-gone CT as success."""
     vpsUuid = vps['uuid']
     node = db.getnodebyid(vps['nodeid'])
     if not node:
         return
-    nodeType = node.get('type', 'docker')
-    if nodeType == 'proxmox':
-        vmid = services.getvmidmapping(vpsUuid)
-        if vmid:
-            pve = services.getproxmoxclient(node)
-            node_name = node.get('proxmoxnode', 'pve')
-            services.pveclient.deletelxc(pve, node_name, vmid)
-            services.removevmidmapping(vpsUuid)
-    else:
-        services.nodeapi(node, f"/vps/{vpsUuid}", method="DELETE")
+    vmid = services.getvmidmapping(vpsUuid) or vps.get('vmid')
+    if not vmid:
+        return
+    # longer HTTP timeout — stop+delete can exceed default 10s
+    pve = services.getproxmoxclient(node, timeout=60)
+    node_name = node.get('proxmoxnode', 'pve')
+    try:
+        services.pveclient.deletelxc(pve, node_name, vmid, timeout=180)
+    except Exception as e:
+        msg = str(e).lower()
+        # already gone
+        if (
+            "does not exist" in msg
+            or "not found" in msg
+            or "configuration file" in msg
+        ):
+            pass
+        else:
+            raise
+    try:
+        services.removevmidmapping(vpsUuid)
+    except Exception:
+        pass
+
+
+def _softdeletevps(vps, free_resources=True):
+    """
+    Mark VPS deleted in DB and free stock/IPs/storage.
+    Row stays until delete job removes CT from node, then hard-deletes row.
+    """
+    if not vps:
+        return
+    already = vps.get("status") == "deleted"
+    if not already:
+        db.updatevps(vps["uuid"], status="deleted")
+    if free_resources and not already:
+        try:
+            db.unassignipbyvpsid(vps["id"])
+        except Exception:
+            pass
+        try:
+            db.updatevps(vps["uuid"], ipv4=None, ipv6=None)
+        except Exception:
+            pass
+        if vps.get("storagepoolid") and vps.get("disk"):
+            try:
+                db.increasestorageavailable(vps["storagepoolid"], vps["disk"])
+            except Exception:
+                pass
+        if vps.get("planid"):
+            try:
+                with db.getconnection() as conn:
+                    conn.execute(
+                        "UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP "
+                        "WHERE id = ? AND stock >= 0",
+                        (vps["planid"],),
+                    )
+            except Exception:
+                pass
+
+
+def _queuedeletevps(vps, actor_userid=None):
+    """Soft-delete + enqueue node purge job."""
+    _softdeletevps(vps, free_resources=True)
+    uid = actor_userid if actor_userid is not None else vps["userid"]
+    return enqueuejob(vps["id"], vps["uuid"], uid, "delete")
+
+
+def _requeue_stuck_deletes():
+    """
+    Re-queue delete for VPS stuck as status=deleted with no active job
+    (node purge failed earlier — row kept until CT is gone).
+    """
+    stuck = db.listdeletedvpsneedingpurge(limit=20)
+    for vps in stuck:
+        if db.haspendingjobs(vps["uuid"]):
+            continue
+        # Do not free resources again — only purge node + row
+        try:
+            enqueuejob(vps["id"], vps["uuid"], vps["userid"], "delete")
+        except Exception:
+            pass
 
 
 
@@ -310,7 +334,7 @@ def _rereserveunpaidreservation(vps):
             )
     plan = db.getplanbyid(vps['planid'])
     if plan:
-        db.reserveplanipsforvps(vps, plan, network_type=vps.get('network_type', 'docker'))
+        db.reserveplanipsforvps(vps, plan, network_type=vps.get('network_type', 'proxmox'))
 
 
 def _expireunpaidvps():
@@ -322,43 +346,253 @@ def _expireunpaidvps():
         auditlog("vps.expire_unpaid", "vps", vps['uuid'], f"Soft-expired unpaid pendingpayment VPS {vps.get('hostname')}")
 
 
-def _jobworker():
-    """Background worker that processes queued jobs."""
-    lastExpire = 0
-    while True:
+def _billing_days(kind="paid"):
+    """Period length from config.json billing section."""
+    b = config.get("billing") or {}
+    if kind == "free":
         try:
+            return max(1, int(b.get("free_period_days") or 7))
+        except (TypeError, ValueError):
+            return 7
+    try:
+        return max(1, int(b.get("paid_period_days") or 30))
+    except (TypeError, ValueError):
+        return 30
+
+
+def _suspendoverduevps():
+    """Suspend VPS (paid or free) whose paid_until has passed."""
+    overdue = db.listoverduevps(include_free=True, include_paid=True)
+    for vps in overdue:
+        if vps.get("status") == "suspended":
+            continue
+        if db.haspendingjobs(vps["uuid"]):
+            continue
+        try:
+            price = float(vps.get("plan_price") or 0)
+        except (TypeError, ValueError):
+            price = 0
+        if price > 0:
+            reason = "Automatic suspension: monthly payment period ended"
+            action = "vps.suspend_unpaid"
+        else:
+            reason = "Automatic suspension: free period expired — renew to restore"
+            action = "vps.suspend_free_expired"
+        try:
+            db.addvpssuspension(
+                str(uuid.uuid4()),
+                vps["id"],
+                vps["userid"],
+                None,
+                reason,
+            )
+        except Exception:
+            pass
+        db.updatevps(vps["uuid"], status="suspended")
+        try:
+            enqueuejob(vps["id"], vps["uuid"], vps["userid"], "suspend")
+        except Exception:
+            pass
+        auditlog(
+            action,
+            "vps",
+            vps["uuid"],
+            f"Auto-suspended {vps.get('hostname')} (paid_until={vps.get('paid_until')})",
+        )
+
+
+def _markvpspaid(vpsUuid, days=None):
+    """Record successful paid period on VPS."""
+    if days is None:
+        days = _billing_days("paid")
+    try:
+        return db.extendvpspaiduntil(vpsUuid, days=days)
+    except Exception:
+        return None
+
+
+def _markvpsfreerenewal(vpsUuid, days=None):
+    """Reset free VPS period to now + days (cap; does not stack)."""
+    if days is None:
+        days = _billing_days("free")
+    try:
+        return db.extendvpspaiduntil(vpsUuid, days=days, from_now=False)
+    except Exception:
+        return None
+
+
+def _worker_cfg():
+    w = config.get("worker") or {}
+    return {
+        "enabled_in_web": bool(w.get("enabled_in_web", True)),
+        "poll_seconds": max(0.5, float(w.get("poll_seconds") or 2)),
+        "maintenance_seconds": max(15, int(w.get("maintenance_seconds") or 60)),
+        "stale_job_minutes": max(5, int(w.get("stale_job_minutes") or 45)),
+        "heartbeat_path": w.get("heartbeat_path") or "worker.heartbeat",
+    }
+
+
+def _worker_heartbeat_file():
+    path = _worker_cfg()["heartbeat_path"]
+    if not os.path.isabs(path):
+        path = os.path.join(BASE_DIR, path)
+    return path
+
+
+def _touch_worker_heartbeat(extra=None):
+    """Write heartbeat so web process can report external worker health."""
+    try:
+        payload = {
+            "ts": time.time(),
+            "pid": os.getpid(),
+            "iso": timeutil.now_str(),
+        }
+        if extra:
+            payload.update(extra)
+        path = _worker_heartbeat_file()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _read_worker_heartbeat(max_age=120):
+    path = _worker_heartbeat_file()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        age = time.time() - float(data.get("ts") or 0)
+        data["age_seconds"] = age
+        data["fresh"] = age <= max_age
+        return data
+    except Exception:
+        return None
+
+
+def _run_maintenance_tasks():
+    """Periodic billing/cleanup (safe to call from one worker only ideally)."""
+    cfg = _worker_cfg()
+    try:
+        n = db.reclaimstalejobs(stale_minutes=cfg["stale_job_minutes"])
+        if n:
+            app.logger.info("Reclaimed %s stale running job(s)", n)
+    except Exception as e:
+        app.logger.exception("reclaimstalejobs: %s", e)
+    try:
+        _expireunpaidvps()
+    except Exception as e:
+        app.logger.exception("expire unpaid: %s", e)
+    try:
+        _suspendoverduevps()
+    except Exception as e:
+        app.logger.exception("suspend overdue: %s", e)
+    try:
+        _requeue_stuck_deletes()
+    except Exception as e:
+        app.logger.exception("requeue deletes: %s", e)
+
+
+def _jobworker(stop_event=None):
+    """
+    Background job loop. stop_event: threading.Event for clean shutdown.
+    """
+    stop_event = stop_event or threading.Event()
+    last_maint = 0
+    app.logger.info("Job worker started pid=%s", os.getpid())
+    _touch_worker_heartbeat({"event": "start"})
+
+    while not stop_event.is_set():
+        try:
+            cfg = _worker_cfg()
             now = time.time()
-            if now - lastExpire >= 60:
-                try:
-                    _expireunpaidvps()
-                except Exception:
-                    pass
-                lastExpire = now
+            if now - last_maint >= cfg["maintenance_seconds"]:
+                _run_maintenance_tasks()
+                last_maint = now
+            _touch_worker_heartbeat({"event": "tick"})
 
             job = db.getnextpendingjob()
             if not job:
-                time.sleep(2)
+                stop_event.wait(cfg["poll_seconds"])
                 continue
 
+            jid = job.get("uuid")
+            jtype = job.get("type")
+            app.logger.info("Job start %s type=%s vps=%s", jid, jtype, job.get("vpsuuid"))
             try:
                 _processjob(job)
-                db.updatejob(job['uuid'], status='completed')
-                auditlog(f"job.{job['type']}", "vps", job['vpsuuid'],
-                         f"Job {job['type']} completed for {job['vpsuuid']}")
+                db.updatejob(jid, status="completed", result="ok")
+                auditlog(
+                    f"job.{jtype}",
+                    "vps",
+                    job.get("vpsuuid"),
+                    f"Job {jtype} completed for {job.get('vpsuuid')}",
+                )
+                app.logger.info("Job done %s type=%s", jid, jtype)
             except Exception as e:
-                db.updatejob(job['uuid'], status='failed', result=str(e))
-                auditlog(f"job.{job['type']}_failed", "vps", job['vpsuuid'],
-                         f"Job {job['type']} failed: {e}")
-                # Set VPS to error state if it was being created/provisioned
-                if job['type'] in ('provision', 'create', 'reinstall'):
-                    db.updatevps(job['vpsuuid'], status='error')
+                err = str(e)[:2000]
+                app.logger.exception("Job failed %s type=%s: %s", jid, jtype, e)
+                try:
+                    db.updatejob(jid, status="failed", result=err)
+                except Exception:
+                    pass
+                try:
+                    auditlog(
+                        f"job.{jtype}_failed",
+                        "vps",
+                        job.get("vpsuuid"),
+                        f"Job {jtype} failed: {err[:500]}",
+                    )
+                except Exception:
+                    pass
+                if jtype in ("provision", "create", "reinstall"):
+                    try:
+                        db.updatevps(job["vpsuuid"], status="error")
+                    except Exception:
+                        pass
 
-        except Exception:
-            time.sleep(5)
+        except Exception as e:
+            app.logger.exception("Worker loop error: %s", e)
+            stop_event.wait(5)
+
+    _touch_worker_heartbeat({"event": "stop"})
+    app.logger.info("Job worker stopped pid=%s", os.getpid())
 
 
-worker_thread = threading.Thread(target=_jobworker, daemon=True, name="JobWorker")
-worker_thread.start()
+def start_job_worker():
+    """Start in-process daemon worker if not already running."""
+    global worker_thread, _worker_stop
+    if worker_thread is not None and worker_thread.is_alive():
+        return worker_thread
+    _worker_stop = threading.Event()
+    worker_thread = threading.Thread(
+        target=_jobworker,
+        kwargs={"stop_event": _worker_stop},
+        daemon=True,
+        name="JobWorker",
+    )
+    worker_thread.start()
+    return worker_thread
+
+
+def stop_job_worker(timeout=10):
+    global worker_thread, _worker_stop
+    if _worker_stop is not None:
+        _worker_stop.set()
+    if worker_thread is not None and worker_thread.is_alive():
+        worker_thread.join(timeout=timeout)
+    worker_thread = None
+
+
+_worker_stop = None
+# Auto-start in web process only when configured.
+# Skip when running standalone worker.py (OPENWORLD_WORKER=1) or enabled_in_web false.
+if (
+    os.environ.get("OPENWORLD_WORKER") != "1"
+    and _worker_cfg()["enabled_in_web"]
+):
+    start_job_worker()
 
 
 
@@ -386,6 +620,66 @@ def csrfprotect():
         sessionToken = request.cookies.get('csrf_token')
         if not token or not sessionToken or not hmac.compare_digest(token, sessionToken):
             return "CSRF validation failed", 403
+
+
+_RL_SKIP_ENDPOINTS = frozenset({"static", "paypalipn"})
+_RL_SKIP_PREFIXES = ("/static/", "/paypal/ipn")
+
+
+def _rl_cfg():
+    return config.get("ratelimit") or {}
+
+
+def _rl_enabled():
+    return bool(_rl_cfg().get("enabled", True))
+
+
+def _rl_rate(name, default):
+    return _rl_cfg().get(name) or default
+
+
+def _ratelimit_response(retry_after):
+    retry_after = max(1, int(retry_after or 1))
+    body = None
+    try:
+        body = render_template(
+            "429.html",
+            retry_after=retry_after,
+            **guestuserinfo(),
+        )
+    except Exception:
+        body = "Too many requests. Try again later."
+    resp = make_response(body, 429)
+    resp.headers["Retry-After"] = str(retry_after)
+    return resp
+
+
+def checkratelimit(bucket, rate_key, default_rate, identity=None):
+    """Hit a named bucket. Returns response if limited, else None."""
+    if not _rl_enabled():
+        return None
+    ip = getclientip() or "unknown"
+    key = f"{bucket}:{identity or ip}"
+    ok, retry = ratelimit.hit_rate(key, _rl_rate(rate_key, default_rate))
+    if ok:
+        return None
+    return _ratelimit_response(retry)
+
+
+@app.before_request
+def globalratelimit():
+    if not _rl_enabled():
+        return
+    if request.endpoint in _RL_SKIP_ENDPOINTS:
+        return
+    path = request.path or ""
+    if any(path.startswith(p) for p in _RL_SKIP_PREFIXES):
+        return
+    ip = getclientip() or "unknown"
+    ok, retry = ratelimit.hit_rate(f"global:{ip}", _rl_rate("global", "120/minute"))
+    if not ok:
+        return _ratelimit_response(retry)
+
 
 @app.after_request
 def setcsrfcookie(response):
@@ -444,7 +738,7 @@ def get_theme_class(user=None):
         theme_id = request.cookies.get("theme")
     # Fall back to global default
     if not theme_id:
-        theme_id = db.getsetting("general.theme", "catppuccin")
+        theme_id = config.get("general", {}).get("theme", "catppuccin")
     for t in THEMES:
         if t["id"] == theme_id:
             return t["class"]
@@ -460,7 +754,10 @@ def guestuserinfo():
         "globaltotalnodes": db.countnodes(),
         "theme_class": get_theme_class(),
         "themes": THEMES,
-        "current_theme": cookie_theme or db.getsetting("general.theme", "catppuccin"),
+        "current_theme": cookie_theme or config.get("general", {}).get("theme", "catppuccin"),
+        "app_timezone": timeutil.get_tz_name(),
+        "captcha_enabled": captcha.is_enabled(),
+        "captcha_ws_url": captcha.get_ws_url() if captcha.is_enabled() else "",
     }
 
 def paneluserinfo(user, ban=None):
@@ -484,7 +781,10 @@ def paneluserinfo(user, ban=None):
         "banreason": ban["reason"] if ban else None,
         "theme_class": get_theme_class(user),
         "themes": THEMES,
-        "current_theme": user.get('theme') or (request.cookies.get("theme") if request else None) or db.getsetting("general.theme", "catppuccin"),
+        "current_theme": user.get('theme') or (request.cookies.get("theme") if request else None) or config.get("general", {}).get("theme", "catppuccin"),
+        "app_timezone": timeutil.get_tz_name(),
+        "captcha_enabled": captcha.is_enabled(),
+        "captcha_ws_url": captcha.get_ws_url() if captcha.is_enabled() else "",
     }
 
 def paneladmininfo(user, ban=None):
@@ -521,11 +821,27 @@ def dashboard():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
     vpsData = services.listvpsforuserpanel(g.userinfo["id"], page=page, perPage=10, search=q)
-    return render_template("dashboard.html", vpsData=vpsData, search=q or '', **paneluserinfo(g.userinfo))
+    for inst in vpsData.get("vps") or []:
+        inst["os_meta"] = OS_TYPES.get(inst.get("os_type") or "linux", OS_TYPES["linux"])
+    billingDue = [v for v in vpsData.get("vps") or [] if v.get("billing_due")]
+    return render_template(
+        "dashboard.html",
+        vpsData=vpsData,
+        search=q or '',
+        billingDue=billingDue,
+        **paneluserinfo(g.userinfo),
+    )
 
 @app.route("/createvps", methods=["GET", "POST"])
 @loginrequired
 def createvps():
+    if request.method == "POST":
+        cid = request.form.get("captcha_id")
+        ans = request.form.get("captcha_answer")
+        if captcha.is_enabled() and cid:
+            if not captcha.verify_captcha(cid, ans):
+                flash("Invalid or expired captcha answer.", "error")
+                return redirect(url_for('createvps'))
     db.ensureplanassignmenttables()
     if request.method == "POST":
         planId = request.form.get("planId", type=int)
@@ -535,6 +851,16 @@ def createvps():
         if not plan:
             flash("Invalid plan selected.", "error")
             return redirect(url_for('createvps'))
+
+        isPaid = float(plan.get('price') or 0) > 0
+
+        # Rate limit check for free vs paid creation
+        if isPaid:
+            limited = checkratelimit("create_vps_paid", "create_vps_paid", "10/hour", identity=g.userinfo["id"])
+        else:
+            limited = checkratelimit("create_vps_free", "create_vps_free", "2/day", identity=g.userinfo["id"])
+        if limited:
+            return limited
 
         if plan['stock'] == 0:
             flash("This plan is out of stock.", "error")
@@ -555,7 +881,7 @@ def createvps():
         if not image or not image.get('active'):
             flash("Invalid image selected.", "error")
             return redirect(url_for('createvps'))
-        if image.get('node_type', 'docker') != plan.get('node_type', 'docker'):
+        if image.get('node_type', 'proxmox') != plan.get('node_type', 'proxmox'):
             flash("Selected image does not match plan platform.", "error")
             return redirect(url_for('createvps'))
         if not db.getnodesforimage(image['id']):
@@ -576,7 +902,7 @@ def createvps():
 
         # Auto-assign network from the node
         node = db.getnodebyid(nodeId)
-        nodeNetType = node.get('type', 'docker') if node else 'docker'
+        nodeNetType = node.get('type', 'proxmox') if node else 'proxmox'
         nodeNetworks = db.listnetworks(nodeid=nodeId, network_type=nodeNetType)
         if not nodeNetworks:
             flash("No network configured for this node. Contact an admin.", "error")
@@ -588,8 +914,7 @@ def createvps():
             flash(ipError, "error")
             return redirect(url_for('createvps'))
 
-        # Proxmox needs a plan-assigned storage pool on the chosen node
-        if nodeNetType == 'proxmox' and not storagePoolId:
+        if not storagePoolId:
             flash("No storage pool assigned to this plan for the selected node. Contact an admin.", "error")
             return redirect(url_for('createvps'))
 
@@ -631,7 +956,16 @@ def createvps():
             if isPaid:
                 return redirect(url_for('checkout', vpsUuid=vpsUuid))
 
-            flash("Free VPS is being created!", "success")
+            # Free: start renewal period immediately
+            until = _markvpsfreerenewal(vpsUuid)
+            auditlog(
+                "vps.free_period",
+                "vps",
+                vpsUuid,
+                f"Free period started until {until}" if until else "Free period started",
+            )
+            days = _billing_days("free")
+            flash(f"Free VPS is being created! Renew every {days} days to keep it.", "success")
             return redirect(url_for('dashboard'))
         except Exception as e:
             flash(f"An error occurred while creating the VPS: {e}", "error")
@@ -691,6 +1025,9 @@ def cancelcheckout(vpsUuid):
 @app.route("/checkout/processpayment", methods=["POST"])
 @loginrequired
 def processpayment():
+    limited = checkratelimit("checkout", "checkout", "20/hour", identity=g.userinfo["id"])
+    if limited:
+        return limited
     vpsUuid = request.form.get("vpsUuid")
     methodSlug = request.form.get("methodSlug")
 
@@ -731,6 +1068,7 @@ def processpayment():
         return redirect(paypalRedirect)
 
     # Manual / Balance activation
+    paidUntil = _markvpspaid(vpsUuid, days=30)
     db.updatevps(vpsUuid, status='creating')
     manualMethod = db.getpaymentmethodbyslug(methodSlug)
     txnUuid = str(uuid.uuid4())
@@ -746,7 +1084,13 @@ def processpayment():
         planid=vps['planid']
     )
 
-    auditlog("payment.manual", "vps", vpsUuid, f"Manual payment of ${plan['price']:.2f} via {methodSlug}")
+    auditlog(
+        "payment.manual",
+        "vps",
+        vpsUuid,
+        f"Manual payment of ${plan['price']:.2f} via {methodSlug}"
+        + (f" (paid until {paidUntil})" if paidUntil else ""),
+    )
 
     enqueuejob(vps['id'], vpsUuid, vps['userid'], 'provision')
     flash("Payment confirmed. VPS is being created!", "success")
@@ -830,6 +1174,7 @@ def paypalipn():
                 auditlog("payment.paypal_resource_fail", "vps", vpsUuid, f"Paid ${amount} but resources unavailable: {e}")
                 return "OK", 200
             app.logger.info(f"PayPal IPN: revived soft-expired checkout {vpsUuid}")
+        paidUntil = _markvpspaid(vpsUuid, days=30)
         db.updatevps(vpsUuid, status='creating')
         paypalMethod = db.getpaymentmethodbyslug("paypal")
         txnUuid = str(uuid.uuid4())
@@ -845,7 +1190,13 @@ def paypalipn():
             planid=vps['planid']
         )
 
-        auditlog("payment.paypal", "vps", vpsUuid, f"PayPal payment of ${amount} (txn: {txnId})")
+        auditlog(
+            "payment.paypal",
+            "vps",
+            vpsUuid,
+            f"PayPal payment of ${amount} (txn: {txnId})"
+            + (f" (paid until {paidUntil})" if paidUntil else ""),
+        )
 
         enqueuejob(vps['id'], vpsUuid, vps['userid'], 'provision')
         app.logger.info(f"PayPal IPN: payment processed, provisioning queued for {vpsUuid}")
@@ -862,31 +1213,29 @@ def vpspanel(vpsUuid):
     if not vps or vps["userid"] != g.userinfo["id"]:
         abort(404)
 
+    # Fast path: DB only. Live Proxmox status/metrics via /vps/<uuid>/status poll.
     instance = services.getvpsdetails(vps["id"])
-    metric = services.getlatestvpsmetric(vps["id"])
-    
-    # Add OS metadata for icon display
     if instance:
         os_type = instance.get('os_type') or 'linux'
         instance['os_meta'] = OS_TYPES.get(os_type, OS_TYPES['linux'])
 
-    assignedIpv4 = vps.get('ipv4')
-    assignedIpv6 = vps.get('ipv6')
+    assignedIpv4 = instance.get('ipv4') if instance else vps.get('ipv4')
+    assignedIpv6 = instance.get('ipv6') if instance else vps.get('ipv6')
 
-    # Get DNS from network
     networkDns = None
     if vps.get('networkid'):
-        netTable = "proxmox_networks" if vps.get('network_type') == 'proxmox' else "docker_networks"
         with db.getconnection() as conn:
-            net = conn.execute(f"SELECT dns FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
-        if net and net['dns']:
+            net = conn.execute(
+                "SELECT dns FROM proxmox_networks WHERE id = ?", (vps['networkid'],)
+            ).fetchone()
+        if net and net.get('dns'):
             networkDns = net['dns']
 
     return render_template(
         "vpspanel.html",
         **paneluserinfo(g.userinfo),
         instance=instance,
-        metric=metric,
+        metric=None,
         assignedIpv4=assignedIpv4,
         assignedIpv6=assignedIpv6,
         networkDns=networkDns,
@@ -977,6 +1326,81 @@ def vpsaction(vpsUuid, action):
     return redirect(backUrl)
 
 
+@app.route("/vps/<vpsUuid>/renew", methods=["POST"])
+@loginrequired
+def renewfreevps(vpsUuid):
+    """Extend free VPS period (no payment)."""
+    limited = checkratelimit("renew", "renew", "20/hour", identity=g.userinfo["id"])
+    if limited:
+        return limited
+    cid = request.form.get("captcha_id")
+    ans = request.form.get("captcha_answer")
+    if captcha.is_enabled():
+        if not cid or not captcha.verify_captcha(cid, ans):
+            flash("Invalid or expired captcha answer.", "error")
+            return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+    vps = db.getvps(vpsUuid)
+    if not vps or vps["userid"] != g.userinfo["id"]:
+        flash("VPS not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    plan = db.getplanbyid(vps["planid"])
+    if not plan or float(plan.get("price") or 0) > 0:
+        flash("Only free VPS can be renewed here.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    if vps.get("status") == "deleted":
+        flash("This VPS is deleted.", "error")
+        return redirect(url_for("dashboard"))
+
+    try:
+        b_cfg = config.get("billing") or {}
+        cooldown_hours = float(b_cfg.get("free_renew_cooldown_hours") if b_cfg.get("free_renew_cooldown_hours") is not None else 24)
+    except (TypeError, ValueError):
+        cooldown_hours = 24
+
+    if cooldown_hours > 0:
+        last_renew = db.getlastfreerenewtime(vpsUuid)
+        if last_renew:
+            now = timeutil.now()
+            elapsed_sec = (now - last_renew).total_seconds()
+            cooldown_sec = cooldown_hours * 3600.0
+            if elapsed_sec < cooldown_sec:
+                remain_hours = (cooldown_sec - elapsed_sec) / 3600.0
+                if remain_hours >= 1:
+                    time_str = f"{int(remain_hours)} hour{'s' if int(remain_hours) != 1 else ''}"
+                else:
+                    remain_mins = max(1, int(remain_hours * 60))
+                    time_str = f"{remain_mins} minute{'s' if remain_mins != 1 else ''}"
+                cd_num = int(cooldown_hours) if cooldown_hours.is_integer() else cooldown_hours
+                flash(f"Free VPS can only be renewed once every {cd_num} hours. Please try again in {time_str}.", "error")
+                return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    days = _billing_days("free")
+    until = _markvpsfreerenewal(vpsUuid, days=days)
+    # If was auto-suspended for free expiry, restore to stopped so user can start
+    if vps.get("status") == "suspended":
+        sus = db.getsuspensionbyvpsid(vps["id"])
+        reason = (sus or {}).get("reason") or ""
+        if "free period" in reason.lower() or "free" in reason.lower():
+            db.liftvpssuspension(vps["id"])
+            db.updatevps(vpsUuid, status="stopped")
+            flash(
+                f"Free period renewed until {until}. VPS unsuspended — start it when ready.",
+                "success",
+            )
+        else:
+            flash(
+                f"Free period renewed until {until}. Contact support if still suspended for another reason.",
+                "success",
+            )
+    else:
+        flash(f"Free period renewed until {until} ({days} days).", "success")
+
+    auditlog("vps.free_renew", "vps", vpsUuid, f"User renewed free VPS until {until}")
+    return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+
 @app.route("/vps/<vpsUuid>/delete", methods=["POST"])
 @loginrequired
 def deletevps(vpsUuid):
@@ -993,10 +1417,9 @@ def deletevps(vpsUuid):
         flash("This VPS has a pending action. Wait for it to complete.", "error")
         return redirect(url_for('vpspanel', vpsUuid=vpsUuid))
 
-    db.updatevps(vpsUuid, status='deleted')
-    enqueuejob(vps['id'], vpsUuid, g.userinfo["id"], 'delete')
+    _queuedeletevps(vps, actor_userid=g.userinfo["id"])
     auditlog("vps.delete", "vps", vpsUuid, f"Queued delete for {vps['hostname']}")
-    flash("VPS deletion queued.", "success")
+    flash("VPS marked deleted. Removing from node…", "success")
     return redirect(url_for('dashboard'))
 
 
@@ -1040,16 +1463,47 @@ def reinstallvps(vpsUuid):
 @loginrequired
 def vpsstatuspoll(vpsUuid):
     vps = db.getvps(vpsUuid)
-    if not vps or vps["userid"] != g.userinfo["id"]:
+    if not vps:
+        return jsonify({"error": "VPS not found"}), 404
+    isAdmin = g.userinfo.get("role") == "admin"
+    if not isAdmin and vps["userid"] != g.userinfo["id"]:
         return jsonify({"error": "VPS not found"}), 404
 
-    metric = services.getlatestvpsmetric(vps["id"])
-    return jsonify({"status": vps["status"], "metrics": metric})
+    # Single Proxmox call: status sync + metrics
+    details = services.getvpsdetails(vps["id"])
+    details, metric = services.fetchlivevps(vps["id"], details=details)
+    status = (details or vps).get("status") or vps["status"]
+    return jsonify({"status": status, "metrics": metric})
+
+
+@app.route("/dashboard/vps-status")
+@loginrequired
+def dashboardvpsstatus():
+    """Live status for VPS UUIDs currently shown on the user dashboard."""
+    raw = (request.args.get("uuids") or "").strip()
+    if not raw:
+        return jsonify({"statuses": {}})
+    uuids = [u.strip() for u in raw.split(",") if u.strip()][:30]
+    out = {}
+    for u in uuids:
+        vps = db.getvps(u)
+        if not vps or vps["userid"] != g.userinfo["id"]:
+            continue
+        # Skip heavy Proxmox calls for terminal/payment states
+        if vps.get("status") in ("pendingpayment", "deleted", "creating", "suspended"):
+            out[u] = vps["status"]
+            continue
+        details = services.synclivestatus(vps["id"]) or vps
+        out[u] = details.get("status") if isinstance(details, dict) else vps["status"]
+    return jsonify({"statuses": out})
 
 
 @app.route("/vps/<vpsUuid>/console/token", methods=["POST"])
 @loginrequired
 def vpsconsoletoken(vpsUuid):
+    limited = checkratelimit("console", "console", "30/minute", identity=g.userinfo["id"])
+    if limited:
+        return limited
     vps = db.getvps(vpsUuid)
     if not vps:
         return jsonify({"error": "VPS not found"}), 404
@@ -1081,6 +1535,7 @@ def vpsconsoletoken(vpsUuid):
         "used": False,
         "created": time.time(),
     }
+    auditlog("vps.console", "vps", vpsUuid, f"Opened console for {vps.get('hostname')} via {ip}")
     return jsonify({"token": token})
 
 
@@ -1383,10 +1838,8 @@ def adminvps():
     
     users = db.listallusers()
     plans = db.listplans(active=1)
-    dockerImages = db.listimages(active=1, node_type='docker')
-    proxmoxImages = db.listimages(active=1, node_type='proxmox')
-    images = dockerImages + proxmoxImages
-    networks = db.listnetworks(network_type='docker') + db.listnetworks(network_type='proxmox')
+    images = db.listimages(active=1, node_type='proxmox')
+    networks = db.listnetworks(network_type='proxmox')
     allNodes = db.listallnodes()
     storagePools = db.liststoragepools()
     
@@ -1419,8 +1872,7 @@ def adminvpsremovesuspended():
         if db.haspendingjobs(v['uuid']):
             skipped += 1
             continue
-        db.updatevps(v['uuid'], status='deleted')
-        enqueuejob(v['id'], v['uuid'], g.userinfo['id'], 'delete')
+        _queuedeletevps(v, actor_userid=g.userinfo['id'])
         auditlog("vps.delete", "vps", v['uuid'], f"Bulk-removed suspended VPS {v['hostname']}")
         queued += 1
     flash(f"Queued delete for {queued} suspended VPS." + (f" Skipped {skipped} with pending jobs." if skipped else ""), "success" if queued else "warning")
@@ -1434,26 +1886,25 @@ def adminvpspanel(vpsUuid):
     if not vps:
         abort(404)
 
+    # Fast path: DB only. Live Proxmox via /vps/<uuid>/status poll.
     instance = services.getvpsdetails(vps["id"])
-    metric = services.getlatestvpsmetric(vps["id"])
     owner = db.getuserbyid(vps["userid"])
     suspension = db.getsuspensionbyvpsid(vps["id"])
-    
-    # Add OS metadata for icon display
+
     if instance:
         os_type = instance.get('os_type') or 'linux'
         instance['os_meta'] = OS_TYPES.get(os_type, OS_TYPES['linux'])
 
-    assignedIpv4 = vps.get('ipv4')
-    assignedIpv6 = vps.get('ipv6')
+    assignedIpv4 = instance.get('ipv4') if instance else vps.get('ipv4')
+    assignedIpv6 = instance.get('ipv6') if instance else vps.get('ipv6')
 
-    # Get DNS from network
     networkDns = None
     if vps.get('networkid'):
-        netTable = "proxmox_networks" if vps.get('network_type') == 'proxmox' else "docker_networks"
         with db.getconnection() as conn:
-            net = conn.execute(f"SELECT dns FROM {netTable} WHERE id = ?", (vps['networkid'],)).fetchone()
-        if net and net['dns']:
+            net = conn.execute(
+                "SELECT dns FROM proxmox_networks WHERE id = ?", (vps['networkid'],)
+            ).fetchone()
+        if net and net.get('dns'):
             networkDns = net['dns']
 
     return render_template(
@@ -1461,7 +1912,7 @@ def adminvpspanel(vpsUuid):
         **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo),
         instance=instance,
-        metric=metric,
+        metric=None,
         owner=owner,
         assignedIpv4=assignedIpv4,
         assignedIpv6=assignedIpv6,
@@ -1529,21 +1980,20 @@ def adminvpsdelete(vpsUuid):
     force = request.form.get("force") == "1"
 
     if force:
-        # Force delete: just clean DB, skip node
-        db.unassignipbyvpsid(vps['id'])
-        if vps.get('storagepoolid') and vps.get('disk'):
-            db.increasestorageavailable(vps['storagepoolid'], vps['disk'])
-        if vps.get('planid'):
-            with db.getconnection() as conn:
-                conn.execute("UPDATE plans SET stock = stock + 1, updated = CURRENT_TIMESTAMP WHERE id = ? AND stock >= 0", (vps['planid'],))
-        db.deletevpsrecord(vps['id'])
+        # Force: free resources + drop DB row, skip waiting on node
+        _softdeletevps(vps, free_resources=(vps.get("status") != "deleted"))
+        try:
+            _deletevpsnode(vps)
+        except Exception:
+            pass
+        if db.getvps(vpsUuid):
+            db.deletevpsrecord(vps["id"])
         auditlog("vps.delete", "vps", vpsUuid, f"Admin force-deleted VPS {vps['hostname']}")
         flash("VPS force-removed from DB.", "warning")
     else:
-        db.updatevps(vpsUuid, status='deleted')
-        enqueuejob(vps['id'], vpsUuid, g.userinfo["id"], 'delete')
+        _queuedeletevps(vps, actor_userid=g.userinfo["id"])
         auditlog("vps.delete", "vps", vpsUuid, f"Admin queued delete for {vps['hostname']}")
-        flash("VPS deletion queued.", "success")
+        flash("VPS marked deleted. Removing from node…", "success")
 
     return redirect(url_for('adminvps'))
 
@@ -1602,7 +2052,7 @@ def admincreatevps():
             flash("You must select a network.", "danger")
             return redirect(url_for('adminvps'))
 
-        network_type = request.form.get('network_type', 'docker')
+        network_type = request.form.get('network_type', 'proxmox')
         network = db.getnetworkbyid(networkid, network_type=network_type)
         if not network:
             flash("Selected network not found.", "danger")
@@ -1635,6 +2085,10 @@ def admincreatevps():
                 status='creating',
                 jobtype='provision'
             )
+            if not isPaid:
+                _markvpsfreerenewal(vpsUuid)
+            else:
+                _markvpspaid(vpsUuid)
             auditlog("vps.admin_create", "vps", vpsUuid, f"Admin created VPS {hostname} for user {userid}")
             flash(f"Instance {hostname} created successfully with {plan['name']} resources.", "success")
             return redirect(url_for('adminvps'))
@@ -1667,7 +2121,7 @@ def adminplans():
             active=1 if request.form.get("active") else 0,
             stock=int(request.form.get("stock", -1)),
             netmbps=int(request.form.get("netmbps", 0)),
-            node_type=request.form.get("node_type", "docker"),
+            node_type=request.form.get("node_type", "proxmox"),
         )
         plan = db.getplanbyuuid(planUuid)
         if plan:
@@ -1690,7 +2144,7 @@ def adminplans():
         plan['assigned_nodes'] = db.listplannodes(plan['id'])
         plan['assigned_pools'] = db.listplanstoragepools(plan['id'])
 
-    defaultNodeType = allNodes[0].get('type', 'docker') if allNodes else 'docker'
+    defaultNodeType = allNodes[0].get('type', 'proxmox') if allNodes else 'proxmox'
     defaultNodeId = allNodes[0]['id'] if allNodes else None
     defaultPoolId = None
     if allNodes and allNodes[0].get('pools'):
@@ -1733,7 +2187,7 @@ def adminupdateplans(planUuid):
         active=1 if request.form.get("active") else 0,
         stock=int(request.form.get("stock", -1)),
         netmbps=int(request.form.get("netmbps", 0)),
-        node_type=request.form.get("node_type", "docker")
+        node_type=request.form.get("node_type", "proxmox")
     )
     nodeIds = request.form.getlist("node_ids")
     db.setplannodes(plan["id"], nodeIds)
@@ -1756,15 +2210,8 @@ def admindeleteplans(planUuid):
 def adminnodes():
     page = request.args.get('page', 1, type=int)
     q = request.args.get('q', '').strip() or None
+    # Fast path: DB only. Live online/offline via /nodes/status poll in template.
     nodesData = db.listnodespaginated(page=page, perpage=12, search=q)
-    for n in nodesData['nodes']:
-        try:
-            services.probenode(n, timeout=3)
-            fresh = db.getnode(n['uuid'])
-            if fresh:
-                n['status'] = fresh['status']
-        except Exception:
-            pass
     return render_template(
         "adminnodes.html", 
         allNodes=nodesData['nodes'],
@@ -1780,28 +2227,26 @@ def adminnodes():
 def adminnodescreate():
     try:
         nodeUuid = str(uuid.uuid4())
-        nodeType = request.form.get("type", "docker")
-        
         db.addnode(
             uuid=nodeUuid,
             name=request.form.get("name"),
             hostname=request.form.get("hostname"),
             address=request.form.get("address"),
             url=request.form.get("url", ""),
-            apikey=request.form.get("apikey"),
+            apikey=request.form.get("apikey") or "",
             cpu=int(request.form.get("cpu", 0)),
             ram=int(request.form.get("ram", 0)),
             status=request.form.get("status", "online"),
             tier=request.form.get("tier", "free"),
-            nodeType=nodeType,
-            proxmoxhost=request.form.get("proxmoxhost") if nodeType == "proxmox" else None,
-            proxmoxuser=request.form.get("proxmoxuser") if nodeType == "proxmox" else None,
-            proxmoxpassword=request.form.get("proxmoxpassword") if nodeType == "proxmox" else None,
-            proxmoxnode=request.form.get("proxmoxnode", "pve") if nodeType == "proxmox" else "pve",
-            proxmoxport=int(request.form.get("proxmoxport", 8006)) if nodeType == "proxmox" else 8006,
+            nodeType="proxmox",
+            proxmoxhost=request.form.get("proxmoxhost"),
+            proxmoxuser=request.form.get("proxmoxuser"),
+            proxmoxpassword=request.form.get("proxmoxpassword"),
+            proxmoxnode=request.form.get("proxmoxnode", "pve"),
+            proxmoxport=int(request.form.get("proxmoxport", 8006)),
             proxmoxssl=1 if request.form.get("proxmoxssl") == "1" else 0
         )
-        auditlog("node.create", "node", nodeUuid, f"Registered {nodeType} node '{request.form.get('name')}'")
+        auditlog("node.create", "node", nodeUuid, f"Registered proxmox node '{request.form.get('name')}'")
         flash(f"Node '{request.form.get('name')}' registered successfully.", "success")
     except Exception as e:
         flash("Error creating node.", "danger")
@@ -1818,7 +2263,6 @@ def adminnodesupdate(nodeUuid):
         return redirect(url_for('adminnodes'))
 
     try:
-        nodeType = request.form.get("type") or node.get("type", "docker")
         updateData = {
             "name": request.form.get("name"),
             "hostname": request.form.get("hostname"),
@@ -1827,22 +2271,15 @@ def adminnodesupdate(nodeUuid):
             "ram": int(request.form.get("ram", node.get("ram") or 0)),
             "status": request.form.get("status", node.get("status", "online")),
             "tier": request.form.get("tier", node.get("tier", "free")),
+            "proxmoxhost": request.form.get("proxmoxhost"),
+            "proxmoxuser": request.form.get("proxmoxuser"),
+            "proxmoxnode": request.form.get("proxmoxnode", "pve"),
+            "proxmoxport": int(request.form.get("proxmoxport", 8006)),
+            "proxmoxssl": 1 if request.form.get("proxmoxssl") == "1" else 0,
         }
-
-        if nodeType == "docker":
-            updateData["url"] = request.form.get("url", node.get("url") or "")
-            newKey = request.form.get("apikey")
-            if newKey and newKey.strip() != "":
-                updateData["apikey"] = newKey
-        elif nodeType == "proxmox":
-            updateData["proxmoxhost"] = request.form.get("proxmoxhost")
-            updateData["proxmoxuser"] = request.form.get("proxmoxuser")
-            pvePass = request.form.get("proxmoxpassword")
-            if pvePass and pvePass.strip() != "":
-                updateData["proxmoxpassword"] = pvePass
-            updateData["proxmoxnode"] = request.form.get("proxmoxnode", "pve")
-            updateData["proxmoxport"] = int(request.form.get("proxmoxport", 8006))
-            updateData["proxmoxssl"] = 1 if request.form.get("proxmoxssl") == "1" else 0
+        pvePass = request.form.get("proxmoxpassword")
+        if pvePass and pvePass.strip() != "":
+            updateData["proxmoxpassword"] = pvePass
 
         db.updatenode(nodeUuid, **updateData)
         auditlog("node.update", "node", nodeUuid, f"Updated node '{request.form.get('name')}'")
@@ -1876,13 +2313,8 @@ def adminnodeprofile(nodeUuid):
         flash("Node not found.", "error")
         return redirect(url_for('adminnodes'))
 
-    try:
-        services.probenode(node, timeout=3)
-        node = db.getnode(nodeUuid) or node
-    except Exception:
-        pass
-
-    nodeType = node.get('type', 'docker')
+    # Fast path: DB only. Live probe/stats via /nodes/<uuid>/stats poll in template.
+    nodeType = node.get('type', 'proxmox')
     tab = request.args.get('tab', 'overview')
 
     node['vps_count'] = db.countvpsfornode(node['id'])
@@ -1915,17 +2347,33 @@ def adminnodeprofile(nodeUuid):
 @loginrequired
 @adminrequired
 def adminnodesstatus():
-    """Probe all (or listed) nodes; return uuid→status. Updates online/offline in DB."""
+    """Probe listed nodes in parallel; return uuid→status. Updates online/offline in DB."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     uuids = request.args.getlist("uuid")
-    nodes = db.listallnodes() if not uuids else [n for n in db.listallnodes() if n["uuid"] in set(uuids)]
-    out = {}
-    for n in nodes:
+    alln = db.listallnodes()
+    nodes = alln if not uuids else [n for n in alln if n["uuid"] in set(uuids)]
+    # cap work
+    nodes = nodes[:30]
+    out = {n["uuid"]: n.get("status") or "offline" for n in nodes}
+
+    def _one(n):
         try:
-            services.probenode(n, timeout=3)
+            services.probenode(n, timeout=2)
             fresh = db.getnode(n["uuid"]) or n
-            out[n["uuid"]] = fresh.get("status", "offline")
+            return n["uuid"], fresh.get("status", "offline")
         except Exception:
-            out[n["uuid"]] = "offline"
+            return n["uuid"], "offline"
+
+    if nodes:
+        with ThreadPoolExecutor(max_workers=min(8, len(nodes))) as pool:
+            futs = [pool.submit(_one, n) for n in nodes]
+            for fut in as_completed(futs):
+                try:
+                    uid, st = fut.result()
+                    out[uid] = st
+                except Exception:
+                    pass
     return jsonify({"statuses": out})
 
 
@@ -1938,7 +2386,6 @@ def adminnodestats(nodeUuid):
     if not node:
         return jsonify({"error": "Node not found"}), 404
 
-    nodeType = node.get('type', 'docker')
     ok, raw = services.probenode(node, timeout=5)
     fresh = db.getnode(nodeUuid) or node
     live_status = fresh.get('status', 'offline')
@@ -1949,85 +2396,76 @@ def adminnodestats(nodeUuid):
             "node_status": live_status,
         }), 503
 
-    if nodeType == 'docker':
-        stats = dict(raw or {})
-        stats['node_status'] = live_status
-        return jsonify(stats)
+    status = raw or {}
+    cpu_val = status.get('cpu', 0)
+    cpu_percent = round(cpu_val * 100, 1) if isinstance(cpu_val, (int, float)) else 0
 
-    if nodeType == 'proxmox':
-        status = raw or {}
-        cpu_val = status.get('cpu', 0)
-        cpu_percent = round(cpu_val * 100, 1) if isinstance(cpu_val, (int, float)) else 0
+    memory_info = status.get('memory', {})
+    if isinstance(memory_info, dict):
+        mem_total = memory_info.get('total', 0)
+        mem_used = memory_info.get('used', 0)
+        mem_free = memory_info.get('free', 0)
+    else:
+        mem_total = status.get('memtotal', status.get('maxmem', 0))
+        mem_used = status.get('memused', status.get('mem', 0))
+        mem_free = mem_total - mem_used
 
-        memory_info = status.get('memory', {})
-        if isinstance(memory_info, dict):
-            mem_total = memory_info.get('total', 0)
-            mem_used = memory_info.get('used', 0)
-            mem_free = memory_info.get('free', 0)
-        else:
-            mem_total = status.get('memtotal', status.get('maxmem', 0))
-            mem_used = status.get('memused', status.get('mem', 0))
-            mem_free = mem_total - mem_used
+    mem_percent = round((mem_used / mem_total * 100), 1) if mem_total > 0 else 0
 
-        mem_percent = round((mem_used / mem_total * 100), 1) if mem_total > 0 else 0
+    rootfs_info = status.get('rootfs', {})
+    if isinstance(rootfs_info, dict):
+        disk_total = rootfs_info.get('total', 0)
+        disk_used = rootfs_info.get('used', 0)
+        disk_free = rootfs_info.get('free', rootfs_info.get('avail', 0))
+    else:
+        disk_total = status.get('maxdisk', 0)
+        disk_used = status.get('disk', 0)
+        disk_free = disk_total - disk_used
 
-        rootfs_info = status.get('rootfs', {})
-        if isinstance(rootfs_info, dict):
-            disk_total = rootfs_info.get('total', 0)
-            disk_used = rootfs_info.get('used', 0)
-            disk_free = rootfs_info.get('free', rootfs_info.get('avail', 0))
-        else:
-            disk_total = status.get('maxdisk', 0)
-            disk_used = status.get('disk', 0)
-            disk_free = disk_total - disk_used
+    disk_percent = round((disk_used / disk_total * 100), 1) if disk_total > 0 else 0
 
-        disk_percent = round((disk_used / disk_total * 100), 1) if disk_total > 0 else 0
+    loadavg = status.get('loadavg', [0, 0, 0])
+    if isinstance(loadavg, list) and len(loadavg) >= 3:
+        load_1, load_5, load_15 = loadavg[0], loadavg[1], loadavg[2]
+    else:
+        load_1 = load_5 = load_15 = 0
 
-        loadavg = status.get('loadavg', [0, 0, 0])
-        if isinstance(loadavg, list) and len(loadavg) >= 3:
-            load_1, load_5, load_15 = loadavg[0], loadavg[1], loadavg[2]
-        else:
-            load_1 = load_5 = load_15 = 0
+    stats = {
+        'cpu_percent': cpu_percent,
+        'memory_total': mem_total,
+        'memory_used': mem_used,
+        'memory_free': mem_free,
+        'memory_percent': mem_percent,
+        'disk_total': disk_total,
+        'disk_used': disk_used,
+        'disk_free': disk_free,
+        'disk_percent': disk_percent,
+        'load_1': load_1,
+        'load_5': load_5,
+        'load_15': load_15,
+        'uptime': status.get('uptime', 0),
+        'node_status': live_status,
+    }
 
-        stats = {
-            'cpu_percent': cpu_percent,
-            'memory_total': mem_total,
-            'memory_used': mem_used,
-            'memory_free': mem_free,
-            'memory_percent': mem_percent,
-            'disk_total': disk_total,
-            'disk_used': disk_used,
-            'disk_free': disk_free,
-            'disk_percent': disk_percent,
-            'load_1': load_1,
-            'load_5': load_5,
-            'load_15': load_15,
-            'uptime': status.get('uptime', 0),
-            'node_status': live_status,
-        }
+    # net rates optional; don't fail whole stats if RRD slow/missing
+    stats['network_rx_bytes'] = 0
+    stats['network_tx_bytes'] = 0
+    try:
+        pve = services.getproxmoxclient(node, timeout=5)
+        node_name = node.get('proxmoxnode', 'pve')
+        rrd = pve.nodes(node_name).rrddata.get(timeframe='hour', cf='AVERAGE')
+        if rrd and len(rrd) > 0:
+            latest = rrd[-1]
+            net_in_rate = latest.get('netin', 0) or 0
+            net_out_rate = latest.get('netout', 0) or 0
+            uptime = status.get('uptime', 0) or 0
+            stats['network_rx_bytes'] = int(net_in_rate * uptime) if uptime > 0 else 0
+            stats['network_tx_bytes'] = int(net_out_rate * uptime) if uptime > 0 else 0
+    except Exception:
+        pass
 
-        try:
-            from utils.proxmox import getproxmoxclient
-            pve = getproxmoxclient(node)
-            node_name = node.get('proxmoxnode', 'pve')
-            rrd = pve.nodes(node_name).rrddata.get(timeframe='hour', cf='AVERAGE')
-            if rrd and len(rrd) > 0:
-                latest = rrd[-1]
-                net_in_rate = latest.get('netin', 0) or 0
-                net_out_rate = latest.get('netout', 0) or 0
-                uptime = status.get('uptime', 0)
-                stats['network_rx_bytes'] = int(net_in_rate * uptime) if uptime > 0 else 0
-                stats['network_tx_bytes'] = int(net_out_rate * uptime) if uptime > 0 else 0
-            else:
-                stats['network_rx_bytes'] = 0
-                stats['network_tx_bytes'] = 0
-        except Exception:
-            stats['network_rx_bytes'] = 0
-            stats['network_tx_bytes'] = 0
+    return jsonify(stats)
 
-        return jsonify(stats)
-
-    return jsonify({"error": "Unknown node type"}), 400
 
 @app.route("/dashboard/admin/nodes/<string:nodeUuid>/images")
 @loginrequired
@@ -2074,7 +2512,7 @@ def adminnodenetworkcreate(nodeUuid):
         flash("Node not found.", "error")
         return redirect(url_for('adminnodes'))
 
-    nodeType = node.get('type', 'docker')
+    nodeType = node.get('type', 'proxmox')
     name = request.form.get("name")
     ipv4 = int(request.form.get("ipv4", 0))
     ipv6 = int(request.form.get("ipv6", 1))
@@ -2091,23 +2529,6 @@ def adminnodenetworkcreate(nodeUuid):
     if db.getnetworkbynamenodeid(name, node['id'], network_type=nodeType):
         flash("Network already exists for this node.", "error")
         return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='networks'))
-
-    if nodeType == 'docker':
-        payload = {
-            "name": name, "ipv4": bool(ipv4), "ipv6": bool(ipv6), "nat": False,
-            "dns": [s.strip() for s in dns.split(',') if s.strip()] if dns else [],
-        }
-        if ipv6_subnet:
-            payload["subnet"] = ipv6_subnet
-        if ipv6_gateway:
-            payload["gateway"] = ipv6_gateway
-        result = services.nodeapi(node, "/networks", method="POST", data=payload, timeout=30)
-        if not result:
-            flash("Node unreachable. Could not create network.", "error")
-            return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='networks'))
-        if result.get("error"):
-            flash(f"Node error: {result['error']}", "error")
-            return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='networks'))
 
     netUuid = str(uuid.uuid4())
     db.addnetwork(uuid=netUuid, nodeid=node['id'], name=name, network_type=nodeType,
@@ -2126,7 +2547,7 @@ def adminnodenetworkupdate(nodeUuid, netUuid):
         flash("Node not found.", "error")
         return redirect(url_for('adminnodes'))
 
-    nodeType = node.get('type', 'docker')
+    nodeType = node.get('type', 'proxmox')
     network = db.getnetwork(netUuid, network_type=nodeType)
     if not network:
         flash("Network not found.", "error")
@@ -2150,10 +2571,6 @@ def adminnodenetworkupdate(nodeUuid, netUuid):
         flash("Network already exists for this node.", "error")
         return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='networks'))
 
-    if nodeType == 'docker' and name != network['name']:
-        flash("Docker network names cannot be edited. Delete and recreate network instead.", "error")
-        return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='networks'))
-
     db.updatenetwork(netUuid, network_type=nodeType, name=name, subnet=ipv6_subnet, gateway=ipv6_gateway,
                      ipv4=ipv4, ipv6=ipv6, ipv4_subnet=ipv4_subnet, ipv4_gateway=ipv4_gateway, dns=dns)
     auditlog("network.update", "network", netUuid, f"Updated {nodeType} network '{name}'")
@@ -2169,7 +2586,7 @@ def adminnodenetworkdelete(nodeUuid, netUuid):
         flash("Node not found.", "error")
         return redirect(url_for('adminnodes'))
 
-    nodeType = node.get('type', 'docker')
+    nodeType = node.get('type', 'proxmox')
     network = db.getnetwork(netUuid, network_type=nodeType)
     if not network:
         flash("Network not found.", "error")
@@ -2179,15 +2596,6 @@ def adminnodenetworkdelete(nodeUuid, netUuid):
     if vpsCount > 0:
         flash(f"Cannot delete: {vpsCount} VPS instance(s) using this network.", "error")
         return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='networks'))
-
-    if nodeType == 'docker':
-        info = services.nodeapi(node, f"/networks/{network['name']}", method="GET")
-        if info and not info.get("error"):
-            containers = info.get("containers", {})
-            if containers:
-                flash(f"Cannot delete: {len(containers)} container(s) still connected.", "error")
-                return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='networks'))
-        services.nodeapi(node, f"/networks/{network['name']}", method="DELETE")
 
     db.removenetwork(netUuid, network_type=nodeType)
     auditlog("network.delete", "network", netUuid, f"Deleted network '{network['name']}'")
@@ -2204,7 +2612,7 @@ def adminnodeips(nodeUuid, netUuid):
     if not node:
         return jsonify({"error": "Node not found"}), 404
 
-    nodeType = node.get('type', 'docker')
+    nodeType = node.get('type', 'proxmox')
     network = db.getnetwork(netUuid, network_type=nodeType)
     if not network:
         return jsonify({"error": "Network not found"}), 404
@@ -2238,7 +2646,7 @@ def adminnodeipadd(nodeUuid):
         flash("Node not found.", "error")
         return redirect(url_for('adminnodes'))
 
-    nodeType = node.get('type', 'docker')
+    nodeType = node.get('type', 'proxmox')
     networkid = request.form.get("networkid", type=int)
     ip = request.form.get("ip", "").strip()
     version = request.form.get("version")
@@ -2257,6 +2665,7 @@ def adminnodeipadd(nodeUuid):
             flash("IP does not match selected pool.", "error")
             return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='ips'))
         db.addnetworkip(str(uuid.uuid4()), networkid, ip, network_type=nodeType)
+        auditlog("ip.add", "network", network.get("uuid") or nodeUuid, f"Added {ip} to '{network['name']}' on '{node['name']}'")
         flash(f"IP {ip} added to {network['name']}.", "success")
     except Exception:
         flash("IP already exists or invalid.", "error")
@@ -2271,7 +2680,7 @@ def adminnodeipsgenerate(nodeUuid):
         flash("Node not found.", "error")
         return redirect(url_for('adminnodes'))
 
-    nodeType = node.get('type', 'docker')
+    nodeType = node.get('type', 'proxmox')
     networkid = request.form.get("networkid", type=int)
     baseip = request.form.get("baseip")
     count = request.form.get("count", type=int)
@@ -2303,8 +2712,32 @@ def adminnodeipdelete(nodeUuid, ipUuid):
     if ip and ip['assigned']:
         flash("Cannot delete an assigned IP.", "error")
     else:
+        ipAddr = (ip or {}).get("ip") or ipUuid
         db.removenetworkip(ipUuid)
+        auditlog("ip.delete", "network", nodeUuid, f"Removed IP {ipAddr}")
         flash("IP removed.", "warning")
+    return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='ips'))
+
+@app.route("/dashboard/admin/nodes/<string:nodeUuid>/ips/bulk-delete", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminnodeipsbulkdelete(nodeUuid):
+    node = db.getnode(nodeUuid)
+    if not node:
+        flash("Node not found.", "error")
+        return redirect(url_for('adminnodes'))
+
+    uuids = request.form.getlist("uuids")
+    if not uuids:
+        flash("No IPs selected.", "error")
+        return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='ips'))
+
+    deleted = db.removenetworkips(uuids)
+    if deleted:
+        auditlog("ip.bulk_delete", "network", nodeUuid, f"Bulk removed {deleted} IP(s)")
+        flash(f"Removed {deleted} IP(s).", "warning")
+    else:
+        flash("No free IPs deleted (assigned IPs are skipped).", "error")
     return redirect(url_for('adminnodeprofile', nodeUuid=nodeUuid, tab='ips'))
 
 # --- Node Profile: Storage Pool Management ---
@@ -2492,7 +2925,7 @@ def adminosimagecreate():
             image=request.form.get("image"),
             description=request.form.get("description"),
             active=int(request.form.get("active", 1)),
-            node_type=request.form.get("node_type", "docker"),
+            node_type=request.form.get("node_type", "proxmox"),
             os_type=request.form.get("os_type", "linux")
         )
         auditlog("image.create", "image", None, f"Added OS image '{request.form.get('name')}'")
@@ -2511,7 +2944,7 @@ def adminosimageupdate(imageUuid):
             "image": request.form.get("image"),
             "description": request.form.get("description"),
             "active": int(request.form.get("active")),
-            "node_type": request.form.get("node_type", "docker"),
+            "node_type": request.form.get("node_type", "proxmox"),
             "os_type": request.form.get("os_type", "linux")
         }
         db.updateimage(imageUuid, **updateData)
@@ -2553,6 +2986,11 @@ def adminosimageassign(imageUuid):
     if not node:
         flash("Node not found.", "error")
         return redirect(url_for('adminosimage'))
+
+    if not imagestorageid and node.get('type', 'proxmox') == 'proxmox':
+        default = db.getdefaultimagestorage(nodeid)
+        if default:
+            imagestorageid = default['id']
 
     db.addimagetonode(nodeid, image['id'], imagestorageid=imagestorageid)
     auditlog("image.assign", "image", imageUuid, f"Assigned image '{image['name']}' to node '{node['name']}'")
@@ -2781,6 +3219,12 @@ SETTINGS_SCHEMA = {
     "general": {
         "projectname": {"label": "Project Name", "type": "text", "desc": "Displayed in the header and title."},
         "theme": {"label": "Theme", "type": "theme", "desc": "Color theme for the entire UI."},
+        "timezone": {
+            "label": "Timezone",
+            "type": "select",
+            "options": list(timeutil.COMMON_TIMEZONES),
+            "desc": "IANA timezone for billing periods, renewals, suspend checks, and displayed dates.",
+        },
         "passwordlength": {"label": "Password Length", "type": "number", "desc": "Generated password length."},
         "cookielength": {"label": "Cookie Length", "type": "number", "desc": "Session cookie length."},
         "defaultcookiettl": {"label": "Session TTL (days)", "type": "number", "desc": "Days before session expires."},
@@ -2809,6 +3253,44 @@ SETTINGS_SCHEMA = {
     "network": {
         "ip_source": {"label": "IP Source", "type": "select", "options": ["remote_addr", "x_forwarded_for", "x_real_ip"], "desc": "Source for session and audit log IPs."},
     },
+    "billing": {
+        "paid_period_days": {"label": "Paid period (days)", "type": "number", "desc": "How long a paid VPS stays active after payment before it is due again. Early payment stacks."},
+        "free_period_days": {"label": "Free period (days)", "type": "number", "desc": "Free VPS period length. Renew resets to this many days from now (cap, no stack). Auto-suspend if not renewed."},
+        "warn_days": {"label": "Warning window (days)", "type": "number", "desc": "Show free/paid renewal warnings this many days before period ends. 0 = only on due day / overdue."},
+        "free_renew_cooldown_hours": {"label": "Free renew cooldown (hours)", "type": "number", "desc": "Minimum hours between free renewals for a VPS (e.g. 24 for once per day). 0 = no cooldown."},
+    },
+    "ratelimit": {
+        "enabled": {"label": "Enable rate limits", "type": "bool", "desc": "In-process limits per IP/user. Disable only for trusted internal use."},
+        "global": {"label": "Global (per IP)", "type": "text", "desc": "All non-static requests. Format: N/minute, N/hour, N/second."},
+        "login": {"label": "Login", "type": "text", "desc": "Password login attempts per IP."},
+        "discord": {"label": "Discord OAuth", "type": "text", "desc": "Discord login + callback per IP."},
+        "create_vps_free": {"label": "Create Free VPS", "type": "text", "desc": "Free VPS creation limit per user (e.g. 2/day)."},
+        "create_vps_paid": {"label": "Create Paid VPS", "type": "text", "desc": "Paid VPS creation limit per user (e.g. 10/hour)."},
+        "renew": {"label": "Free renew", "type": "text", "desc": "Free VPS renewals per user."},
+        "ticket": {"label": "Tickets", "type": "text", "desc": "Ticket create + reply per user."},
+        "console": {"label": "Console token", "type": "text", "desc": "Console open requests per user."},
+        "checkout": {"label": "Checkout", "type": "text", "desc": "Payment start attempts per user."},
+    },
+    "captcha": {
+        "enabled": {"label": "Enable captcha", "type": "bool", "desc": "Require anti-bot math captcha on VPS creation, support tickets, and forms."},
+        "url": {"label": "API Base URL", "type": "text", "desc": "Base URL of captcha REST service (e.g. http://localhost:8000)."},
+        "api_key": {"label": "API Key", "type": "password", "desc": "Optional X-API-Key required by captcha service."},
+    },
+    "worker": {
+        "enabled_in_web": {"label": "Run worker inside web process", "type": "bool", "desc": "On for single-process dev. Off in production with gunicorn multi-worker — run `python worker.py` instead."},
+        "poll_seconds": {"label": "Job poll interval (s)", "type": "number", "desc": "How often to check for pending jobs when idle."},
+        "maintenance_seconds": {"label": "Maintenance interval (s)", "type": "number", "desc": "Billing expiry, overdue suspend, stuck delete requeue."},
+        "stale_job_minutes": {"label": "Stale job reclaim (min)", "type": "number", "desc": "Re-queue jobs stuck in running longer than this (crash recovery)."},
+    },
+    "database": {
+        "engine": {"label": "Engine", "type": "select", "options": ["sqlite", "mysql"], "desc": "Database engine. Restart panel after save."},
+        "sqlite_path": {"label": "SQLite Path", "type": "text", "desc": "Relative to client/ or absolute path."},
+        "mysql_host": {"label": "MySQL Host", "type": "text", "desc": "MySQL / MariaDB host."},
+        "mysql_port": {"label": "MySQL Port", "type": "number", "desc": "Default 3306."},
+        "mysql_user": {"label": "MySQL User", "type": "text", "desc": "Database user."},
+        "mysql_password": {"label": "MySQL Password", "type": "password", "desc": "Leave blank to keep current."},
+        "mysql_database": {"label": "MySQL Database", "type": "text", "desc": "Database name (created if missing via createdb.py)."},
+    },
 }
 
 
@@ -2817,8 +3299,8 @@ SETTINGS_SCHEMA = {
 @adminrequired
 def adminsettingsreload():
     reloadconfig()
-    auditlog("settings.reload", "settings", None, "Reloaded config from database")
-    flash("Configuration reloaded from database.", "success")
+    auditlog("settings.reload", "settings", None, "Reloaded config from config.json")
+    flash("Configuration reloaded from config.json.", "success")
     return redirect(url_for('adminsettings'))
 
 
@@ -2828,52 +3310,125 @@ def adminsettingsreload():
 def adminsettings():
     if request.method == "POST":
         section = request.form.get("section")
-        if section and section in SETTINGS_SCHEMA:
+        if section == "database":
+            # Connection details live in db_config.json (needed before DB connect)
+            fileCfg = dbconfig.load()
+            engine = (request.form.get("engine") or fileCfg.get("engine") or "sqlite").lower().strip()
+            if engine not in ("sqlite", "mysql"):
+                engine = "sqlite"
+            sqlite_path = (request.form.get("sqlite_path") or "").strip() or fileCfg["sqlite"]["path"]
+            mysql_host = (request.form.get("mysql_host") or "").strip() or fileCfg["mysql"]["host"]
+            try:
+                mysql_port = int((request.form.get("mysql_port") or "").strip() or fileCfg["mysql"]["port"])
+            except ValueError:
+                mysql_port = 3306
+            mysql_user = (request.form.get("mysql_user") or "").strip() or fileCfg["mysql"]["user"]
+            mysql_password = request.form.get("mysql_password") or ""
+            if not mysql_password.strip():
+                mysql_password = fileCfg["mysql"].get("password") or ""
+            mysql_database = (request.form.get("mysql_database") or "").strip() or fileCfg["mysql"]["database"]
+            try:
+                dbconfig.save({
+                    "engine": engine,
+                    "sqlite": {"path": sqlite_path},
+                    "mysql": {
+                        "host": mysql_host,
+                        "port": mysql_port,
+                        "user": mysql_user,
+                        "password": mysql_password,
+                        "database": mysql_database,
+                        "charset": fileCfg["mysql"].get("charset") or "utf8mb4",
+                    },
+                })
+                auditlog("settings.update", "settings", None, f"Updated database engine to {engine}")
+                flash("Database settings saved to db_config.json. Restart the panel for changes to take effect. Run createdb.py after switching to MySQL.", "success")
+            except Exception as e:
+                flash(f"Failed to save database config: {e}", "error")
+            return redirect(url_for('adminsettings'))
+
+        if section and section in SETTINGS_SCHEMA and section != "database":
+            section_vals = dict(config.get(section, {}))
             for key, meta in SETTINGS_SCHEMA[section].items():
-                flatkey = f"{section}.{key}"
                 if meta['type'] == 'bool':
                     val = request.form.get(key) in ('on', '1', 'true', 'True')
                 elif meta['type'] == 'number':
                     raw = (request.form.get(key) or '').strip()
+                    default_num = DEFAULT_CONFIG.get(section, {}).get(key, 0)
                     try:
-                        val = int(raw) if raw else DEFAULT_CONFIG.get(section, {}).get(key, 0)
+                        # allow float for poll_seconds etc.
+                        if isinstance(default_num, float) or (raw and '.' in raw):
+                            val = float(raw) if raw else float(default_num or 0)
+                        else:
+                            val = int(raw) if raw else int(default_num or 0)
                     except ValueError:
-                        val = DEFAULT_CONFIG.get(section, {}).get(key, 0)
+                        val = default_num
                 elif meta['type'] == 'theme':
                     val = request.form.get(key) or DEFAULT_CONFIG.get(section, {}).get(key, 'catppuccin')
                     valid = {t['id'] for t in THEMES}
                     if val not in valid:
                         val = 'catppuccin'
+                elif key == 'timezone':
+                    val = (request.form.get(key) or '').strip() or 'UTC'
+                    try:
+                        from zoneinfo import ZoneInfo
+                        ZoneInfo(val)
+                    except Exception:
+                        val = 'UTC'
+                    if val not in timeutil.COMMON_TIMEZONES:
+                        # allow custom IANA if valid ZoneInfo above
+                        pass
                 else:
                     val = (request.form.get(key) or '').strip()
                     if not val and key in DEFAULT_CONFIG.get(section, {}):
-                        # keep existing non-empty secret if password field left blank
                         if meta['type'] == 'password':
-                            existing = db.getsetting(flatkey)
+                            existing = section_vals.get(key) or config.get(section, {}).get(key)
                             if existing:
                                 continue
-                db.setsetting(flatkey, val, f"{section} → {meta.get('label', key)}")
+                    if not val and meta['type'] == 'password':
+                        continue
+                section_vals[key] = val
+            appconfig.update_section(section, section_vals)
             auditlog("settings.update", "settings", None, f"Updated {section} settings")
             reloadconfig()
-            flash(f"{section.title()} settings saved.", "success")
+            flash(f"{section.title()} settings saved to config.json.", "success")
         else:
             flash("Unknown settings section.", "error")
         return redirect(url_for('adminsettings'))
 
-    # Prefer live DB values for the form (config may lag if reload failed historically)
     live = {}
+    file_cfg = appconfig.load()
+    # ensure timezone select includes current value
+    tz_opts = list(timeutil.COMMON_TIMEZONES)
+    cur_tz = (file_cfg.get("general") or {}).get("timezone") or config.get("general", {}).get("timezone") or "UTC"
+    if cur_tz not in tz_opts:
+        tz_opts = [cur_tz] + tz_opts
+    SETTINGS_SCHEMA["general"]["timezone"]["options"] = tz_opts
+
     for section, fields in SETTINGS_SCHEMA.items():
+        if section == "database":
+            continue
         live[section] = {}
         for key in fields:
             default = DEFAULT_CONFIG.get(section, {}).get(key, '')
-            live[section][key] = db.getsetting(f"{section}.{key}", config.get(section, {}).get(key, default))
+            live[section][key] = file_cfg.get(section, {}).get(key, config.get(section, {}).get(key, default))
+
+    fileCfg = dbconfig.load()
+    live["database"] = {
+        "engine": fileCfg.get("engine", "sqlite"),
+        "sqlite_path": fileCfg.get("sqlite", {}).get("path", "database.db"),
+        "mysql_host": fileCfg.get("mysql", {}).get("host", "127.0.0.1"),
+        "mysql_port": fileCfg.get("mysql", {}).get("port", 3306),
+        "mysql_user": fileCfg.get("mysql", {}).get("user", "root"),
+        "mysql_password": fileCfg.get("mysql", {}).get("password") or "",
+        "mysql_database": fileCfg.get("mysql", {}).get("database", "openworld"),
+    }
 
     return render_template(
         "adminsettings.html",
         config=live,
         schema=SETTINGS_SCHEMA,
         defaults=DEFAULT_CONFIG,
-        current_theme_global=db.getsetting("general.theme", "catppuccin"),
+        current_theme_global=config.get("general", {}).get("theme", "catppuccin"),
         **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo)
     )
@@ -2969,6 +3524,15 @@ def login():
         return redirect(url_for("logout"))
 
     if request.method == "POST":
+        limited = checkratelimit("login", "login", "10/minute")
+        if limited:
+            return limited
+        cid = request.form.get("captcha_id")
+        ans = request.form.get("captcha_answer")
+        if captcha.is_enabled() and cid:
+            if not captcha.verify_captcha(cid, ans):
+                flash("Invalid or expired captcha answer.", "error")
+                return render_template("login.html", **guestuserinfo())
         email = request.form.get("email")
         password = request.form.get("password")
 
@@ -3009,6 +3573,9 @@ def login():
 
 @app.route("/discord-login")
 def discordlogin():
+    limited = checkratelimit("discord", "discord", "20/minute")
+    if limited:
+        return limited
     discordAuthUrl = (
         f"{config['discord']['discordbaseurl']}/oauth2/authorize?client_id={config['discord']['clientid']}"
         f"&redirect_uri={config['discord']['redirecturl']}&response_type=code&scope=identify%20email"
@@ -3018,6 +3585,9 @@ def discordlogin():
 
 @app.route("/discord-callback")
 def discordcallback():
+    limited = checkratelimit("discord", "discord", "20/minute")
+    if limited:
+        return limited
     code = request.args.get("code")
     if not code:
         flash("Discord login failed.", "error")
@@ -3068,6 +3638,10 @@ def discordcallback():
     userIp = getclientip()
     userAgent = request.headers.get("User-Agent", "unknown")
     rawToken = services.createsession(user["id"], userIp, userAgent, ttlDays=SESSION_TTL_DAYS)
+
+    g.userinfo = user
+    auditlog("user.login", "user", user["id"], f"Discord login from {userIp}")
+    g.userinfo = None
 
     response = make_response(redirect(url_for("dashboard")))
     response.set_cookie(
@@ -3122,6 +3696,15 @@ def tickets():
 @loginrequired
 def createticket():
     """Create a new support ticket."""
+    limited = checkratelimit("ticket", "ticket", "15/hour", identity=g.userinfo["id"])
+    if limited:
+        return limited
+    cid = request.form.get("captcha_id")
+    ans = request.form.get("captcha_answer")
+    if captcha.is_enabled() and cid:
+        if not captcha.verify_captcha(cid, ans):
+            flash("Invalid or expired captcha answer.", "error")
+            return redirect(url_for('tickets'))
     subject = request.form.get("subject", "").strip()
     priority = request.form.get("priority", "normal")
     message = request.form.get("message", "").strip()
@@ -3139,6 +3722,7 @@ def createticket():
     if ticket:
         # Add initial message
         db.addticketmessage(ticket['id'], g.userinfo['id'], message, is_staff=0)
+        auditlog("ticket.create", "ticket", ticket_uuid, f"Created ticket: {subject} ({priority})")
         flash("Support ticket created successfully.", "success")
         return redirect(url_for('viewticket', ticket_uuid=ticket_uuid))
     else:
@@ -3168,6 +3752,15 @@ def viewticket(ticket_uuid):
 @loginrequired
 def replyticket(ticket_uuid):
     """Add a reply to a ticket."""
+    limited = checkratelimit("ticket", "ticket", "15/hour", identity=g.userinfo["id"])
+    if limited:
+        return limited
+    cid = request.form.get("captcha_id")
+    ans = request.form.get("captcha_answer")
+    if captcha.is_enabled() and cid:
+        if not captcha.verify_captcha(cid, ans):
+            flash("Invalid or expired captcha answer.", "error")
+            return redirect(url_for('viewticket', ticket_uuid=ticket_uuid))
     ticket = db.getticket(ticket_uuid)
     
     if not ticket:
@@ -3186,6 +3779,8 @@ def replyticket(ticket_uuid):
     
     is_staff = 1 if g.userinfo['role'] == 'admin' else 0
     db.addticketmessage(ticket['id'], g.userinfo['id'], message, is_staff=is_staff)
+    who = "staff" if is_staff else "user"
+    auditlog("ticket.reply", "ticket", ticket_uuid, f"{who} reply on ticket: {ticket.get('subject', ticket_uuid)}")
     
     flash("Reply added successfully.", "success")
     return redirect(url_for('viewticket', ticket_uuid=ticket_uuid))
@@ -3215,22 +3810,42 @@ def pagenotfound(e):
 @loginrequired
 @adminrequired
 def worker_status():
-    """Check if the job worker is running."""
-    status = "running" if worker_thread and worker_thread.is_alive() else "stopped"
+    """Job worker health: in-process thread and/or external heartbeat file."""
+    cfg = _worker_cfg()
+    inproc = bool(worker_thread and worker_thread.is_alive())
+    hb = _read_worker_heartbeat(max_age=max(90, cfg["maintenance_seconds"] * 2))
+    external = bool(hb and hb.get("fresh"))
+    counts = {}
+    try:
+        counts = db.countjobsbystatus()
+    except Exception:
+        pass
+    ok = inproc or external or (not cfg["enabled_in_web"] and external)
+    # If web-embedded expected, require thread; if disabled, require heartbeat
+    if cfg["enabled_in_web"]:
+        healthy = inproc
+    else:
+        healthy = external
     return jsonify({
-        "worker_status": status,
-        "message": f"Job worker is {status}"
-    })
+        "healthy": healthy,
+        "enabled_in_web": cfg["enabled_in_web"],
+        "in_process": inproc,
+        "external_heartbeat": hb,
+        "external_fresh": external,
+        "job_counts": counts,
+        "pid": os.getpid(),
+        "message": (
+            "ok" if healthy else
+            ("in-web worker dead" if cfg["enabled_in_web"] else "no fresh worker heartbeat — start python worker.py")
+        ),
+    }), (200 if healthy else 503)
 
 
 if __name__ == "__main__":
-    # Ensure job worker is running
-    if worker_thread is None or not worker_thread.is_alive():
-        worker_thread = threading.Thread(target=_jobworker, daemon=True, name="JobWorker")
-        worker_thread.start()
-    
+    if _worker_cfg()["enabled_in_web"]:
+        start_job_worker()
     app.run(
-        host=config["server"]["host"], 
-        port=config["server"]["port"], 
-        debug=config["server"]["debug"]
+        host=config["server"]["host"],
+        port=config["server"]["port"],
+        debug=config["server"]["debug"],
     )

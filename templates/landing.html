@@ -29,7 +29,7 @@
   <div class="terminal-body">
 <span class="prompt">$</span> create --image ubuntu-22.04 --cpu 1 --ram 512M --disk 5G
 <span class="flag">✔</span> Provisioning container payload...
-<span class="flag">✔</span> Establishing sysbox namespaces...
+<span class="flag">✔</span> Creating Proxmox LXC container...
 <span class="flag">✔</span> Booting systemd init...
 
 <span class="val">Instance openworld-1 created successfully.</span>
@@ -59,7 +59,7 @@ root@openworld-1:~# <span class="cursor"></span>
     <span style="font-size: 24px; color: var(--warn); margin-bottom: 12px; display: block;">◒</span>
     <h3 style="font-size: 15px; font-family: var(--font-sans); color: var(--text); font-weight: 600;">System Containers</h3>
     <p style="color: var(--text-dim); font-size: 13.5px; margin: 0;">
-      We use highly modified Docker/Sysbox runtimes instead of heavy KVM hypervisors. This drastically reduces hardware overhead while still giving you full systemd access.
+      We run Proxmox LXC system containers instead of heavy KVM hypervisors. This drastically reduces hardware overhead while still giving you full systemd access.
     </p>
   </div>
 

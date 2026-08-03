@@ -13,7 +13,6 @@
         letter-spacing: 0.04em;
         flex-shrink: 0;
     }
-    .type-docker { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid #3b82f6; }
     .type-proxmox { background: rgba(234,88,12,0.15); color: #f97316; border: 1px solid #ea580c; }
 
     /* Plan card button resets */
@@ -121,7 +120,7 @@
                         {% else %}
                         <span class="type-badge" style="background: rgba(255,215,0,0.12); color: #ffd700; border: 1px solid #ffd700;">PAID</span>
                         {% endif %}
-                        <span class="type-badge type-{{ plan.node_type|default('docker') }}">{{ plan.node_type|default('docker')|upper }}</span>
+                        <span class="type-badge type-{{ plan.node_type|default('proxmox') }}">{{ plan.node_type|default('proxmox')|upper }}</span>
                     </div>
                 </div>
 
@@ -187,7 +186,7 @@
                         <img src="{{ img.os_meta.icon }}" alt="{{ img.os_meta.name }} logo">
                         <span>
                             <span class="image-choice-name">{{ img.name }}</span>
-                            <span class="image-choice-meta">{{ img.os_meta.name }} · {{ img.node_type|default('docker') }}</span>
+                            <span class="image-choice-meta">{{ img.os_meta.name }} · {{ img.node_type|default('proxmox') }}</span>
                         </span>
                     </label>
                     {% endfor %}
@@ -196,6 +195,8 @@
                     Hostname and password will be generated automatically and shown after deployment.
                 </p>
             </div>
+
+            {% include '_captcha.html' %}
 
             <div class="modal-actions" style="margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px;">
                 <button type="button" class="btn" onclick="closeModal('deployModal')">Cancel</button>

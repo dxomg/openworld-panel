@@ -4,24 +4,76 @@
 
 {% block content %}
 <style>
-    .settings-stack {
+    .settings-layout {
+        display: grid;
+        grid-template-columns: 200px minmax(0, 1fr);
+        gap: 28px;
+        align-items: start;
+        max-width: 960px;
+    }
+    .settings-nav {
+        position: sticky;
+        top: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 12px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+    }
+    .settings-nav-label {
+        font-family: var(--font-mono);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-faint);
+        padding: 8px 10px 6px;
+    }
+    .settings-nav a {
+        display: block;
+        padding: 8px 10px;
+        border-radius: var(--radius);
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-dim);
+        text-decoration: none;
+        transition: background 0.12s, color 0.12s;
+    }
+    .settings-nav a:hover {
+        color: var(--text);
+        background: var(--bg-raise);
+    }
+    .settings-nav a.is-active {
+        color: var(--accent);
+        background: var(--accent-glow);
+        font-weight: 600;
+    }
+    .settings-nav-group + .settings-nav-label {
+        margin-top: 8px;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-soft);
+    }
+    .settings-main {
         display: flex;
         flex-direction: column;
         gap: 20px;
-        max-width: 720px;
+        min-width: 0;
     }
     .settings-card {
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: var(--radius);
         padding: 22px 24px;
+        scroll-margin-top: 24px;
     }
     .settings-card-head {
         display: flex;
         justify-content: space-between;
-        align-items: baseline;
+        align-items: flex-start;
         gap: 12px;
-        margin-bottom: 18px;
+        margin-bottom: 8px;
         padding-bottom: 12px;
         border-bottom: 1px solid var(--border-soft);
     }
@@ -32,16 +84,44 @@
         color: var(--accent);
         text-transform: uppercase;
         letter-spacing: 0.06em;
+        margin: 0 0 4px;
+    }
+    .settings-card-blurb {
         margin: 0;
+        font-size: 12px;
+        color: var(--text-dim);
+        line-height: 1.45;
+        font-weight: 400;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+    .settings-card-note {
+        color: var(--text-dim);
+        font-size: 13px;
+        margin: 0 0 16px;
+        line-height: 1.5;
+        padding: 10px 12px;
+        background: var(--bg-raise);
+        border-radius: var(--radius);
+        border: 1px solid var(--border-soft);
     }
     .settings-fields {
         display: flex;
         flex-direction: column;
         gap: 16px;
+        margin-top: 16px;
     }
-    .settings-fields .field {
-        margin: 0;
+    .settings-fields.two-col {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
     }
+    .settings-fields.two-col .field-span-2,
+    .settings-fields.two-col .settings-bool,
+    .settings-fields.two-col .field-theme {
+        grid-column: 1 / -1;
+    }
+    .settings-fields .field { margin: 0; }
     .settings-fields .field label {
         display: block;
         margin-bottom: 6px;
@@ -70,10 +150,7 @@
         margin-top: 2px;
         flex-shrink: 0;
     }
-    .settings-bool-body {
-        min-width: 0;
-        flex: 1;
-    }
+    .settings-bool-body { min-width: 0; flex: 1; }
     .settings-bool-label {
         font-family: var(--font-mono);
         font-size: 13px;
@@ -140,6 +217,37 @@
         font-weight: 600;
         color: var(--text);
     }
+    .settings-hero-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        margin-top: 10px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--text-dim);
+    }
+    .settings-hero-meta strong { color: var(--text); }
+    @media (max-width: 800px) {
+        .settings-layout {
+            grid-template-columns: 1fr;
+        }
+        .settings-nav {
+            position: static;
+            flex-direction: row;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .settings-nav-label { display: none; }
+        .settings-nav a {
+            padding: 6px 10px;
+            border: 1px solid var(--border-soft);
+            font-size: 11px;
+        }
+        .settings-nav-group + .settings-nav-label { display: none; }
+        .settings-fields.two-col {
+            grid-template-columns: 1fr;
+        }
+    }
 </style>
 
 <section class="hero">
@@ -147,7 +255,12 @@
     <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap;">
         <div>
             <h1>Settings</h1>
-            <p>Global panel configuration. Each section saves independently.</p>
+            <p>Panel configuration. Each section saves on its own.</p>
+            <div class="settings-hero-meta">
+                {% if app_timezone %}<span>Timezone <strong>{{ app_timezone }}</strong></span>{% endif %}
+                <span>App config <strong>config.json</strong></span>
+                <span>DB DSN <strong>db_config.json</strong></span>
+            </div>
         </div>
         <form method="POST" action="{{ url_for('adminsettingsreload') }}" style="margin: 0;">
             <button type="submit" class="btn btn-small">Reload Config</button>
@@ -155,110 +268,200 @@
     </div>
 </section>
 
-<div class="settings-stack">
-    {% for section, fields in schema.items() %}
-    <div class="settings-card" id="settings-{{ section }}">
-        <div class="settings-card-head">
-            <h2 class="settings-card-title">{{ section }}</h2>
+{% set section_meta = {
+    'general': {'title': 'General', 'blurb': 'Branding, theme, timezone, and session defaults.', 'group': 'Panel', 'twocol': true},
+    'billing': {'title': 'Billing', 'blurb': 'Paid and free renewal periods and warning window.', 'group': 'Panel', 'twocol': true},
+    'console': {'title': 'Console', 'blurb': 'SSH console timeout and live metrics mode.', 'group': 'Panel', 'twocol': true},
+    'network': {'title': 'Network', 'blurb': 'How client IPs are read for sessions and audit logs.', 'group': 'Panel', 'twocol': false},
+    'loadbalancing': {'title': 'Load balancing', 'blurb': 'How new VPS instances are placed on nodes.', 'group': 'Panel', 'twocol': false},
+    'ratelimit': {'title': 'Rate limits', 'blurb': 'Per-IP and per-user request caps. Format N/minute or N/hour.', 'group': 'Panel', 'twocol': true},
+    'captcha': {'title': 'Captcha', 'blurb': 'Anti-bot math captcha verification for form submissions.', 'group': 'Panel', 'twocol': true},
+    'discord': {'title': 'Discord OAuth', 'blurb': 'Login application credentials and callback URL.', 'group': 'Integrations', 'twocol': true},
+    'paypal': {'title': 'PayPal', 'blurb': 'Payments receiver, sandbox, and public base URL for IPN.', 'group': 'Integrations', 'twocol': true},
+    'worker': {'title': 'Job worker', 'blurb': 'Background jobs, billing maintenance, crash reclaim.', 'group': 'System', 'twocol': true},
+    'database': {'title': 'Database', 'blurb': 'Engine and connection. Restart required after change.', 'group': 'System', 'twocol': true},
+} %}
+
+{% set nav_groups = [
+    ('Panel', ['general', 'billing', 'console', 'network', 'loadbalancing', 'ratelimit', 'captcha']),
+    ('Integrations', ['discord', 'paypal']),
+    ('System', ['worker', 'database']),
+] %}
+
+<div class="settings-layout">
+    <nav class="settings-nav" aria-label="Settings sections">
+        {% for group_name, keys in nav_groups %}
+        <div class="settings-nav-label{% if not loop.first %} settings-nav-group{% endif %}">{{ group_name }}</div>
+        {% for key in keys %}
+        {% if key in schema %}
+        <a href="#settings-{{ key }}" data-settings-nav="{{ key }}">{{ section_meta.get(key, {}).get('title', key|title) }}</a>
+        {% endif %}
+        {% endfor %}
+        {% endfor %}
+    </nav>
+
+    <div class="settings-main">
+        {% for group_name, keys in nav_groups %}
+        {% for section in keys %}
+        {% if section in schema %}
+        {% set fields = schema[section] %}
+        {% set meta_s = section_meta.get(section, {}) %}
+        <div class="settings-card" id="settings-{{ section }}" data-settings-section="{{ section }}">
+            <div class="settings-card-head">
+                <div>
+                    <h2 class="settings-card-title">{{ meta_s.get('title', section|title) }}</h2>
+                    {% if meta_s.get('blurb') %}
+                    <p class="settings-card-blurb">{{ meta_s.blurb }}</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if section == 'database' %}
+            <p class="settings-card-note">
+                Stored in <code>db_config.json</code>. Restart the panel after save.
+                After switching to MySQL, run <code>python createdb.py</code> once.
+            </p>
+            {% elif section == 'worker' %}
+            <p class="settings-card-note">
+                For multi-worker gunicorn, turn off “Run worker inside web process” and run
+                <code>python worker.py</code> as a separate service.
+            </p>
+            {% endif %}
+
+            <form method="POST" action="{{ url_for('adminsettings') }}">
+                <input type="hidden" name="section" value="{{ section }}">
+
+                <div class="settings-fields{% if meta_s.get('twocol') %} two-col{% endif %}">
+                    {% for key, meta in fields.items() %}
+                    {% set current = config.get(section, {}).get(key, '') %}
+                    {% set default = defaults.get(section, {}).get(key, '') %}
+                    {% set span2 = meta.type in ['theme', 'bool'] or key in ['discord', 'base_url', 'redirecturl', 'discordbaseurl', 'sqlite_path'] %}
+
+                    {% if meta.type == 'bool' %}
+                    <div class="settings-bool">
+                        <input type="checkbox" name="{{ key }}" id="{{ section }}_{{ key }}" value="1"
+                            {% if current %}checked{% endif %}>
+                        <div class="settings-bool-body">
+                            <label class="settings-bool-label" for="{{ section }}_{{ key }}">{{ meta.label }}</label>
+                            {% if meta.desc %}<div class="settings-bool-desc">{{ meta.desc }}</div>{% endif %}
+                        </div>
+                    </div>
+
+                    {% elif meta.type == 'theme' %}
+                    <div class="field field-theme field-span-2">
+                        <label>{{ meta.label }}</label>
+                        <div class="theme-grid">
+                            {% for theme in themes %}
+                            <label class="theme-card {% if current_theme_global == theme.id or current == theme.id %}selected{% endif %}"
+                                   for="theme_{{ theme.id }}">
+                                <input type="radio" name="{{ key }}" id="theme_{{ theme.id }}" value="{{ theme.id }}"
+                                    {% if current_theme_global == theme.id or current == theme.id %}checked{% endif %}
+                                    onchange="document.querySelectorAll('.theme-card').forEach(function(c){c.classList.remove('selected')}); this.closest('.theme-card').classList.add('selected');">
+                                <div class="theme-swatch">
+                                    {% if theme.id == 'midnight' %}
+                                    <span style="background:#0B1220"></span><span style="background:#4FD1C5"></span><span style="background:#E2574C"></span><span style="background:#DCE6F5"></span>
+                                    {% elif theme.id == 'catppuccin' %}
+                                    <span style="background:#1e1e2e"></span><span style="background:#cba6f7"></span><span style="background:#f38ba8"></span><span style="background:#cdd6f4"></span>
+                                    {% elif theme.id == 'dracula' %}
+                                    <span style="background:#282a36"></span><span style="background:#50fa7b"></span><span style="background:#ff5555"></span><span style="background:#f8f8f2"></span>
+                                    {% elif theme.id == 'nord' %}
+                                    <span style="background:#2e3440"></span><span style="background:#88c0d0"></span><span style="background:#bf616a"></span><span style="background:#eceff4"></span>
+                                    {% elif theme.id == 'gruvbox' %}
+                                    <span style="background:#282828"></span><span style="background:#b8bb26"></span><span style="background:#fb4934"></span><span style="background:#ebdbb2"></span>
+                                    {% elif theme.id == 'tokyonight' %}
+                                    <span style="background:#1a1b26"></span><span style="background:#7aa2f7"></span><span style="background:#f7768e"></span><span style="background:#c0caf5"></span>
+                                    {% elif theme.id == 'solarized' %}
+                                    <span style="background:#002b36"></span><span style="background:#2aa198"></span><span style="background:#dc322f"></span><span style="background:#839496"></span>
+                                    {% endif %}
+                                </div>
+                                <div class="theme-card-name">{{ theme.name }}</div>
+                            </label>
+                            {% endfor %}
+                        </div>
+                        {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
+                    </div>
+
+                    {% elif meta.type == 'select' %}
+                    <div class="field{% if span2 %} field-span-2{% endif %}">
+                        <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
+                        <select name="{{ key }}" id="{{ section }}_{{ key }}">
+                            {% for opt in meta.options %}
+                            <option value="{{ opt }}" {% if current == opt %}selected{% endif %}>{{ opt }}</option>
+                            {% endfor %}
+                        </select>
+                        {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
+                    </div>
+
+                    {% elif meta.type == 'password' %}
+                    <div class="field{% if span2 %} field-span-2{% endif %}">
+                        <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
+                        <input type="password" name="{{ key }}" id="{{ section }}_{{ key }}"
+                            value="" placeholder="{% if current %}•••••••• (unchanged if blank){% else %}{{ default }}{% endif %}"
+                            autocomplete="new-password">
+                        {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
+                    </div>
+
+                    {% elif meta.type == 'number' %}
+                    <div class="field">
+                        <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
+                        <input type="number" name="{{ key }}" id="{{ section }}_{{ key }}"
+                            value="{{ current if current is not none else default }}"
+                            step="{{ 'any' if key == 'poll_seconds' else '1' }}">
+                        {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
+                    </div>
+
+                    {% else %}
+                    <div class="field{% if span2 %} field-span-2{% endif %}">
+                        <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
+                        <input type="text" name="{{ key }}" id="{{ section }}_{{ key }}"
+                            value="{{ current }}" placeholder="{{ default }}">
+                        {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
+                    </div>
+                    {% endif %}
+
+                    {% endfor %}
+                </div>
+
+                <div class="settings-actions">
+                    <button type="submit" class="btn btn-primary btn-small">Save {{ meta_s.get('title', section|title) }}</button>
+                </div>
+            </form>
         </div>
-
-        <form method="POST" action="{{ url_for('adminsettings') }}">
-            <input type="hidden" name="section" value="{{ section }}">
-
-            <div class="settings-fields">
-                {% for key, meta in fields.items() %}
-                {% set current = config.get(section, {}).get(key, '') %}
-                {% set default = defaults.get(section, {}).get(key, '') %}
-
-                {% if meta.type == 'bool' %}
-                <div class="settings-bool">
-                    <input type="checkbox" name="{{ key }}" id="{{ section }}_{{ key }}" value="1"
-                        {% if current %}checked{% endif %}>
-                    <div class="settings-bool-body">
-                        <label class="settings-bool-label" for="{{ section }}_{{ key }}">{{ meta.label }}</label>
-                        {% if meta.desc %}<div class="settings-bool-desc">{{ meta.desc }}</div>{% endif %}
-                    </div>
-                </div>
-
-                {% elif meta.type == 'theme' %}
-                <div class="field">
-                    <label>{{ meta.label }}</label>
-                    <div class="theme-grid">
-                        {% for theme in themes %}
-                        <label class="theme-card {% if current_theme_global == theme.id or current == theme.id %}selected{% endif %}"
-                               for="theme_{{ theme.id }}">
-                            <input type="radio" name="{{ key }}" id="theme_{{ theme.id }}" value="{{ theme.id }}"
-                                {% if current_theme_global == theme.id or current == theme.id %}checked{% endif %}
-                                onchange="document.querySelectorAll('.theme-card').forEach(function(c){c.classList.remove('selected')}); this.closest('.theme-card').classList.add('selected');">
-                            <div class="theme-swatch">
-                                {% if theme.id == 'midnight' %}
-                                <span style="background:#0B1220"></span><span style="background:#4FD1C5"></span><span style="background:#E2574C"></span><span style="background:#DCE6F5"></span>
-                                {% elif theme.id == 'catppuccin' %}
-                                <span style="background:#1e1e2e"></span><span style="background:#cba6f7"></span><span style="background:#f38ba8"></span><span style="background:#cdd6f4"></span>
-                                {% elif theme.id == 'dracula' %}
-                                <span style="background:#282a36"></span><span style="background:#50fa7b"></span><span style="background:#ff5555"></span><span style="background:#f8f8f2"></span>
-                                {% elif theme.id == 'nord' %}
-                                <span style="background:#2e3440"></span><span style="background:#88c0d0"></span><span style="background:#bf616a"></span><span style="background:#eceff4"></span>
-                                {% elif theme.id == 'gruvbox' %}
-                                <span style="background:#282828"></span><span style="background:#b8bb26"></span><span style="background:#fb4934"></span><span style="background:#ebdbb2"></span>
-                                {% elif theme.id == 'tokyonight' %}
-                                <span style="background:#1a1b26"></span><span style="background:#7aa2f7"></span><span style="background:#f7768e"></span><span style="background:#c0caf5"></span>
-                                {% elif theme.id == 'solarized' %}
-                                <span style="background:#002b36"></span><span style="background:#2aa198"></span><span style="background:#dc322f"></span><span style="background:#839496"></span>
-                                {% endif %}
-                            </div>
-                            <div class="theme-card-name">{{ theme.name }}</div>
-                        </label>
-                        {% endfor %}
-                    </div>
-                    {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
-                </div>
-
-                {% elif meta.type == 'select' %}
-                <div class="field">
-                    <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
-                    <select name="{{ key }}" id="{{ section }}_{{ key }}">
-                        {% for opt in meta.options %}
-                        <option value="{{ opt }}" {% if current == opt %}selected{% endif %}>{{ opt }}</option>
-                        {% endfor %}
-                    </select>
-                    {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
-                </div>
-
-                {% elif meta.type == 'password' %}
-                <div class="field">
-                    <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
-                    <input type="password" name="{{ key }}" id="{{ section }}_{{ key }}"
-                        value="" placeholder="{% if current %}•••••••• (unchanged if blank){% else %}{{ default }}{% endif %}"
-                        autocomplete="new-password">
-                    {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
-                </div>
-
-                {% elif meta.type == 'number' %}
-                <div class="field">
-                    <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
-                    <input type="number" name="{{ key }}" id="{{ section }}_{{ key }}"
-                        value="{{ current if current is not none else default }}">
-                    {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
-                </div>
-
-                {% else %}
-                <div class="field">
-                    <label for="{{ section }}_{{ key }}">{{ meta.label }}</label>
-                    <input type="text" name="{{ key }}" id="{{ section }}_{{ key }}"
-                        value="{{ current }}" placeholder="{{ default }}">
-                    {% if meta.desc %}<span class="hint">{{ meta.desc }}</span>{% endif %}
-                </div>
-                {% endif %}
-
-                {% endfor %}
-            </div>
-
-            <div class="settings-actions">
-                <button type="submit" class="btn btn-primary btn-small">Save {{ section|title }}</button>
-            </div>
-        </form>
+        {% endif %}
+        {% endfor %}
+        {% endfor %}
     </div>
-    {% endfor %}
 </div>
+
+<script>
+(function() {
+    var links = document.querySelectorAll('[data-settings-nav]');
+    var sections = document.querySelectorAll('[data-settings-section]');
+    if (!links.length || !sections.length || !('IntersectionObserver' in window)) return;
+
+    function setActive(id) {
+        links.forEach(function(a) {
+            a.classList.toggle('is-active', a.getAttribute('data-settings-nav') === id);
+        });
+    }
+
+    var obs = new IntersectionObserver(function(entries) {
+        entries.forEach(function(en) {
+            if (en.isIntersecting) {
+                setActive(en.target.getAttribute('data-settings-section'));
+            }
+        });
+    }, { rootMargin: '-20% 0px -60% 0px', threshold: 0 });
+
+    sections.forEach(function(s) { obs.observe(s); });
+
+    // hash on load
+    if (location.hash) {
+        var id = location.hash.replace('#settings-', '').replace('#', '');
+        if (id) setActive(id);
+    } else if (sections[0]) {
+        setActive(sections[0].getAttribute('data-settings-section'));
+    }
+})();
+</script>
 {% endblock %}

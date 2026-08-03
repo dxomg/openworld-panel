@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Too Many Requests - {{ projectname }}{% endblock %}
+
+{% block content %}
+<div class="empty-state" style="max-width: 500px; margin: 100px auto; text-align: center;">
+    <div style="font-size: 80px; margin-bottom: 20px;">⏳</div>
+    <h1>429</h1>
+    <p style="color: var(--text-dim);">Too many requests. Slow down and try again{% if retry_after %} in about {{ retry_after }} second{% if retry_after != 1 %}s{% endif %}{% endif %}.</p>
+    <div style="margin-top: 30px;">
+        <a href="{{ url_for('index') }}" class="btn">Return Home</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block nav_links %}{% endblock %}

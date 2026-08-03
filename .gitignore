@@ -229,4 +229,7 @@ lib64
 pyvenv.cfg
 
 database.db
-config.toml
+config.json
+db_config.json
+worker.heartbeat
+worker.heartbeat.tmp

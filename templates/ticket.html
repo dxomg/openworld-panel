@@ -54,6 +54,7 @@
                 <label>Your Message</label>
                 <textarea name="message" required rows="8" placeholder="Type your reply..." style="width: 100%; min-height: 160px; resize: vertical; box-sizing: border-box;"></textarea>
             </div>
+            {% include '_captcha.html' %}
             <div style="display: flex; gap: 10px; margin-top: 16px; width: 100%;">
                 <button type="submit" class="btn btn-primary">Send Reply</button>
                 <a href="{{ url_for('tickets') }}" class="btn">Cancel</a>
