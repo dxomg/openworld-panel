@@ -2370,7 +2370,7 @@ def adminnodeprofile(nodeUuid):
 @loginrequired
 @adminrequired
 def adminnodesstatus():
-    """Probe listed nodes in parallel; return uuid→status. Updates online/offline in DB."""
+    """Probe listed nodes in parallel; return uuid→status. Does NOT update the DB."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     uuids = request.args.getlist("uuid")
@@ -2382,9 +2382,8 @@ def adminnodesstatus():
 
     def _one(n):
         try:
-            services.probenode(n, timeout=2)
-            fresh = db.getnode(n["uuid"]) or n
-            return n["uuid"], fresh.get("status", "offline")
+            ok, _ = services.probenode(n, timeout=2)
+            return n["uuid"], "online" if ok else "offline"
         except Exception:
             return n["uuid"], "offline"
 

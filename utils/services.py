@@ -392,32 +392,17 @@ def provisiononnode(vpsUuid):
     return provisiononproxmox(vpsUuid)
 
 
-def setnoderunstatus(node, reachable):
-    """Flip online/offline from live reachability. Leave maintenance alone."""
-    current = node.get("status") or "offline"
-    if current == "maintenance":
-        return current
-    new = "online" if reachable else "offline"
-    if new != current and node.get("uuid"):
-        db.updatenode(node["uuid"], status=new)
-        node["status"] = new
-    return new
-
-
 def probenode(node, timeout=5):
-    """Probe Proxmox node; update online/offline. Returns (reachable, stats_or_none)."""
+    """Probe Proxmox node; report reachability. Does NOT persist status to the DB."""
     node = dict(node) if not isinstance(node, dict) else node
     try:
         pve = pveclient.getproxmoxclient(node, timeout=timeout)
         node_name = node.get("proxmoxnode", "pve")
         status = pve.nodes(node_name).status.get()
         if not status:
-            setnoderunstatus(node, False)
             return False, None
-        setnoderunstatus(node, True)
         return True, status
     except Exception:
-        setnoderunstatus(node, False)
         return False, None
 
 def performvpsaction(vpsId, action, actorUserId):
