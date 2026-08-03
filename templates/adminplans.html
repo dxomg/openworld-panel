@@ -268,7 +268,7 @@
                                     <option value="{{ node.id }}"
                                         data-node-type="{{ node.type|default('proxmox') }}"
                                         {% if node.id in plan.assigned_node_ids %}selected{% endif %}>
-                                        {{ node.name }} — {{ node.type|default('proxmox') }} · {{ node.status }}
+                                        {{ node.name }}{% if node.location_name %} ({% if node.location_flag %}{{ node.location_flag }} {% endif %}{{ node.location_name }}){% endif %} — {{ node.type|default('proxmox') }} · {{ node.status }}
                                     </option>
                                     {% endfor %}
                                 </select>
@@ -375,7 +375,7 @@
                                 {% for node in allNodes %}
                                 <option value="{{ node.id }}" data-node-type="{{ node.type|default('proxmox') }}"
                                     {% if defaultNodeId and node.id == defaultNodeId %}selected{% endif %}>
-                                    {{ node.name }} — {{ node.type|default('proxmox') }} · {{ node.status }}
+                                    {{ node.name }}{% if node.location_name %} ({% if node.location_flag %}{{ node.location_flag }} {% endif %}{{ node.location_name }}){% endif %} — {{ node.type|default('proxmox') }} · {{ node.status }}
                                 </option>
                                 {% endfor %}
                             </select>

@@ -177,6 +177,13 @@
                 <div id="modal_plan_display" style="font-size: 1.2rem; font-weight: bold; color: var(--accent);"></div>
             </div>
 
+            <div class="field" style="margin-bottom: 20px;">
+                <label>Server Location</label>
+                <div id="location-choice-grid" class="image-choice-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));">
+                    <!-- Populated dynamically -->
+                </div>
+            </div>
+
             <div class="field">
                 <label>Operating System (Image)</label>
                 <div class="image-choice-grid">
@@ -225,6 +232,53 @@
         document.getElementById('modal_plan_id').value = plan.id;
         document.getElementById('modal_plan_display').innerText = `${plan.name} ($${plan.price.toFixed(2)}/mo)`;
         
+        // Populate Server Locations
+        const locationGrid = document.getElementById('location-choice-grid');
+        locationGrid.innerHTML = '';
+        if (plan.locations && plan.locations.length > 0) {
+            let firstChecked = false;
+            plan.locations.forEach((loc) => {
+                const label = document.createElement('label');
+                label.className = 'image-choice' + (!loc.available ? ' is-disabled' : '');
+                if (!loc.available) {
+                    label.style.opacity = '0.55';
+                    label.style.cursor = 'not-allowed';
+                }
+
+                let flagHtml = '';
+                if (loc.flag) {
+                    const f = loc.flag.trim();
+                    if (f.startsWith('http://') || f.startsWith('https://') || f.startsWith('/')) {
+                        flagHtml = `<img src="${f}" width="28" height="28" class="flag-icon-img" alt="" style="width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; flex: 0 0 28px !important;">`;
+                    } else {
+                        flagHtml = `<img src="https://flagcdn.com/${f.toLowerCase()}.svg" width="28" height="28" class="flag-icon-img" alt="" style="width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; flex: 0 0 28px !important;">`;
+                    }
+                } else {
+                    flagHtml = `<span style="font-size: 1.1rem;">📍</span>`;
+                }
+
+                const isCheck = loc.available && !firstChecked;
+                if (isCheck) firstChecked = true;
+
+                let badgeClass = loc.available ? 'background: rgba(79, 209, 197, 0.15); color: var(--accent); border: 1px solid var(--accent);' : 'background: rgba(226, 87, 76, 0.15); color: var(--danger); border: 1px solid var(--danger);';
+                
+                label.innerHTML = `
+                    <input type="radio" name="locationId" value="${loc.id}" ${isCheck ? 'checked' : ''} ${!loc.available ? 'disabled' : ''} ${loc.available ? 'required' : ''}>
+                    ${flagHtml}
+                    <div style="flex: 1; min-width: 0;">
+                        <div class="image-choice-name">${loc.name}</div>
+                        <div class="image-choice-meta" style="display: flex; justify-content: space-between; align-items: center; margin-top: 3px;">
+                            <span>${loc.code ? loc.code.toUpperCase() : ''}</span>
+                            <span class="type-badge" style="font-size: 8px; ${badgeClass}">${loc.status_text}</span>
+                        </div>
+                    </div>
+                `;
+                locationGrid.appendChild(label);
+            });
+        } else {
+            locationGrid.innerHTML = '<div style="font-size: 0.85rem; color: var(--text-dim);">No location specified. Any available node will be used.</div>';
+        }
+
         // Dynamically change button text based on price
         const btn = document.getElementById('submit-btn');
         if (plan.price > 0) {

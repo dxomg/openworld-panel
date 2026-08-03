@@ -226,6 +226,23 @@
           </span>
         </div>
 
+        {% if instance.location_name %}
+        <div class="kv-row">
+          <span class="k">Location</span>
+          <span class="v" style="display: flex; align-items: center; gap: 6px;">
+            {% if instance.location_flag %}
+              {% set f = instance.location_flag|trim %}
+              {% if f.startswith('http://') or f.startswith('https://') or f.startswith('/') %}
+                <img src="{{ f }}" width="18" height="18" class="flag-icon-img" alt="">
+              {% else %}
+                <img src="https://flagcdn.com/{{ f|lower }}.svg" width="18" height="18" class="flag-icon-img" alt="" onerror="this.style.display='none'">
+              {% endif %}
+            {% endif %}
+            <span>{{ instance.location_name }}</span>
+          </span>
+        </div>
+        {% endif %}
+
         <div class="kv-row">
           <span class="k">Node Type</span>
           <span class="v">{{ instance.node_type|capitalize }}</span>

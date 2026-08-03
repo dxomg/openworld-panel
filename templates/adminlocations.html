@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+
+{% block title %}Node Locations - {{ projectname }}{% endblock %}
+
+{% block content %}
+<style>
+    .vps-grid .vps-card {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    .flag-badge {
+        font-size: 1.5rem;
+        margin-right: 8px;
+        vertical-align: middle;
+    }
+</style>
+
+<section class="hero">
+    <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+    <h1>Node Locations</h1>
+    <p>Manage server regions, data centers, and geographic locations for infrastructure nodes.</p>
+
+    <div class="hero-stats">
+        <div class="hero-stat">
+            <div class="num accent">{{ totalLocations }}</div>
+            <div class="label">Total Locations</div>
+        </div>
+        <div class="hero-stat">
+            <div class="num">{{ totalLocationVps|default(0) }}</div>
+            <div class="label">Total VPS Instances</div>
+        </div>
+    </div>
+</section>
+
+<div class="section-head" style="margin-top: 48px;">
+    <h2>Registered Locations</h2>
+    <div style="display: flex; gap: 10px; align-items: center;">
+        <form method="GET" action="{{ url_for('adminlocations') }}" style="display: flex; gap: 8px; align-items: center;">
+            <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search locations...">
+        </form>
+        <button onclick="openModal('addLocationModal')" class="btn btn-primary btn-small">+ Add Location</button>
+    </div>
+</div>
+
+{% if allLocations %}
+<div class="vps-grid">
+    {% for loc in allLocations %}
+    <div class="vps-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; margin-bottom: 10px;">
+            <span class="status-pill status-running">
+                <span class="dot"></span><span style="font-family: var(--font-mono); font-size: 11px;">{{ loc.code }}</span>
+            </span>
+        </div>
+
+        <div class="vps-id">
+            <div class="vps-hostname" style="display: flex; align-items: center; gap: 8px;">
+                {% if loc.flag %}
+                    {% set f = loc.flag|trim %}
+                    {% if f.startswith('http://') or f.startswith('https://') or f.startswith('/') %}
+                        <img src="{{ f }}" width="18" height="18" class="flag-icon-img" alt="{{ loc.code }}">
+                    {% else %}
+                        <img src="https://flagcdn.com/{{ f|lower }}.svg" width="18" height="18" class="flag-icon-img" alt="{{ loc.code }}" onerror="this.style.display='none'">
+                    {% endif %}
+                {% endif %}
+                <span>{{ loc.name }}</span>
+            </div>
+            {% if loc.description %}
+            <div class="vps-meta">{{ loc.description }}</div>
+            {% endif %}
+        </div>
+
+        <div class="vps-specs" style="margin-top: 10px;">
+            <span><span class="spec-val">{{ loc.vps_count|default(0) }}</span> VPS Instances</span>
+            <span><span class="spec-val">{{ loc.node_count|default(0) }}</span> Nodes</span>
+        </div>
+
+        <div class="btn-row" style="margin-top: 15px; display: flex; gap: 8px;">
+            <button class="btn btn-small" onclick="openEditModal('{{ loc|tojson|forceescape }}')">Edit</button>
+
+            <form action="{{ url_for('adminlocationsdelete', locationUuid=loc.uuid) }}" method="POST" data-confirm="Delete location &quot;{{ loc.name }}&quot;? Nodes assigned to this location will have their location unassigned." data-confirm-title="Remove Location" data-confirm-label="Remove">
+                <button type="submit" class="btn btn-small btn-danger">Remove</button>
+            </form>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if pagination.totalPages > 1 %}
+<div class="pagination" style="margin-top: 40px; display: flex; gap: 8px; justify-content: center; align-items: center;">
+    {% if pagination.hasPrev %}
+    <a href="{{ url_for('adminlocations', page=pagination.currentPage - 1, q=search) }}" class="btn btn-small">&larr; Previous</a>
+    {% endif %}
+    
+    <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">
+        PAGE {{ pagination.currentPage }} / {{ pagination.totalPages }}
+    </span>
+
+    {% if pagination.hasNext %}
+    <a href="{{ url_for('adminlocations', page=pagination.currentPage + 1, q=search) }}" class="btn btn-small">Next &rarr;</a>
+    {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+    <div class="glyph">📍</div>
+    <h3>No Locations Configured</h3>
+    <p>Add geographic locations or data center regions to assign to your nodes.</p>
+</div>
+{% endif %}
+
+<!-- ===== Add Location Modal ===== -->
+<div id="addLocationModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Add Location</h3>
+            <button type="button" class="modal-close" onclick="closeModal('addLocationModal')">&times;</button>
+        </div>
+        <form action="{{ url_for('adminlocationscreate') }}" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Location Name</label>
+                <input type="text" name="name" required placeholder="US East (N. Virginia)">
+            </div>
+            <div class="field">
+                <label>Location Code</label>
+                <input type="text" name="code" required placeholder="us-east" pattern="[a-z0-9\-_]+" title="Lowercase letters, numbers, hyphens, underscores only">
+            </div>
+            <div class="field">
+                <label>Country Code (e.g. us, de, gb) or Image URL</label>
+                <input type="text" name="flag" placeholder="us">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Description</label>
+                <input type="text" name="description" placeholder="Ashburn, VA Datacenter Region">
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('addLocationModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Location</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===== Edit Location Modal ===== -->
+<div id="editLocationModal" class="modal-backdrop">
+    <div class="modal-panel">
+        <div class="modal-head">
+            <h3>Update Location</h3>
+            <button type="button" class="modal-close" onclick="closeModal('editLocationModal')">&times;</button>
+        </div>
+        <form id="editLocationForm" action="" method="POST" class="form-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div class="field" style="grid-column: span 2;">
+                <label>Location Name</label>
+                <input type="text" name="name" id="edit_name" required>
+            </div>
+            <div class="field">
+                <label>Location Code</label>
+                <input type="text" name="code" id="edit_code" required pattern="[a-z0-9\-_]+" title="Lowercase letters, numbers, hyphens, underscores only">
+            </div>
+            <div class="field">
+                <label>Country Code (e.g. us, de, gb) or Image URL</label>
+                <input type="text" name="flag" id="edit_flag" placeholder="us">
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Description</label>
+                <input type="text" name="description" id="edit_description">
+            </div>
+
+            <div class="modal-actions" style="grid-column: span 2; display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px;">
+                <button type="button" onclick="closeModal('editLocationModal')" class="btn">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    function openModal(id) {
+        document.getElementById(id).classList.add('is-open');
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('is-open');
+    }
+
+    function openEditModal(locationData) {
+        const loc = JSON.parse(locationData);
+        const form = document.getElementById('editLocationForm');
+
+        let baseUrl = "{{ url_for('adminlocationsupdate', locationUuid='UUID_PLACEHOLDER') }}";
+        form.action = baseUrl.replace('UUID_PLACEHOLDER', loc.uuid);
+
+        document.getElementById('edit_name').value = loc.name || '';
+        document.getElementById('edit_code').value = loc.code || '';
+        document.getElementById('edit_flag').value = loc.flag || '';
+        document.getElementById('edit_description').value = loc.description || '';
+
+        openModal('editLocationModal');
+    }
+</script>
+{% endblock %}

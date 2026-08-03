@@ -87,6 +87,9 @@
         <a href="{{ url_for('adminnodes') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminnodes' or request.endpoint == 'adminnodeprofile' else '' }}">
             <span class="sidebar-icon"><i data-lucide="network" aria-hidden="true"></i></span> Nodes
         </a>
+        <a href="{{ url_for('adminlocations') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminlocations' else '' }}">
+            <span class="sidebar-icon"><i data-lucide="map-pin" aria-hidden="true"></i></span> Locations
+        </a>
         <a href="{{ url_for('adminosimage') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminosimage' else '' }}">
             <span class="sidebar-icon"><i data-lucide="disc-3" aria-hidden="true"></i></span> Images
         </a>

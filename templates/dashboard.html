@@ -94,6 +94,20 @@
         {% if not instance.ipv4 and not instance.ipv6 %}
         <span class="dash-ip dim">No IP</span>
         {% endif %}
+        {% if instance.location_name %}
+        <span class="dash-sep">·</span>
+        <span style="display: inline-flex; align-items: center; gap: 4px;">
+          {% if instance.location_flag %}
+            {% set f = instance.location_flag|trim %}
+            {% if f.startswith('http://') or f.startswith('https://') or f.startswith('/') %}
+              <img src="{{ f }}" width="12" height="12" class="flag-icon-img" alt="" style="width:12px !important;height:12px !important;max-width:12px !important;max-height:12px !important;">
+            {% else %}
+              <img src="https://flagcdn.com/{{ f|lower }}.svg" width="12" height="12" class="flag-icon-img" alt="" style="width:12px !important;height:12px !important;max-width:12px !important;max-height:12px !important;" onerror="this.style.display='none'">
+            {% endif %}
+          {% endif %}
+          <span>{{ instance.location_name }}</span>
+        </span>
+        {% endif %}
         {% if instance.plan_name %}
         <span class="dash-sep">·</span>
         <span>{{ instance.plan_name }}</span>

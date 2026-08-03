@@ -666,21 +666,208 @@ def isimageassignedtonode(imageid, nodeid):
         row = conn.execute("SELECT 1 FROM node_images WHERE imageid = ? AND nodeid = ?", (imageid, nodeid)).fetchone()
         return row is not None
 
+# --- LOCATION FUNCTIONS ---
+
+def ensurelocationstable():
+    """Create locations table and ensure nodes.locationid exists."""
+    with getconnection() as conn:
+        if conn.engine == "mysql":
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    uuid VARCHAR(191) NOT NULL UNIQUE,
+                    name VARCHAR(255) NOT NULL,
+                    code VARCHAR(191) NOT NULL UNIQUE,
+                    flag VARCHAR(50) DEFAULT '',
+                    description TEXT,
+                    created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+        else:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS locations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uuid TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    code TEXT UNIQUE NOT NULL,
+                    flag TEXT DEFAULT '',
+                    description TEXT DEFAULT '',
+                    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+        node_cols = set(table_columns(conn, "nodes") or [])
+        if node_cols and "locationid" not in node_cols:
+            try:
+                conn.execute("ALTER TABLE nodes ADD COLUMN locationid INTEGER NULL")
+            except Exception:
+                pass
+        if node_cols and "max_vps" not in node_cols:
+            try:
+                conn.execute("ALTER TABLE nodes ADD COLUMN max_vps INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
+
+def addlocation(uuid, name, code, flag='', description=''):
+    ensurelocationstable()
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO locations (uuid, name, code, flag, description)
+            VALUES (?, ?, ?, ?, ?)
+        """, (uuid, name, code, flag, description))
+
+def getlocation(uuid):
+    ensurelocationstable()
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM locations WHERE uuid = ?", (uuid,)).fetchone()
+        return dict(row) if row else None
+
+def getlocationbyid(loc_id):
+    ensurelocationstable()
+    with getconnection() as conn:
+        row = conn.execute("SELECT * FROM locations WHERE id = ?", (loc_id,)).fetchone()
+        return dict(row) if row else None
+
+def listalllocations():
+    ensurelocationstable()
+    with getconnection() as conn:
+        rows = conn.execute("""
+            SELECT l.*,
+            (SELECT COUNT(*) FROM nodes WHERE locationid = l.id) as node_count,
+            (SELECT COUNT(*) FROM vps v JOIN nodes n ON v.nodeid = n.id WHERE n.locationid = l.id AND v.status NOT IN ('deleted', 'error')) as vps_count
+            FROM locations l
+            ORDER BY l.name ASC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+def countlocations():
+    ensurelocationstable()
+    with getconnection() as conn:
+        return _scalar(conn.execute("SELECT COUNT(*) FROM locations").fetchone())
+
+def listlocationspaginated(page=1, perpage=12, search=None):
+    ensurelocationstable()
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+        if search:
+            where = "WHERE l.name LIKE ? OR l.code LIKE ? OR l.description LIKE ?"
+            s = f"%{search}%"
+            params = [s, s, s]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM locations l {where}", params).fetchone())
+        rows = conn.execute(f"""
+            SELECT l.*,
+            (SELECT COUNT(*) FROM nodes WHERE locationid = l.id) as node_count,
+            (SELECT COUNT(*) FROM vps v JOIN nodes n ON v.nodeid = n.id WHERE n.locationid = l.id AND v.status NOT IN ('deleted', 'error')) as vps_count
+            FROM locations l
+            {where}
+            ORDER BY l.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "locations": [dict(r) for r in rows],
+            "totalCount": total,
+            "currentPage": page,
+            "perPage": perpage,
+            "totalPages": math.ceil(total / perpage) if perpage else 1,
+            "hasPrev": page > 1,
+            "hasNext": (page * perpage) < total,
+        }
+
+def updatelocation(uuid, **kwargs):
+    ensurelocationstable()
+    with getconnection() as conn:
+        keys = [f"{k} = ?" for k in kwargs.keys()]
+        values = list(kwargs.values()) + [uuid]
+        conn.execute(f"UPDATE locations SET {', '.join(keys)}, updated = CURRENT_TIMESTAMP WHERE uuid = ?", values)
+
+def removelocation(uuid):
+    ensurelocationstable()
+    with getconnection() as conn:
+        conn.execute("DELETE FROM locations WHERE uuid = ?", (uuid,))
+
+def getlocationsforplan(planid):
+    """
+    Returns all locations with availability status for a plan.
+    A location is available if at least one online assigned node for this plan has space
+    (vps_count < max_vps or max_vps == 0).
+    """
+    ensurelocationstable()
+    with getconnection() as conn:
+        locations = conn.execute("""
+            SELECT l.* FROM locations l ORDER BY l.name ASC
+        """).fetchall()
+        
+        result = []
+        for loc in locations:
+            ldict = dict(loc)
+            nodes = conn.execute("""
+                SELECT n.id, n.status, n.max_vps,
+                       (SELECT COUNT(*) FROM vps v WHERE v.nodeid = n.id AND v.status NOT IN ('deleted', 'error')) as vps_count
+                FROM nodes n
+                JOIN plan_nodes pn ON pn.nodeid = n.id
+                WHERE n.locationid = ? AND pn.planid = ?
+            """, (loc['id'], planid)).fetchall()
+
+            if not nodes:
+                ldict['available'] = False
+                ldict['reason'] = "No nodes assigned"
+                ldict['status_text'] = "Unavailable"
+                ldict['vps_count'] = 0
+            else:
+                ldict['vps_count'] = sum(n['vps_count'] or 0 for n in nodes)
+                has_available_node = False
+                online_nodes = 0
+                for n in nodes:
+                    if n['status'] == 'online':
+                        online_nodes += 1
+                        vps_cnt = n['vps_count'] or 0
+                        max_cnt = n['max_vps'] or 0
+                        if max_cnt == 0 or vps_cnt < max_cnt:
+                            has_available_node = True
+                            break
+
+                if has_available_node:
+                    ldict['available'] = True
+                    ldict['reason'] = None
+                    ldict['status_text'] = "Available"
+                elif online_nodes == 0:
+                    ldict['available'] = False
+                    ldict['reason'] = "Nodes offline"
+                    ldict['status_text'] = "Offline"
+                else:
+                    ldict['available'] = False
+                    ldict['reason'] = "Capacity reached"
+                    ldict['status_text'] = "Capacity Reached"
+
+            result.append(ldict)
+
+        return result
+
 # --- NODE FUNCTIONS ---
 
 def addnode(uuid, name, hostname, address, apikey, cpu, ram, status, tier, url='', nodeType='proxmox',
-            proxmoxhost=None, proxmoxuser=None, proxmoxpassword=None, proxmoxnode='pve', proxmoxport=8006, proxmoxssl=0):
+            proxmoxhost=None, proxmoxuser=None, proxmoxpassword=None, proxmoxnode='pve', proxmoxport=8006, proxmoxssl=0, locationid=None, max_vps=0):
+    ensurelocationstable()
     with getconnection() as conn:
         conn.execute("""
-            INSERT INTO nodes (uuid, name, hostname, address, url, apikey, type, cpu, ram, status, tier,
+            INSERT INTO nodes (uuid, name, hostname, address, url, apikey, locationid, type, cpu, ram, max_vps, status, tier,
                                proxmoxhost, proxmoxuser, proxmoxpassword, proxmoxnode, proxmoxport, proxmoxssl)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (uuid, name, hostname, address, url, apikey, nodeType, cpu, ram, status, tier,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (uuid, name, hostname, address, url, apikey, locationid, nodeType, cpu, ram, max_vps, status, tier,
               proxmoxhost, proxmoxuser, proxmoxpassword, proxmoxnode, proxmoxport, proxmoxssl))
 
 def getnode(uuid):
+    ensurelocationstable()
     with getconnection() as conn:
-        row = conn.execute("SELECT * FROM nodes WHERE uuid = ?", (uuid,)).fetchone()
+        row = conn.execute("""
+            SELECT n.*, loc.name as location_name, loc.code as location_code, loc.flag as location_flag
+            FROM nodes n
+            LEFT JOIN locations loc ON n.locationid = loc.id
+            WHERE n.uuid = ?
+        """, (uuid,)).fetchone()
         return dict(row) if row else None
 
 # --- NETWORK FUNCTIONS ---
@@ -1621,16 +1808,21 @@ def countnodes():
     with getconnection() as conn:
         return _scalar(conn.execute("SELECT COUNT(*) FROM nodes").fetchone())
 def listallnodes():
+    ensurelocationstable()
     with getconnection() as conn:
-        # Join with a count of VPS instances currently on that node
+        # Join with a count of VPS instances currently on that node and location info
         rows = conn.execute("""
             SELECT n.*, 
+            loc.name as location_name, loc.code as location_code, loc.flag as location_flag,
             (SELECT COUNT(*) FROM vps WHERE nodeid = n.id AND status != 'deleted') as vps_count
             FROM nodes n
+            LEFT JOIN locations loc ON n.locationid = loc.id
+            ORDER BY n.created DESC
         """).fetchall()
         return [dict(r) for r in rows]
 
 def updatenode(uuid, **kwargs):
+    ensurelocationstable()
     with getconnection() as conn:
         keys = [f"{k} = ?" for k in kwargs.keys()]
         values = list(kwargs.values()) + [uuid]
@@ -1849,17 +2041,23 @@ def gettransactionfull(tid):
         return dict(row) if row else None
 
 
-def getsuitablenodeandstorage(planid, strategy='both', node_type='proxmox', imageid=None, disk_mb=0):
+def getsuitablenodeandstorage(planid, strategy='both', node_type='proxmox', imageid=None, disk_mb=0, locationid=None):
     """Pick node+storage from plan assignments (not free/paid tier).
 
     Returns (node_id, storagepool_id).
     """
     imageFilter = "AND EXISTS (SELECT 1 FROM node_images ni WHERE ni.nodeid = n.id AND ni.imageid = ?)" if imageid else ""
     imageParams = [imageid] if imageid else []
+    
+    locFilter = "AND n.locationid = ?" if locationid else ""
+    locParams = [locationid] if locationid else []
+
+    capacityFilter = "AND (n.max_vps = 0 OR (SELECT COUNT(*) FROM vps v WHERE v.nodeid = n.id AND v.status NOT IN ('deleted', 'error')) < n.max_vps)"
+
     # Only nodes assigned to this plan
     planNodeFilter = "AND EXISTS (SELECT 1 FROM plan_nodes pn WHERE pn.nodeid = n.id AND pn.planid = ?)"
-    baseWhere = f"n.status = 'online' AND n.type = ? {planNodeFilter} {imageFilter}"
-    baseParams = [node_type, planid] + imageParams
+    baseWhere = f"n.status = 'online' AND n.type = ? {planNodeFilter} {imageFilter} {locFilter} {capacityFilter}"
+    baseParams = [node_type, planid] + imageParams + locParams
 
     with getconnection() as conn:
         if strategy == 'random':
@@ -2008,19 +2206,22 @@ def listimagespaginated(page=1, perpage=12, search=None, node_type=None):
         }
 
 def listnodespaginated(page=1, perpage=12, search=None):
+    ensurelocationstable()
     with getconnection() as conn:
         offset = (page - 1) * perpage
         where = ""
         params = []
         if search:
-            where = "WHERE n.name LIKE ? OR n.hostname LIKE ? OR n.address LIKE ? OR n.status LIKE ? OR n.tier LIKE ?"
+            where = "WHERE n.name LIKE ? OR n.hostname LIKE ? OR n.address LIKE ? OR loc.name LIKE ? OR loc.code LIKE ? OR n.status LIKE ? OR n.tier LIKE ?"
             s = f"%{search}%"
-            params = [s, s, s, s, s]
-        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM nodes n {where}", params).fetchone())
+            params = [s, s, s, s, s, s, s]
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM nodes n LEFT JOIN locations loc ON n.locationid = loc.id {where}", params).fetchone())
         rows = conn.execute(f"""
             SELECT n.*, 
+            loc.name as location_name, loc.code as location_code, loc.flag as location_flag,
             (SELECT COUNT(*) FROM vps WHERE nodeid = n.id AND status != 'deleted') as vps_count
             FROM nodes n
+            LEFT JOIN locations loc ON n.locationid = loc.id
             {where}
             ORDER BY n.created DESC
             LIMIT ? OFFSET ?

@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS bans (
     FOREIGN KEY(adminid) REFERENCES users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    flag TEXT DEFAULT '',
+    description TEXT DEFAULT '',
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE NOT NULL,
@@ -50,6 +61,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     address TEXT NOT NULL,
     url TEXT NOT NULL DEFAULT '',
     apikey TEXT NOT NULL,
+    locationid INTEGER,
     type TEXT NOT NULL DEFAULT 'proxmox'
         CHECK(type IN ('proxmox')),
     status TEXT NOT NULL DEFAULT 'online'
@@ -58,6 +70,7 @@ CREATE TABLE IF NOT EXISTS nodes (
         CHECK(tier IN ('free', 'paid')),
     cpu INTEGER NOT NULL,
     ram INTEGER NOT NULL,
+    max_vps INTEGER NOT NULL DEFAULT 0,
     proxmoxhost TEXT,
     proxmoxuser TEXT,
     proxmoxpassword TEXT,
@@ -66,7 +79,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     proxmoxssl INTEGER DEFAULT 0
         CHECK(proxmoxssl IN (0,1)),
     created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(locationid) REFERENCES locations(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS plans (

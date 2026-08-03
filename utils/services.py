@@ -159,13 +159,15 @@ def getvpsdetails(vpsId):
     with db.getconnection() as conn:
         query = """
             SELECT v.*, p.name as plan_name, p.price as plan_price, p.netmbps, p.ipv4 as plan_ipv4, p.ipv6 as plan_ipv6, p.node_type as plan_node_type,
-                   n.address as node_ip, n.url as node_url, n.apikey as node_apikey, n.type as node_type,
+                   n.address as node_ip, n.name as node_name, n.url as node_url, n.apikey as node_apikey, n.type as node_type,
+                   loc.name as location_name, loc.code as location_code, loc.flag as location_flag,
                    i.name as image_name, i.image as image_path, i.os_type,
                    ni.imagestorageid,
                    ist.name as image_storage_name
             FROM vps v
             JOIN plans p ON v.planid = p.id
             JOIN nodes n ON v.nodeid = n.id
+            LEFT JOIN locations loc ON n.locationid = loc.id
             JOIN images i ON v.imageid = i.id
             LEFT JOIN node_images ni ON ni.imageid = i.id AND ni.nodeid = n.id
             LEFT JOIN imagestorage ist ON ni.imagestorageid = ist.id

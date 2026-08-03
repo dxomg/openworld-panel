@@ -173,7 +173,7 @@
                     <select name="nodeid" id="adminVpsNodeSelect" required onchange="onNodeChange()">
                         <option value="" disabled selected>Select node...</option>
                         {% for node in allNodes %}
-                        <option value="{{ node.id }}" data-type="{{ node.type|default('proxmox') }}">{{ node.name }} ({{ node.type|default('proxmox')|upper }})</option>
+                        <option value="{{ node.id }}" data-type="{{ node.type|default('proxmox') }}">{{ node.name }}{% if node.location_name %} ({% if node.location_flag %}{{ node.location_flag }} {% endif %}{{ node.location_name }}){% endif %} ({{ node.type|default('proxmox')|upper }})</option>
                         {% endfor %}
                     </select>
                 </div>

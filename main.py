@@ -888,16 +888,24 @@ def createvps():
             flash("Selected image is not assigned to any node.", "error")
             return redirect(url_for('createvps'))
 
+        locationId = request.form.get("locationId", type=int)
+        if locationId == 0:
+            locationId = None
+
         nodeId, storagePoolId = db.getsuitablenodeandstorage(
             plan['id'],
             strategy=config.get('loadbalancing', {}).get('strategy', 'both'),
             node_type=plan['node_type'],
             imageid=image['id'],
             disk_mb=plan.get('disk', 0),
+            locationid=locationId
         )
         
         if not nodeId:
-            flash("No nodes available for this plan (check plan node assignments and image).", "error")
+            if locationId:
+                flash("No available servers in the selected location for this plan (location may be full or offline).", "error")
+            else:
+                flash("No nodes available for this plan (check plan node assignments and image).", "error")
             return redirect(url_for('createvps'))
 
         # Auto-assign network from the node
@@ -972,7 +980,10 @@ def createvps():
             return redirect(url_for('createvps'))
 
     images = [img for img in db.listimages(active=1) if db.getnodesforimage(img['id'])]
-    return render_template("createvps.html", plansList=db.listplans(active=1), images=addosmeta(images), **paneluserinfo(g.userinfo))
+    plansList = db.listplans(active=1)
+    for p in plansList:
+        p['locations'] = db.getlocationsforplan(p['id'])
+    return render_template("createvps.html", plansList=plansList, images=addosmeta(images), **paneluserinfo(g.userinfo))
 
 @app.route("/checkout/<string:vpsUuid>")
 @loginrequired
@@ -2215,6 +2226,7 @@ def adminnodes():
     return render_template(
         "adminnodes.html", 
         allNodes=nodesData['nodes'],
+        allLocations=db.listalllocations(),
         pagination=nodesData,
         search=q or '',
         **paneluserinfo(g.userinfo), 
@@ -2227,11 +2239,16 @@ def adminnodes():
 def adminnodescreate():
     try:
         nodeUuid = str(uuid.uuid4())
+        loc_id = request.form.get("locationid")
+        location_id = int(loc_id) if loc_id and loc_id.isdigit() else None
+        max_vps = int(request.form.get("max_vps", 0))
         db.addnode(
             uuid=nodeUuid,
             name=request.form.get("name"),
             hostname=request.form.get("hostname"),
             address=request.form.get("address"),
+            locationid=location_id,
+            max_vps=max_vps,
             url=request.form.get("url", ""),
             apikey=request.form.get("apikey") or "",
             cpu=int(request.form.get("cpu", 0)),
@@ -2263,10 +2280,15 @@ def adminnodesupdate(nodeUuid):
         return redirect(url_for('adminnodes'))
 
     try:
+        loc_id = request.form.get("locationid")
+        location_id = int(loc_id) if loc_id and loc_id.isdigit() else None
+        max_vps = int(request.form.get("max_vps", node.get("max_vps") or 0))
         updateData = {
             "name": request.form.get("name"),
             "hostname": request.form.get("hostname"),
             "address": request.form.get("address"),
+            "locationid": location_id,
+            "max_vps": max_vps,
             "cpu": int(request.form.get("cpu", node.get("cpu") or 0)),
             "ram": int(request.form.get("ram", node.get("ram") or 0)),
             "status": request.form.get("status", node.get("status", "online")),
@@ -2339,6 +2361,7 @@ def adminnodeprofile(nodeUuid):
         imageStorages=imageStorages,
         nodeImages=nodeImages,
         ipStats=ipStats,
+        allLocations=db.listalllocations(),
         **paneluserinfo(g.userinfo),
         **paneladmininfo(g.userinfo)
     )
@@ -3022,6 +3045,76 @@ def adminosimageunassign(imageUuid):
 def adminosimagestorages(nodeId):
     storages = db.listimagestorage(nodeid=nodeId)
     return jsonify([{"id": s['id'], "name": s['name']} for s in storages])
+
+
+@app.route("/dashboard/admin/locations")
+@loginrequired
+@adminrequired
+def adminlocations():
+    page = request.args.get('page', 1, type=int)
+    q = request.args.get('q', '').strip() or None
+    locsData = db.listlocationspaginated(page=page, perpage=12, search=q)
+    totalVps = sum(loc.get('vps_count', 0) for loc in db.listalllocations())
+    return render_template(
+        "adminlocations.html",
+        allLocations=locsData['locations'],
+        pagination=locsData,
+        totalLocations=db.countlocations(),
+        totalLocationVps=totalVps,
+        search=q or '',
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
+
+
+@app.route("/dashboard/admin/locations/create", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminlocationscreate():
+    try:
+        locUuid = str(uuid.uuid4())
+        name = request.form.get("name")
+        code = request.form.get("code")
+        flag = request.form.get("flag", "")
+        description = request.form.get("description", "")
+        db.addlocation(uuid=locUuid, name=name, code=code, flag=flag, description=description)
+        auditlog("location.create", "location", locUuid, f"Created location '{name}' ({code})")
+        flash(f"Location '{name}' created successfully.", "success")
+    except Exception:
+        flash("Error creating location. Ensure code is unique.", "danger")
+    return redirect(url_for('adminlocations'))
+
+
+@app.route("/dashboard/admin/locations/update/<string:locationUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminlocationsupdate(locationUuid):
+    try:
+        updateData = {
+            "name": request.form.get("name"),
+            "code": request.form.get("code"),
+            "flag": request.form.get("flag", ""),
+            "description": request.form.get("description", "")
+        }
+        db.updatelocation(locationUuid, **updateData)
+        auditlog("location.update", "location", locationUuid, f"Updated location '{request.form.get('name')}'")
+        flash("Location updated successfully.", "success")
+    except Exception:
+        flash("Error updating location.", "danger")
+    return redirect(url_for('adminlocations'))
+
+
+@app.route("/dashboard/admin/locations/delete/<string:locationUuid>", methods=["POST"])
+@loginrequired
+@adminrequired
+def adminlocationsdelete(locationUuid):
+    try:
+        db.removelocation(locationUuid)
+        auditlog("location.delete", "location", locationUuid, "Deleted location")
+        flash("Location removed.", "warning")
+    except Exception:
+        flash("Error deleting location.", "danger")
+    return redirect(url_for('adminlocations'))
 
 
 
