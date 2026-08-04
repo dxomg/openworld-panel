@@ -2,15 +2,16 @@
 <div class="field captcha-field" style="margin: 16px 0;" id="captcha-container-{{ captcha_uid|default('default') }}">
     <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--text-dim);">Verification Code</label>
     <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-        <input type="hidden" name="captcha_id" id="captcha_id_{{ captcha_uid|default('default') }}" value="">
-        
+        <input type="hidden" name="captcha_token" id="captcha_token_{{ captcha_uid|default('default') }}" value="">
+
         <div style="border: 1px solid var(--border); border-radius: var(--radius); padding: 2px; background: #000; display: inline-flex; align-items: center; justify-content: center; min-width: 140px; min-height: 44px; position: relative;">
             <img id="captcha_img_{{ captcha_uid|default('default') }}" alt="Captcha" style="height: 40px; display: none; border-radius: 4px; object-fit: contain;">
-            <span id="captcha_status_{{ captcha_uid|default('default') }}" style="font-size: 11px; color: var(--text-dim);">Connecting...</span>
+            <span id="captcha_status_{{ captcha_uid|default('default') }}" style="font-size: 11px; color: var(--text-dim); display: inline-flex; align-items: center; gap: 6px;">Connecting...</span>
         </div>
-        
-        <input type="text" name="captcha_answer" id="captcha_ans_{{ captcha_uid|default('default') }}" required placeholder="Answer" autocomplete="off" style="width: 100px; text-align: center; font-family: var(--font-mono); font-size: 15px; font-weight: bold; letter-spacing: 0.05em; height: 44px;">
+
+        <input type="text" id="captcha_ans_{{ captcha_uid|default('default') }}" placeholder="Answer" autocomplete="off" style="width: 100px; text-align: center; font-family: var(--font-mono); font-size: 15px; font-weight: bold; letter-spacing: 0.05em; height: 44px; border-color: var(--border); transition: border-color 0.2s, box-shadow 0.2s;">
         <button type="button" class="btn btn-small" id="captcha_refresh_{{ captcha_uid|default('default') }}" title="New Captcha" style="height: 44px; width: 44px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 16px;">↺</button>
+        <input type="hidden" id="captcha_id_{{ captcha_uid|default('default') }}" value="">
     </div>
 </div>
 
@@ -18,8 +19,9 @@
 (function() {
     const uid = "{{ captcha_uid|default('default') }}";
     const wsUrl = "{{ captcha_ws_url }}";
-    
+
     const idInput = document.getElementById("captcha_id_" + uid);
+    const tokenInput = document.getElementById("captcha_token_" + uid);
     const img = document.getElementById("captcha_img_" + uid);
     const status = document.getElementById("captcha_status_" + uid);
     const ansInput = document.getElementById("captcha_ans_" + uid);
@@ -27,39 +29,112 @@
 
     let ws = null;
     let expectingGif = false;
+    let currentId = null;
+    let statusTimer = null;
+
+    function clearStatusTimer() {
+        if (statusTimer) { clearTimeout(statusTimer); statusTimer = null; }
+    }
+
+    function setStatus(text, type) {
+        clearStatusTimer();
+        if (!status) return;
+        // type: idle, loading, success, error
+        var colors = {
+            idle:    'var(--text-dim)',
+            loading: 'var(--accent)',
+            success: 'var(--accent)',
+            error:   'var(--danger)'
+        };
+        var c = colors[type || 'idle'];
+        status.style.color = c;
+        status.style.display = "inline-flex";
+        status.style.alignItems = "center";
+        status.style.gap = "6px";
+        if (type === 'loading') {
+            status.innerHTML = '<span class="spinner" style="border-top-color: ' + c + '; width: 10px; height: 10px; border-width: 1.5px;"></span>' + escapeHtml(text);
+        } else if (type === 'success') {
+            status.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><polyline points="20 6 9 17 4 12"></polyline></svg>' + escapeHtml(text);
+        } else if (type === 'error') {
+            status.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>' + escapeHtml(text);
+        } else {
+            status.textContent = text;
+        }
+    }
+
+    function setAnsState(state) {
+        if (!ansInput) return;
+        // state: default, success, error
+        if (state === 'success') {
+            ansInput.style.borderColor = 'var(--accent)';
+            ansInput.style.boxShadow = '0 0 0 3px var(--accent-glow)';
+        } else if (state === 'error') {
+            ansInput.style.borderColor = 'var(--danger)';
+            ansInput.style.boxShadow = '0 0 0 3px var(--danger-glow)';
+            // Shake animation
+            ansInput.style.animation = 'captcha-shake 0.4s';
+            setTimeout(function() { ansInput.style.animation = ''; }, 400);
+        } else {
+            ansInput.style.borderColor = 'var(--border)';
+            ansInput.style.boxShadow = '';
+        }
+    }
+
+    function hideImg() { if (img) img.style.display = "none"; }
+    function showImg() { if (img) img.style.display = "block"; if (status) status.style.display = "none"; }
 
     function initWS() {
         if (!wsUrl) return;
-        if (ws) {
-            try { ws.close(); } catch(e) {}
-        }
-        if (status) { status.textContent = "Connecting..."; status.style.display = "inline-block"; }
-        if (img) img.style.display = "none";
+        if (ws) { try { ws.close(); } catch(e) {} }
+        setStatus("Connecting...", "loading");
+        hideImg();
+        tokenInput.value = "";
+        setAnsState('default');
 
         try {
             ws = new WebSocket(wsUrl);
             ws.binaryType = "arraybuffer";
 
-            ws.onopen = function() {
-                ws.send("new");
-            };
+            ws.onopen = function() { ws.send("new"); };
 
             ws.onmessage = function(ev) {
                 if (typeof ev.data === "string") {
                     const data = ev.data.trim();
                     if (data === "rate") {
-                        if (status) { status.textContent = "Rate limited"; status.style.display = "inline-block"; }
+                        setStatus("Rate limited", "error");
+                        setAnsState('default');
                         return;
                     }
-                    if (data === "err") {
+                    if (data === "err") { ws.send("new"); return; }
+                    if (data === "fail") {
+                        setStatus("Incorrect — try again", "error");
+                        setAnsState('error');
+                        if (ansInput) ansInput.value = "";
+                        // Clear error styling after 2s and fetch a fresh challenge
+                        statusTimer = setTimeout(function() {
+                            setAnsState('default');
+                            setStatus("Loading...", "loading");
+                        }, 1800);
                         ws.send("new");
+                        return;
+                    }
+                    if (data === "ok" || data === "ok:") {
+                        return;
+                    }
+                    if (data.startsWith("ok:")) {
+                        tokenInput.value = data.slice(3);
+                        setStatus("Verified", "success");
+                        setAnsState('success');
                         return;
                     }
 
                     try {
                         const meta = JSON.parse(data);
-                        if (meta.id && idInput) {
-                            idInput.value = meta.id;
+                        if (meta.id) {
+                            currentId = meta.id;
+                            if (idInput) idInput.value = meta.id;
+                            tokenInput.value = "";
+                            setAnsState('default');
                         }
                         expectingGif = true;
                     } catch(e) {}
@@ -68,37 +143,132 @@
 
                 if (expectingGif && ev.data) {
                     const blob = new Blob([ev.data], { type: "image/gif" });
-                    if (img.src && img.src.startsWith("blob:")) {
-                        URL.revokeObjectURL(img.src);
-                    }
+                    if (img.src && img.src.startsWith("blob:")) { URL.revokeObjectURL(img.src); }
                     img.src = URL.createObjectURL(blob);
-                    img.style.display = "block";
-                    if (status) status.style.display = "none";
+                    showImg();
                     expectingGif = false;
                 }
             };
 
             ws.onerror = ws.onclose = function() {
                 if ((!img.src || img.style.display === "none") && status) {
-                    status.textContent = "Offline";
-                    status.style.display = "inline-block";
+                    setStatus("Offline", "error");
+                    setAnsState('default');
                 }
             };
-        } catch(e) {
-            if (status) status.textContent = "Error";
+        } catch(e) { setStatus("Error", "error"); }
+    }
+
+    function submitAnswer() {
+        const v = (ansInput.value || "").trim();
+        if (!v || !ws || ws.readyState !== WebSocket.OPEN || !currentId) return;
+        const n = Number(v);
+        if (!Number.isFinite(n)) { setStatus("Invalid answer", "error"); setAnsState('error'); return; }
+        ws.send("ans:" + n);
+        setStatus("Verifying...", "loading");
+    }
+
+    let _pendingSubmit = null;
+    let _waitTimer = null;
+
+    function waitForTokenAndSubmit(form) {
+        if (tokenInput.value && tokenInput.value.trim()) {
+            _clearWait();
+            return true;
         }
+        const v = (ansInput.value || "").trim();
+        if (v && ws && ws.readyState === WebSocket.OPEN && currentId) {
+            submitAnswer();
+            _pendingSubmit = form;
+            setStatus("Verifying...", "loading");
+            _startWait();
+            return false;
+        }
+        setStatus("Please solve the captcha first", "error");
+        setAnsState('error');
+        setTimeout(function() { setAnsState('default'); }, 1500);
+        _clearWait();
+        return false;
+    }
+
+    function _startWait() {
+        _clearWait();
+        _waitTimer = setInterval(function() {
+            if (tokenInput.value && tokenInput.value.trim()) {
+                _clearWait();
+                if (_pendingSubmit) {
+                    var f = _pendingSubmit;
+                    _pendingSubmit = null;
+                    if (f.requestSubmit) { f.requestSubmit(); }
+                    else { f.submit(); }
+                }
+            }
+        }, 100);
+        setTimeout(function() {
+            if (_pendingSubmit) {
+                _clearWait();
+                _pendingSubmit = null;
+                setStatus("Timed out — try again", "error");
+                setAnsState('default');
+            }
+        }, 10000);
+    }
+
+    function _clearWait() {
+        if (_waitTimer) { clearInterval(_waitTimer); _waitTimer = null; }
+    }
+
+    if (ansInput) {
+        ansInput.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                submitAnswer();
+            }
+        });
+        ansInput.addEventListener("blur", function() {
+            if ((ansInput.value || "").trim()) { submitAnswer(); }
+        });
+        // Clear error styling when user starts typing again
+        ansInput.addEventListener("input", function() {
+            if (ansInput.style.borderColor === 'var(--danger)') {
+                setAnsState('default');
+                clearStatusTimer();
+                if (status) { status.style.display = "none"; }
+            }
+        });
+    }
+
+    var parentForm = tokenInput.form;
+    // Skip form-submit interception when the captcha is inside a preview
+    // container (e.g. the admin settings page) — the form there is the settings
+    // form, not a captcha-protected form.
+    var isPreview = tokenInput.closest('#captchaPreviewWrap');
+    if (parentForm && !isPreview) {
+        parentForm.addEventListener("submit", function(e) {
+            if (!waitForTokenAndSubmit(parentForm)) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
     }
 
     if (refreshBtn) {
         refreshBtn.onclick = function() {
             if (ansInput) ansInput.value = "";
-            if (status) { status.textContent = "Loading..."; status.style.display = "inline-block"; }
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send("new");
-            } else {
-                initWS();
-            }
+            tokenInput.value = "";
+            setAnsState('default');
+            setStatus("Loading...", "loading");
+            if (ws && ws.readyState === WebSocket.OPEN) { ws.send("new"); }
+            else { initWS(); }
         };
+    }
+
+    // Inject shake keyframes once
+    if (!document.getElementById('captcha-shake-style')) {
+        var s = document.createElement('style');
+        s.id = 'captcha-shake-style';
+        s.textContent = '@keyframes captcha-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}';
+        document.head.appendChild(s);
     }
 
     initWS();

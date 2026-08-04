@@ -29,10 +29,7 @@
     <script src="{{ url_for('static', filename='js/xterm-addon-fit.min.js') }}"></script>
     <script>
     (function() {
-        var hostname = {{ hostname | tojson }};
-        var port = {{ port | tojson }};
-        var username = {{ username | tojson }};
-        var password = {{ password | tojson }};
+        var sshToken = {{ ssh_token | tojson }};
         var themeClass = {{ theme | tojson }};
         var statusEl = document.getElementById('status');
         var terminalEl = document.getElementById('terminal');
@@ -131,11 +128,9 @@
             setStatus('Connecting...', 'connecting');
 
             var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            // Credentials are resolved server-side via the SSH session token
             var wsUrl = wsProto + '//' + location.host + '/ws/ssh'
-                + '?host=' + encodeURIComponent(hostname)
-                + '&port=' + encodeURIComponent(port)
-                + '&user=' + encodeURIComponent(username)
-                + '&pass=' + encodeURIComponent(password);
+                + '?token=' + encodeURIComponent(sshToken);
 
             sock = new WebSocket(wsUrl);
 

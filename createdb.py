@@ -357,6 +357,19 @@ CREATE TABLE IF NOT EXISTS auditlog (
     FOREIGN KEY(userid) REFERENCES users(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS captchalog (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    userid INTEGER,
+    username TEXT,
+    action TEXT NOT NULL,
+    result TEXT NOT NULL,
+    endpoint TEXT,
+    ip TEXT,
+    details TEXT,
+    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -439,6 +452,9 @@ CREATE INDEX IF NOT EXISTS idxauditloguuid ON auditlog(uuid);
 CREATE INDEX IF NOT EXISTS idxauditloguser ON auditlog(userid);
 CREATE INDEX IF NOT EXISTS idxauditlogaction ON auditlog(action);
 CREATE INDEX IF NOT EXISTS idxauditlogcreated ON auditlog(created);
+CREATE INDEX IF NOT EXISTS idxcaptchaloguser ON captchalog(userid);
+CREATE INDEX IF NOT EXISTS idxcaptchalogresult ON captchalog(result);
+CREATE INDEX IF NOT EXISTS idxcaptchalogcreated ON captchalog(created);
 CREATE INDEX IF NOT EXISTS idxjobsuuid ON jobs(uuid);
 CREATE INDEX IF NOT EXISTS idxjobsvps ON jobs(vpsuuid);
 CREATE INDEX IF NOT EXISTS idxjobsstatus ON jobs(status);

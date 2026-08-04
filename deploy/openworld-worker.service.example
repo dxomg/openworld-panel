@@ -8,8 +8,9 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/opt/openworld/client
-Environment=FLASK_SECRET_KEY=change-me-to-a-long-random-string
-# Optional: EnvironmentFile=-/opt/openworld/client/.env
+# Optional: set FLASK_SECRET_KEY to persist sessions across restarts.
+# Generate one with: python -c "import secrets; print(secrets.token_hex(32))"
+EnvironmentFile=-/opt/openworld/client/.env
 ExecStart=/opt/openworld/bin/python worker.py
 Restart=always
 RestartSec=5

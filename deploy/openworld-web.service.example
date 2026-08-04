@@ -8,7 +8,9 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/opt/openworld/client
-Environment=FLASK_SECRET_KEY=change-me-to-a-long-random-string
+# Optional: set FLASK_SECRET_KEY to persist sessions across restarts.
+# Generate one with: python -c "import secrets; print(secrets.token_hex(32))"
+# EnvironmentFile=-/opt/openworld/client/.env
 # Single worker if job thread runs in-web; with external worker.py you can raise -w
 ExecStart=/opt/openworld/bin/gunicorn -w 1 -b 127.0.0.1:5000 --timeout 120 --graceful-timeout 30 main:app
 Restart=always

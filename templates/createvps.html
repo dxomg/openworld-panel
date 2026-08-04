@@ -249,9 +249,9 @@
                 if (loc.flag) {
                     const f = loc.flag.trim();
                     if (f.startsWith('http://') || f.startsWith('https://') || f.startsWith('/')) {
-                        flagHtml = `<img src="${f}" width="28" height="28" class="flag-icon-img" alt="" style="width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; flex: 0 0 28px !important;">`;
+                        flagHtml = `<img src="${escapeAttr(f)}" width="28" height="28" class="flag-icon-img" alt="" style="width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; flex: 0 0 28px !important;">`;
                     } else {
-                        flagHtml = `<img src="https://flagcdn.com/${f.toLowerCase()}.svg" width="28" height="28" class="flag-icon-img" alt="" style="width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; flex: 0 0 28px !important;">`;
+                        flagHtml = `<img src="https://flagcdn.com/${encodeURIComponent(f.toLowerCase())}.svg" width="28" height="28" class="flag-icon-img" alt="" style="width: 28px !important; height: 28px !important; max-width: 28px !important; max-height: 28px !important; flex: 0 0 28px !important;">`;
                     }
                 } else {
                     flagHtml = `<span style="font-size: 1.1rem;">📍</span>`;
@@ -262,14 +262,18 @@
 
                 let badgeClass = loc.available ? 'background: rgba(79, 209, 197, 0.15); color: var(--accent); border: 1px solid var(--accent);' : 'background: rgba(226, 87, 76, 0.15); color: var(--danger); border: 1px solid var(--danger);';
                 
+                const locIdEsc = escapeAttr(loc.id);
+                const locNameEsc = escapeHtml(loc.name);
+                const locCodeEsc = escapeHtml(loc.code ? loc.code.toUpperCase() : '');
+                const locStatusEsc = escapeHtml(loc.status_text);
                 label.innerHTML = `
-                    <input type="radio" name="locationId" value="${loc.id}" ${isCheck ? 'checked' : ''} ${!loc.available ? 'disabled' : ''} ${loc.available ? 'required' : ''}>
+                    <input type="radio" name="locationId" value="${locIdEsc}" ${isCheck ? 'checked' : ''} ${!loc.available ? 'disabled' : ''} ${loc.available ? 'required' : ''}>
                     ${flagHtml}
                     <div style="flex: 1; min-width: 0;">
-                        <div class="image-choice-name">${loc.name}</div>
+                        <div class="image-choice-name">${locNameEsc}</div>
                         <div class="image-choice-meta" style="display: flex; justify-content: space-between; align-items: center; margin-top: 3px;">
-                            <span>${loc.code ? loc.code.toUpperCase() : ''}</span>
-                            <span class="type-badge" style="font-size: 8px; ${badgeClass}">${loc.status_text}</span>
+                            <span>${locCodeEsc}</span>
+                            <span class="type-badge" style="font-size: 8px; ${badgeClass}">${locStatusEsc}</span>
                         </div>
                     </div>
                 `;

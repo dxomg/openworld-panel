@@ -64,8 +64,9 @@ DEFAULTS = {
     },
     "captcha": {
         "enabled": True,
-        "url": "http://localhost:8000",
+        "url": "http://127.0.0.1:8000",
         "api_key": "",
+        "secret": "",
     },
     "worker": {
         # In production with gunicorn -w N: set enabled_in_web false and run `python worker.py`

@@ -422,9 +422,30 @@
                     {% endfor %}
                 </div>
 
+                {% if section == 'captcha' %}
+                <div class="settings-actions" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <button type="submit" class="btn btn-primary btn-small">Save {{ meta_s.get('title', section|title) }}</button>
+                    <button type="button" class="btn btn-small" id="captchaTestBtn"
+                            onclick="testCaptchaConnection(this)">Test Connection</button>
+                    <span id="captchaTestResult" style="font-size: 13px; display: none;"></span>
+                </div>
+
+                <div style="margin-top: 20px; padding: 16px; border: 1px solid var(--border-soft); border-radius: var(--radius); background: var(--bg-soft, var(--bg, transparent));">
+                    <div style="font-size: 13px; font-weight: 500; color: var(--text-dim); margin-bottom: 12px;">Live Preview</div>
+                    <div id="captchaPreviewWrap">
+                        {% set captcha_uid = 'admin_preview' %}
+                        {% include '_captcha.html' %}
+                    </div>
+                    <div style="margin-top: 12px; font-size: 11px; color: var(--text-dim);">
+                        This is a live captcha widget — solve it to verify the full flow works.
+                        The token is not submitted anywhere; it's just for testing.
+                    </div>
+                </div>
+                {% else %}
                 <div class="settings-actions">
                     <button type="submit" class="btn btn-primary btn-small">Save {{ meta_s.get('title', section|title) }}</button>
                 </div>
+                {% endif %}
             </form>
         </div>
         {% endif %}
@@ -463,5 +484,42 @@
         setActive(sections[0].getAttribute('data-settings-section'));
     }
 })();
+
+function testCaptchaConnection(btn) {
+    var result = document.getElementById('captchaTestResult');
+    if (!result) return;
+    var csrf = (document.cookie.match(/(?:^| )csrf_token=([^;]+)/) || [])[1] || '';
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    result.style.display = 'inline-block';
+    result.style.color = 'var(--text-dim)';
+    result.textContent = 'Testing...';
+
+    fetch('{{ url_for("admincaptchatest") }}', {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrf},
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        btn.disabled = false;
+        btn.textContent = 'Test Connection';
+        if (data.ok) {
+            result.style.color = '#4FD1C5';
+            result.textContent = '✓ ' + (data.message || 'Captcha service OK');
+        } else {
+            result.style.color = '#E2574C';
+            result.textContent = '✗ ' + (data.error || 'Test failed');
+        }
+        if (data.results && data.results.steps) {
+            console.log('Captcha test results:', data.results);
+        }
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = 'Test Connection';
+        result.style.color = '#E2574C';
+        result.textContent = '✗ Request failed: ' + err;
+    });
+}
 </script>
 {% endblock %}

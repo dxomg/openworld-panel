@@ -107,6 +107,9 @@
         <a href="{{ url_for('adminauditlog') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminauditlog' else '' }}">
             <span class="sidebar-icon"><i data-lucide="clipboard-list" aria-hidden="true"></i></span> Audit Log
         </a>
+        <a href="{{ url_for('admincaptchalog') }}" class="sidebar-link {{ 'active' if request.endpoint == 'admincaptchalog' else '' }}">
+            <span class="sidebar-icon"><i data-lucide="shield-check" aria-hidden="true"></i></span> Captcha Log
+        </a>
         <a href="{{ url_for('adminsettings') }}" class="sidebar-link {{ 'active' if request.endpoint == 'adminsettings' else '' }}">
             <span class="sidebar-icon"><i data-lucide="settings" aria-hidden="true"></i></span> Settings
         </a>
@@ -159,6 +162,20 @@
 <script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
 <script>
     if (window.lucide) window.lucide.createIcons();
+
+    // Shared HTML-escape helper for safe insertion of dynamic text via innerHTML.
+    // Always prefer textContent for plain text; use this when building HTML strings.
+    function escapeHtml(str) {
+        if (str == null || str === '') return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+    // Escape a value for use inside a quoted HTML attribute (covers both " and ').
+    function escapeAttr(str) { return escapeHtml(str); }
 
     var _confirmOnOk = null;
 

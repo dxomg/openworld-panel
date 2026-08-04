@@ -956,7 +956,7 @@
         form.dataset.confirmTitle = 'Bulk Delete IPs';
         form.dataset.confirmLabel = 'Delete';
         const csrf = (document.cookie.match(/(?:^| )csrf_token=([^;]+)/) || [])[1] || '';
-        form.innerHTML = '<input type="hidden" name="_csrf_token" value="' + csrf + '">';
+        form.innerHTML = '<input type="hidden" name="_csrf_token" value="' + escapeAttr(csrf) + '">';
         checks.forEach(c => {
             const inp = document.createElement('input');
             inp.type = 'hidden';
@@ -1012,16 +1012,18 @@
                     const status = ip.assigned
                         ? '<span class="ip-status ip-assigned">Assigned</span>'
                         : '<span class="ip-status ip-free">Free</span>';
-                    const vps = ip.vps_hostname || '—';
-                    const delUrl = urls.deleteBase.replace('__UUID__', ip.uuid);
+                    const vps = escapeHtml(ip.vps_hostname || '—');
+                    const delUrl = urls.deleteBase.replace('__UUID__', encodeURIComponent(ip.uuid));
                     const csrf = (document.cookie.match(/(?:^| )csrf_token=([^;]+)/) || [])[1] || '';
+                    const csrfEsc = escapeAttr(csrf);
+                    const ipUuidEsc = escapeAttr(ip.uuid);
                     const check = ip.assigned
                         ? '<input type="checkbox" disabled title="Assigned">'
-                        : `<input type="checkbox" class="ip-check" value="${ip.uuid}" onchange="updateBulkDeleteBtn()">`;
+                        : `<input type="checkbox" class="ip-check" value="${ipUuidEsc}" onchange="updateBulkDeleteBtn()">`;
                     const delBtn = ip.assigned
                         ? '<span style="color: #666; font-size: 11px;">in use</span>'
-                        : `<form class="inline-form" action="${delUrl}" method="POST" data-confirm="Delete this IP?" data-confirm-title="Delete IP" data-confirm-label="Delete"><input type="hidden" name="_csrf_token" value="${csrf}"><button type="submit" class="btn btn-small btn-danger">Delete</button></form>`;
-                    tr.innerHTML = `<td>${check}</td><td style="font-family: var(--font-mono); font-size: 13px;">${ip.ip}</td><td>${status}</td><td>${vps}</td><td>${delBtn}</td>`;
+                        : `<form class="inline-form" action="${delUrl}" method="POST" data-confirm="Delete this IP?" data-confirm-title="Delete IP" data-confirm-label="Delete"><input type="hidden" name="_csrf_token" value="${csrfEsc}"><button type="submit" class="btn btn-small btn-danger">Delete</button></form>`;
+                    tr.innerHTML = `<td>${check}</td><td style="font-family: var(--font-mono); font-size: 13px;">${escapeHtml(ip.ip)}</td><td>${status}</td><td>${vps}</td><td>${delBtn}</td>`;
                     tbody.appendChild(tr);
                 });
 
@@ -1097,13 +1099,13 @@
                     
                     let storageCol = '';
                     if (nodeType === 'proxmox') {
-                        storageCol = `<td>${img.storage_name || '—'}</td>`;
+                        storageCol = `<td>${escapeHtml(img.storage_name || '—')}</td>`;
                     }
                     
-                    const unassignUrl = "{{ url_for('adminosimageunassign', imageUuid='__UUID__') }}".replace('__UUID__', img.uuid);
+                    const unassignUrl = "{{ url_for('adminosimageunassign', imageUuid='__UUID__') }}".replace('__UUID__', encodeURIComponent(img.uuid));
                     const unassignBtn = `<form class="inline-form" action="${unassignUrl}" method="POST" data-confirm="Unassign this image from {{ node.name }}?" data-confirm-title="Unassign Image" data-confirm-label="Unassign"><input type="hidden" name="nodeid" value="{{ node.id }}"><button type="submit" class="btn btn-small btn-danger">Unassign</button></form>`;
                     
-                    tr.innerHTML = `<td><strong>${img.name}</strong></td><td style="font-family: var(--font-mono); font-size: 12px;">${img.image}</td>${storageCol}<td>${status}</td><td>${unassignBtn}</td>`;
+                    tr.innerHTML = `<td><strong>${escapeHtml(img.name)}</strong></td><td style="font-family: var(--font-mono); font-size: 12px;">${escapeHtml(img.image)}</td>${storageCol}<td>${status}</td><td>${unassignBtn}</td>`;
                     tbody.appendChild(tr);
                 });
 
@@ -1199,7 +1201,7 @@
                     data.templates.forEach(t => {
                         const row = document.createElement('tr');
                         const sizeMB = (t.size / 1024 / 1024).toFixed(1);
-                        row.innerHTML = `<td>${t.storage}</td><td style="font-family: var(--font-mono); font-size: 12px;">${t.name}</td><td>${sizeMB} MB</td><td>${t.format}</td>`;
+                        row.innerHTML = `<td>${escapeHtml(t.storage)}</td><td style="font-family: var(--font-mono); font-size: 12px;">${escapeHtml(t.name)}</td><td>${sizeMB} MB</td><td>${escapeHtml(t.format)}</td>`;
                         tbody.appendChild(row);
                     });
                 }

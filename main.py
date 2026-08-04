@@ -10,6 +10,7 @@ import hmac
 import time
 import threading
 import paramiko
+from simple_websocket import Client as SimpleWsClient
 from urllib.parse import urlencode
 from datetime import datetime
 from functools import wraps
@@ -28,6 +29,14 @@ from utils import services
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DEFAULT_CONFIG = appconfig.DEFAULTS
+
+
+def simple_ws_connect(url, headers=None, timeout=5):
+    """Open a client WebSocket connection using simple-websocket.
+    `headers` is a list of (name, value) tuples sent on the upgrade request.
+    `timeout` is unused (simple-websocket doesn't support a connect timeout)
+    but kept for API compatibility."""
+    return SimpleWsClient.connect(url, headers=headers or [])
 
 
 def loadorcreateconfig():
@@ -52,6 +61,7 @@ def reloadconfig():
 db.ensurejobssuspendtype()
 db.ensurevpssuspensioncolumns()
 db.ensurevpspaiduntilcolumn()
+db.ensurecaptchalogtable()
 config = loadorcreateconfig()
 
 OS_TYPES = {
@@ -114,14 +124,37 @@ def auditlog(action, target_type=None, target_id=None, details=None):
     )
 
 
+def logcaptcha(action, result, endpoint=None, details=None):
+    """Log a captcha verification attempt to the separate captcha log.
+
+    Logs the user (or 'guest' if not logged in), their IP, the endpoint that
+    triggered the captcha, and whether the attempt passed or failed.
+    """
+    user = getattr(g, 'userinfo', None) if has_request_context() else None
+    userid = user['id'] if user else None
+    username = user.get('username') if user else 'guest'
+    db.addcaptchalog(
+        userid=userid,
+        username=username,
+        action=action,
+        result=result,
+        endpoint=endpoint or (request.endpoint if has_request_context() else None),
+        ip=getclientip(),
+        details=details,
+    )
+
+
 app = Flask(__name__)
 
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
 sock = Sock(app)
 
-# One-time console tokens: {token: {"vpsUuid", "hostname", "ip", "port", "username", "password", "used", "created"}}
-_console_tokens = {}
-_CONSOLE_TOKEN_TTL = 300  # 5 minutes
+# Server-side SSH session tokens: {token: {"vpsUuid", "userid", "hostname", "port", "username", "password", "created"}}
+# Credentials are stored server-side only - never sent to the client.
+_ssh_sessions = {}
+_SSH_SESSION_TTL = 120  # 2 minutes to connect
+_SSH_IDLE_TIMEOUT = 300  # 5 minutes idle disconnect
+_SSH_MAX_DURATION = 3600  # 1 hour max session
 
 COOKIE_NAME = "sessioncookie"
 SESSION_TTL_DAYS = config["general"]["defaultcookiettl"]
@@ -744,6 +777,24 @@ def get_theme_class(user=None):
             return t["class"]
     return ""
 
+def _panel_ws_url(endpoint):
+    """Build a ws/wss URL for a panel WebSocket route, honoring the reverse
+    proxy's X-Forwarded-Proto so wss is used behind HTTPS."""
+    if not request:
+        return ""
+    proto = request.headers.get("X-Forwarded-Proto", request.scheme).lower()
+    ws_proto = "wss" if proto in ("https", "wss") else "ws"
+    host = request.headers.get("X-Forwarded-Host", request.host)
+    # url_for on a flask-sock route may return a full ws:// URL; extract the path.
+    raw = url_for(endpoint)
+    if raw.startswith("ws://") or raw.startswith("wss://"):
+        # strip scheme + host
+        from urllib.parse import urlsplit
+        path = urlsplit(raw).path
+    else:
+        path = raw
+    return f"{ws_proto}://{host}{path}"
+
 def guestuserinfo():
     cookie_theme = request.cookies.get("theme") if request else None
     return {
@@ -757,7 +808,7 @@ def guestuserinfo():
         "current_theme": cookie_theme or config.get("general", {}).get("theme", "catppuccin"),
         "app_timezone": timeutil.get_tz_name(),
         "captcha_enabled": captcha.is_enabled(),
-        "captcha_ws_url": captcha.get_ws_url() if captcha.is_enabled() else "",
+        "captcha_ws_url": _panel_ws_url("ws_captcha_proxy") if captcha.is_enabled() else "",
     }
 
 def paneluserinfo(user, ban=None):
@@ -784,7 +835,7 @@ def paneluserinfo(user, ban=None):
         "current_theme": user.get('theme') or (request.cookies.get("theme") if request else None) or config.get("general", {}).get("theme", "catppuccin"),
         "app_timezone": timeutil.get_tz_name(),
         "captcha_enabled": captcha.is_enabled(),
-        "captcha_ws_url": captcha.get_ws_url() if captcha.is_enabled() else "",
+        "captcha_ws_url": _panel_ws_url("ws_captcha_proxy") if captcha.is_enabled() else "",
     }
 
 def paneladmininfo(user, ban=None):
@@ -836,12 +887,13 @@ def dashboard():
 @loginrequired
 def createvps():
     if request.method == "POST":
-        cid = request.form.get("captcha_id")
-        ans = request.form.get("captcha_answer")
-        if captcha.is_enabled() and cid:
-            if not captcha.verify_captcha(cid, ans):
+        token = request.form.get("captcha_token")
+        if captcha.is_enabled():
+            if not captcha.verify_token(token):
+                logcaptcha("createvps", "failed", "createvps", "Invalid or missing captcha token")
                 flash("Invalid or expired captcha answer.", "error")
                 return redirect(url_for('createvps'))
+            logcaptcha("createvps", "passed", "createvps")
     db.ensureplanassignmenttables()
     if request.method == "POST":
         planId = request.form.get("planId", type=int)
@@ -1151,15 +1203,35 @@ def paypalipn():
         app.logger.info(f"PayPal IPN: payment not completed, status={paymentStatus}")
         return "Not completed", 200
 
-    if receiver:
-        paypal_email = config['paypal']['email'].lower()
-        if receiver.lower() != paypal_email:
-            app.logger.warning(f"PayPal IPN: receiver mismatch: {receiver} != {paypal_email}")
-            return "Wrong receiver", 400
+    # Require receiver_email to be present and match our configured PayPal address.
+    # The previous `if receiver:` guard skipped the check when the field was absent,
+    # allowing an attacker to strip the field and bypass the receiver check.
+    paypal_email = (config.get('paypal', {}).get('email') or '').lower().strip()
+    if not paypal_email:
+        app.logger.error("PayPal IPN: no paypal.email configured on the panel")
+        return "Receiver not configured", 500
+    if not receiver or receiver.lower() != paypal_email:
+        app.logger.warning(f"PayPal IPN: receiver mismatch: {receiver!r} != {paypal_email!r}")
+        return "Wrong receiver", 400
 
-    if float(amount) < float(plan['price']):
-        app.logger.warning(f"PayPal IPN: insufficient amount: {amount} < {plan['price']}")
-        return "Insufficient amount", 400
+    # Require exact amount + currency match. The previous `float(amount) < price`
+    # check allowed overpayment attacks (pay exact amount for a cheap plan, attach
+    # `custom` pointing at someone else's expensive pendingpayment VPS). Use exact
+    # equality with a small epsilon to absorb float rounding from PayPal.
+    currency = (request.form.get("mc_currency") or "USD").upper()
+    plan_currency = (plan.get('currency') or "USD").upper()
+    try:
+        paid_amount = float(amount)
+    except (TypeError, ValueError):
+        app.logger.warning(f"PayPal IPN: invalid amount {amount!r}")
+        return "Invalid amount", 400
+    plan_price = float(plan['price'])
+    if currency != plan_currency:
+        app.logger.warning(f"PayPal IPN: currency mismatch: {currency} != {plan_currency}")
+        return "Wrong currency", 400
+    if abs(paid_amount - plan_price) > 0.01:
+        app.logger.warning(f"PayPal IPN: amount mismatch: {paid_amount} != {plan_price} ({currency})")
+        return "Amount mismatch", 400
 
     # 5. Success Action: Update Database
     # Accept late IPN for soft-expired/cancelled unpaid checkouts (status deleted).
@@ -1344,12 +1416,13 @@ def renewfreevps(vpsUuid):
     limited = checkratelimit("renew", "renew", "20/hour", identity=g.userinfo["id"])
     if limited:
         return limited
-    cid = request.form.get("captcha_id")
-    ans = request.form.get("captcha_answer")
+    token = request.form.get("captcha_token")
     if captcha.is_enabled():
-        if not cid or not captcha.verify_captcha(cid, ans):
+        if not captcha.verify_token(token):
+            logcaptcha("renew", "failed", "renewfreevps", f"VPS {vpsUuid}: invalid or missing captcha token")
             flash("Invalid or expired captcha answer.", "error")
             return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+        logcaptcha("renew", "passed", "renewfreevps", f"VPS {vpsUuid}")
     vps = db.getvps(vpsUuid)
     if not vps or vps["userid"] != g.userinfo["id"]:
         flash("VPS not found.", "error")
@@ -1536,37 +1609,58 @@ def vpsconsoletoken(vpsUuid):
     if not ip:
         return jsonify({"error": "No IP assigned to this VPS"}), 400
 
+    # Store credentials server-side only; client receives a non-reversible token
     token = secrets.token_urlsafe(32)
-    _console_tokens[token] = {
+    _ssh_sessions[token] = {
         "vpsUuid": vpsUuid,
+        "userid": g.userinfo["id"],
         "hostname": ip,
         "port": 22,
         "username": "root",
         "password": vps["password"],
-        "used": False,
         "created": time.time(),
     }
     auditlog("vps.console", "vps", vpsUuid, f"Opened console for {vps.get('hostname')} via {ip}")
     return jsonify({"token": token})
 
 
+@app.route("/vps/<vpsUuid>/password", methods=["GET"])
+@loginrequired
+def vpspasswordreveal(vpsUuid):
+    """Return VPS password on demand. Rate-limited to prevent brute-force."""
+    limited = checkratelimit("pwreveal", "pwreveal", "10/minute", identity=g.userinfo["id"])
+    if limited:
+        return limited
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        return jsonify({"error": "VPS not found"}), 404
+
+    isAdmin = g.userinfo.get('role') == 'admin'
+    if not isAdmin and vps["userid"] != g.userinfo["id"]:
+        return jsonify({"error": "VPS not found"}), 404
+
+    auditlog("vps.revealpassword", "vps", vpsUuid, f"Password revealed for {vps.get('hostname')}")
+    return jsonify({"password": vps["password"]})
+
+
 @app.route("/vps/<vpsUuid>/console")
 @loginrequired
 def vpsconsole(vpsUuid):
-    # Purge expired tokens
+    # Purge expired SSH session tokens
     now = time.time()
-    expired = [t for t, v in _console_tokens.items() if now - v.get("created", 0) > _CONSOLE_TOKEN_TTL]
-    for t in expired:
-        del _console_tokens[t]
+    expired_ssh = [t for t, v in _ssh_sessions.items() if now - v.get("created", 0) > _SSH_SESSION_TTL]
+    for t in expired_ssh:
+        del _ssh_sessions[t]
 
     token = request.args.get("t")
-    if not token or token not in _console_tokens:
+    if not token or token not in _ssh_sessions:
         return "Invalid or expired console token", 403
 
-    ct = _console_tokens.pop(token)
+    ct = _ssh_sessions.pop(token)
     if ct["vpsUuid"] != vpsUuid:
         return "Invalid or expired console token", 403
 
+    # Verify the requesting user still owns this VPS
     vps = db.getvps(vpsUuid)
     if not vps:
         return "VPS not found", 404
@@ -1578,12 +1672,22 @@ def vpsconsole(vpsUuid):
     if vpsissuspended(vps):
         return "This VPS is suspended", 403
 
+    # Create a short-lived SSH session token for the WebSocket connection
+    # This token maps to server-side credentials - nothing sensitive reaches the client
+    ssh_token = secrets.token_urlsafe(32)
+    _ssh_sessions[ssh_token] = {
+        "vpsUuid": vpsUuid,
+        "userid": g.userinfo["id"],
+        "hostname": ct["hostname"],
+        "port": ct["port"],
+        "username": ct["username"],
+        "password": ct["password"],
+        "created": time.time(),
+    }
+
     return render_template(
         "console.html",
-        hostname=ct["hostname"],
-        port=ct["port"],
-        username=ct["username"],
-        password=ct["password"],
+        ssh_token=ssh_token,
         hostname_display=vps.get("ipv4") or vps.get("ipv6", "unknown"),
         theme=get_theme_class(g.userinfo),
     )
@@ -1601,17 +1705,56 @@ def ws_ssh(ws):
             pass
         return
 
-    host = request.args.get("host", "")
-    port = int(request.args.get("port", 22))
-    username = request.args.get("user", "root")
-    password = request.args.get("pass", "")
-
-    if not host:
+    # Rate limit SSH connections per user
+    rl_key = f"ssh:{user['id']}"
+    ok, retry = ratelimit.hit(rl_key, limit=10, window=60)
+    if not ok:
         try:
-            ws.close(1008, "Missing host")
+            ws.close(1013, "Too many connection attempts. Try again later.")
         except Exception:
             pass
         return
+
+    # Accept only a one-time session token - credentials never reach the client
+    ssh_token = request.args.get("token", "")
+    if not ssh_token or ssh_token not in _ssh_sessions:
+        try:
+            ws.close(1008, "Invalid or expired session")
+        except Exception:
+            pass
+        return
+
+    # Pop the token (single-use)
+    session = _ssh_sessions.pop(ssh_token)
+
+    # Validate ownership: the session must belong to this user
+    if session["userid"] != user["id"]:
+        try:
+            ws.close(1008, "Unauthorized")
+        except Exception:
+            pass
+        return
+
+    # Validate the VPS still belongs to this user and is in good standing
+    vps = db.getvps(session["vpsUuid"])
+    if not vps or vps.get("userid") != user["id"]:
+        try:
+            ws.close(1008, "VPS not found")
+        except Exception:
+            pass
+        return
+
+    if vpsissuspended(vps):
+        try:
+            ws.close(1003, "VPS is suspended")
+        except Exception:
+            pass
+        return
+
+    host = session["hostname"]
+    port = session["port"]
+    username = session["username"]
+    password = session["password"]
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -1620,9 +1763,9 @@ def ws_ssh(ws):
         ssh.connect(host, port=port, username=username, password=password,
                     timeout=config.get("console", {}).get("timeout", 10),
                     banner_timeout=15, auth_timeout=15, look_for_keys=False)
-    except Exception as e:
+    except Exception:
         try:
-            ws.close(1011, f"SSH connect failed: {e}")
+            ws.close(1011, "SSH connection failed")
         except Exception:
             pass
         return
@@ -1635,10 +1778,10 @@ def ws_ssh(ws):
     except Exception:
         try:
             chan = ssh.invoke_shell(term="xterm", width=120, height=40)
-        except Exception as e:
+        except Exception:
             ssh.close()
             try:
-                ws.close(1011, f"Shell failed: {e}")
+                ws.close(1011, "Shell initialization failed")
             except Exception:
                 pass
             return
@@ -1646,9 +1789,12 @@ def ws_ssh(ws):
     chan.settimeout(0.1)
 
     closed = threading.Event()
+    last_activity = time.time()
+    session_started = time.time()
 
     def ssh_to_ws():
         """Read from SSH channel, send to WebSocket."""
+        nonlocal last_activity
         try:
             while not closed.is_set():
                 try:
@@ -1659,6 +1805,7 @@ def ws_ssh(ws):
                     break
                 if not data:
                     break
+                last_activity = time.time()
                 try:
                     ws.send(bytes(data))
                 except Exception:
@@ -1671,12 +1818,29 @@ def ws_ssh(ws):
 
     try:
         while not closed.is_set():
+            # Enforce max session duration
+            if time.time() - session_started > _SSH_MAX_DURATION:
+                try:
+                    ws.close(1000, "Session timeout")
+                except Exception:
+                    pass
+                break
+
+            # Enforce idle timeout
+            if time.time() - last_activity > _SSH_IDLE_TIMEOUT:
+                try:
+                    ws.close(1000, "Idle timeout")
+                except Exception:
+                    pass
+                break
+
             try:
                 msg = ws.receive(timeout=0.5)
             except Exception:
                 break
             if msg is None:
                 continue
+            last_activity = time.time()
             try:
                 d = json.loads(msg)
             except (json.JSONDecodeError, TypeError):
@@ -1700,6 +1864,92 @@ def ws_ssh(ws):
             pass
         try:
             ssh.close()
+        except Exception:
+            pass
+
+
+@sock.route("/ws/captcha")
+def ws_captcha_proxy(ws):
+    """Proxy WebSocket for the captcha service.
+
+    The browser connects here without needing the captcha API key. The panel
+    opens a server-side WebSocket to the captcha service with the API key held
+    in config, and forwards frames both ways. The API key (and the captcha
+    service's address) never reach the browser.
+    """
+    if not captcha.is_enabled():
+        try:
+            ws.close(1008, "Captcha disabled")
+        except Exception:
+            pass
+        return
+
+    upstream_url = captcha.get_ws_url()
+    api_key = (captcha.get_config().get("api_key") or "").strip()
+    if not upstream_url or not api_key:
+        try:
+            ws.close(1011, "Captcha service not configured")
+        except Exception:
+            pass
+        return
+
+    # Connect upstream to the captcha service with the API key in the header.
+    headers = [("X-API-Key", api_key)]
+    try:
+        upstream = simple_ws_connect(upstream_url, headers=headers, timeout=5)
+    except Exception:
+        try:
+            ws.close(1011, "Captcha service unreachable")
+        except Exception:
+            pass
+        return
+
+    closed = threading.Event()
+
+    def upstream_to_browser():
+        try:
+            while not closed.is_set():
+                try:
+                    data = upstream.receive(timeout=0.5)
+                except Exception:
+                    break
+                if data is None:
+                    continue
+                if isinstance(data, (bytes, bytearray)):
+                    try:
+                        ws.send(bytes(data))
+                    except Exception:
+                        break
+                else:
+                    try:
+                        ws.send(str(data))
+                    except Exception:
+                        break
+        finally:
+            closed.set()
+
+    reader = threading.Thread(target=upstream_to_browser, daemon=True)
+    reader.start()
+
+    try:
+        while not closed.is_set():
+            try:
+                msg = ws.receive(timeout=0.5)
+            except Exception:
+                break
+            if msg is None:
+                continue
+            try:
+                if isinstance(msg, (bytes, bytearray)):
+                    upstream.send(bytes(msg))
+                else:
+                    upstream.send(str(msg))
+            except Exception:
+                break
+    finally:
+        closed.set()
+        try:
+            upstream.close()
         except Exception:
             pass
 
@@ -3305,6 +3555,27 @@ def adminauditlog():
         **paneladmininfo(g.userinfo)
     )
 
+# --- Captcha Log ---
+
+@app.route("/dashboard/admin/captchalog")
+@loginrequired
+@adminrequired
+def admincaptchalog():
+    page = request.args.get('page', 1, type=int)
+    q = request.args.get('q', '').strip() or None
+    resultFilter = request.args.get('result', '').strip() or None
+
+    logsData = db.listcaptchalogpaginated(page=page, perpage=50, search=q, result_filter=resultFilter)
+
+    return render_template(
+        "admincaptchalog.html",
+        logsData=logsData,
+        search=q or '',
+        resultFilter=resultFilter or '',
+        **paneluserinfo(g.userinfo),
+        **paneladmininfo(g.userinfo)
+    )
+
 # --- Settings ---
 
 SETTINGS_SCHEMA = {
@@ -3365,8 +3636,9 @@ SETTINGS_SCHEMA = {
     },
     "captcha": {
         "enabled": {"label": "Enable captcha", "type": "bool", "desc": "Require anti-bot math captcha on VPS creation, support tickets, and forms."},
-        "url": {"label": "API Base URL", "type": "text", "desc": "Base URL of captcha REST service (e.g. http://localhost:8000)."},
-        "api_key": {"label": "API Key", "type": "password", "desc": "Optional X-API-Key required by captcha service."},
+        "url": {"label": "API Base URL", "type": "text", "desc": "Base URL of captcha service (WebSocket endpoint is derived from this)."},
+        "api_key": {"label": "API Key", "type": "password", "desc": "X-API-Key required by the captcha service WebSocket."},
+        "secret": {"label": "Signing Secret", "type": "password", "desc": "Shared HMAC secret (CAPTCHA_SECRET) for verifying captcha tokens. Must match the captcha service's CAPTCHA_SECRET."},
     },
     "worker": {
         "enabled_in_web": {"label": "Run worker inside web process", "type": "bool", "desc": "On for single-process dev. Off in production with gunicorn multi-worker — run `python worker.py` instead."},
@@ -3394,6 +3666,111 @@ def adminsettingsreload():
     auditlog("settings.reload", "settings", None, "Reloaded config from config.json")
     flash("Configuration reloaded from config.json.", "success")
     return redirect(url_for('adminsettings'))
+
+
+@app.route("/dashboard/admin/settings/captcha/test", methods=["POST"])
+@loginrequired
+@adminrequired
+def admincaptchatest():
+    """Test the captcha service connection end-to-end.
+
+    Performs the same flow the browser does:
+    1. Connect to the captcha service WS with the configured API key.
+    2. Mint a challenge (receive JSON meta + binary GIF).
+    3. Verify the shared secret can validate a signed token.
+    Reports which steps passed/failed so the admin can diagnose config issues.
+    """
+    import json as _json
+
+    cfg = captcha.get_config()
+    upstream_url = captcha.get_ws_url()
+    api_key = (cfg.get("api_key") or "").strip()
+    secret = (cfg.get("secret") or "").strip()
+
+    if not upstream_url:
+        return jsonify({"ok": False, "error": "Captcha URL is not configured."}), 400
+    if not api_key:
+        return jsonify({"ok": False, "error": "Captcha API key is not configured."}), 400
+    if not secret:
+        return jsonify({"ok": False, "error": "Captcha signing secret is not configured."}), 400
+
+    results = {"url": upstream_url, "steps": []}
+
+    # Step 1: WebSocket connect with API key
+    try:
+        upstream = simple_ws_connect(upstream_url, headers=[("X-API-Key", api_key)])
+        results["steps"].append({"step": "connect", "ok": True, "detail": "WebSocket connection accepted"})
+    except Exception as e:
+        msg = str(e)
+        if "403" in msg or "401" in msg or "Unauthorized" in msg.lower():
+            results["steps"].append({"step": "connect", "ok": False, "detail": "API key rejected by captcha service"})
+        else:
+            results["steps"].append({"step": "connect", "ok": False, "detail": f"Connection failed: {msg[:120]}"})
+        return jsonify({"ok": False, "results": results, "error": "Could not connect to the captcha service. Check the URL and API key."}), 200
+
+    try:
+        # Step 2: Mint a challenge
+        upstream.send("new")
+        meta_raw = upstream.receive(timeout=5)
+        gif_raw = upstream.receive(timeout=5)
+
+        if not isinstance(meta_raw, str):
+            results["steps"].append({"step": "mint", "ok": False, "detail": "Expected JSON metadata, got non-text frame"})
+            return jsonify({"ok": False, "results": results, "error": "Captcha service returned an unexpected response."}), 200
+
+        try:
+            meta = _json.loads(meta_raw)
+            cid = meta.get("id", "")
+            ttl = meta.get("ttl", 0)
+        except (ValueError, TypeError):
+            results["steps"].append({"step": "mint", "ok": False, "detail": f"Invalid JSON metadata: {meta_raw[:80]}"})
+            return jsonify({"ok": False, "results": results, "error": "Captcha service returned invalid metadata."}), 200
+
+        if not cid:
+            results["steps"].append({"step": "mint", "ok": False, "detail": "No challenge ID in metadata"})
+            return jsonify({"ok": False, "results": results, "error": "Captcha service did not return a challenge ID."}), 200
+
+        gif_size = len(gif_raw) if gif_raw else 0
+        results["steps"].append({"step": "mint", "ok": True, "detail": f"Challenge minted: id={cid[:12]}… ttl={ttl}s gif={gif_size} bytes"})
+
+        # Step 3: Verify the shared secret by generating a test token and
+        # checking it verifies locally. We can't solve the captcha (we don't
+        # know the answer), but we can confirm the secret is valid by signing
+        # and verifying a dummy token with the same algorithm.
+        import base64 as _b64
+        import hashlib as _hashlib
+        import hmac as _hmac
+        import time as _time
+
+        def _b64u(b):
+            return _b64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+        payload = _json.dumps(
+            {"cid": "test", "ans": 0, "exp": int(_time.time()) + 60},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        sig = _b64u(_hmac.new(secret.encode(), payload, _hashlib.sha256).digest())
+        test_token = _b64u(payload) + "." + sig
+
+        if captcha.verify_token(test_token):
+            results["steps"].append({"step": "secret", "ok": True, "detail": "Signing secret verifies correctly"})
+        else:
+            results["steps"].append({"step": "secret", "ok": False, "detail": "Token verification failed with configured secret"})
+            return jsonify({"ok": False, "results": results, "error": "The signing secret does not match. Ensure it equals the captcha service's 'secret' in config.json."}), 200
+
+        # All good
+        upstream.close()
+        auditlog("settings.captcha_test", "settings", None, "Captcha service test passed")
+        return jsonify({"ok": True, "results": results, "message": "Captcha service is reachable and the signing secret matches."}), 200
+
+    except Exception as e:
+        results["steps"].append({"step": "mint", "ok": False, "detail": f"Error during test: {str(e)[:120]}"})
+        try:
+            upstream.close()
+        except Exception:
+            pass
+        return jsonify({"ok": False, "results": results, "error": f"Test failed: {str(e)[:120]}"}), 200
 
 
 @app.route("/dashboard/admin/settings", methods=["GET", "POST"])
@@ -3619,12 +3996,13 @@ def login():
         limited = checkratelimit("login", "login", "10/minute")
         if limited:
             return limited
-        cid = request.form.get("captcha_id")
-        ans = request.form.get("captcha_answer")
-        if captcha.is_enabled() and cid:
-            if not captcha.verify_captcha(cid, ans):
+        token = request.form.get("captcha_token")
+        if captcha.is_enabled():
+            if not captcha.verify_token(token):
+                logcaptcha("login", "failed", "login", "Invalid or missing captcha token")
                 flash("Invalid or expired captcha answer.", "error")
                 return render_template("login.html", **guestuserinfo())
+            logcaptcha("login", "passed", "login")
         email = request.form.get("email")
         password = request.form.get("password")
 
@@ -3791,12 +4169,13 @@ def createticket():
     limited = checkratelimit("ticket", "ticket", "15/hour", identity=g.userinfo["id"])
     if limited:
         return limited
-    cid = request.form.get("captcha_id")
-    ans = request.form.get("captcha_answer")
-    if captcha.is_enabled() and cid:
-        if not captcha.verify_captcha(cid, ans):
+    token = request.form.get("captcha_token")
+    if captcha.is_enabled():
+        if not captcha.verify_token(token):
+            logcaptcha("createticket", "failed", "createticket", "Invalid or missing captcha token")
             flash("Invalid or expired captcha answer.", "error")
             return redirect(url_for('tickets'))
+        logcaptcha("createticket", "passed", "createticket")
     subject = request.form.get("subject", "").strip()
     priority = request.form.get("priority", "normal")
     message = request.form.get("message", "").strip()
@@ -3847,12 +4226,13 @@ def replyticket(ticket_uuid):
     limited = checkratelimit("ticket", "ticket", "15/hour", identity=g.userinfo["id"])
     if limited:
         return limited
-    cid = request.form.get("captcha_id")
-    ans = request.form.get("captcha_answer")
-    if captcha.is_enabled() and cid:
-        if not captcha.verify_captcha(cid, ans):
+    token = request.form.get("captcha_token")
+    if captcha.is_enabled():
+        if not captcha.verify_token(token):
+            logcaptcha("replyticket", "failed", "replyticket", f"Ticket {ticket_uuid}: invalid or missing captcha token")
             flash("Invalid or expired captcha answer.", "error")
             return redirect(url_for('viewticket', ticket_uuid=ticket_uuid))
+        logcaptcha("replyticket", "passed", "replyticket", f"Ticket {ticket_uuid}")
     ticket = db.getticket(ticket_uuid)
     
     if not ticket:

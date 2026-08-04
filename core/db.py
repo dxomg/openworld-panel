@@ -709,6 +709,57 @@ def ensurelocationstable():
             except Exception:
                 pass
 
+
+def ensurecaptchalogtable():
+    """Create captchalog table if missing (live DB migrate)."""
+    with getconnection() as conn:
+        if conn.engine == "mysql":
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS captchalog (
+                    id INTEGER NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                    userid INTEGER,
+                    username VARCHAR(255),
+                    action VARCHAR(255) NOT NULL,
+                    result VARCHAR(50) NOT NULL,
+                    endpoint VARCHAR(255),
+                    ip VARCHAR(255),
+                    details TEXT,
+                    created DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE SET NULL
+                )
+            """)
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idxcaptchaloguser ON captchalog(userid)")
+            except Exception:
+                pass
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idxcaptchalogresult ON captchalog(result)")
+            except Exception:
+                pass
+            try:
+                conn.execute("CREATE INDEX IF NOT EXISTS idxcaptchalogcreated ON captchalog(created)")
+            except Exception:
+                pass
+        else:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS captchalog (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    userid INTEGER,
+                    username TEXT,
+                    action TEXT NOT NULL,
+                    result TEXT NOT NULL,
+                    endpoint TEXT,
+                    ip TEXT,
+                    details TEXT,
+                    created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(userid) REFERENCES users(id) ON DELETE SET NULL
+                );
+                CREATE INDEX IF NOT EXISTS idxcaptchaloguser ON captchalog(userid);
+                CREATE INDEX IF NOT EXISTS idxcaptchalogresult ON captchalog(result);
+                CREATE INDEX IF NOT EXISTS idxcaptchalogcreated ON captchalog(created);
+            """)
+
+
 def addlocation(uuid, name, code, flag='', description=''):
     ensurelocationstable()
     with getconnection() as conn:
@@ -2363,6 +2414,53 @@ def getauditlogactions():
     with getconnection() as conn:
         rows = conn.execute("SELECT DISTINCT action FROM auditlog ORDER BY action").fetchall()
         return [r['action'] for r in rows]
+
+
+# --- CAPTCHA LOG FUNCTIONS ---
+
+def addcaptchalog(userid, username, action, result, endpoint=None, ip=None, details=None):
+    ensurecaptchalogtable()
+    with getconnection() as conn:
+        conn.execute("""
+            INSERT INTO captchalog (userid, username, action, result, endpoint, ip, details)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (userid, username, action, result, endpoint, ip, details))
+
+def listcaptchalogpaginated(page=1, perpage=25, search=None, result_filter=None):
+    with getconnection() as conn:
+        offset = (page - 1) * perpage
+        where = ""
+        params = []
+
+        if result_filter:
+            where = "WHERE cl.result = ?"
+            params.append(result_filter)
+        if search:
+            where = ("WHERE " if not where else where + " AND ") + "(cl.username LIKE ? OR cl.action LIKE ? OR cl.endpoint LIKE ? OR cl.ip LIKE ?)"
+            s = f"%{search}%"
+            params.extend([s, s, s, s])
+
+        total = _scalar(conn.execute(f"SELECT COUNT(*) FROM captchalog cl {where}", params).fetchone())
+        rows = conn.execute(f"""
+            SELECT cl.*
+            FROM captchalog cl
+            {where}
+            ORDER BY cl.created DESC
+            LIMIT ? OFFSET ?
+        """, params + [perpage, offset]).fetchall()
+        return {
+            "logs": [dict(r) for r in rows],
+            "totalCount": total,
+            "currentPage": page,
+            "perPage": perpage,
+            "totalPages": math.ceil(total / perpage) if perpage else 1,
+            "hasPrev": page > 1,
+            "hasNext": (page * perpage) < total,
+        }
+
+def countcaptchalog():
+    with getconnection() as conn:
+        return _scalar(conn.execute("SELECT COUNT(*) FROM captchalog").fetchone())
 
 # --- SETTINGS FUNCTIONS ---
 

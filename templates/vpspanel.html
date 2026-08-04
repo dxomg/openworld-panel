@@ -273,8 +273,8 @@
         <div class="kv-row">
           <span class="k">Password</span>
           <span class="v">
-            <span data-copy="{{ instance.password }}" title="Click to reveal" style="cursor:pointer;color:var(--accent);filter:blur(5px);" onclick="this.style.filter='none';">{{ instance.password }}</span>
-            <span data-copy="{{ instance.password }}" title="Click to copy" style="cursor:pointer;opacity:0.5;font-size:12px;">&#x2398;</span>
+            <span id="pw-reveal" data-copy="" title="Click to reveal" style="cursor:pointer;color:var(--accent);filter:blur(5px);" onclick="revealPassword(this);">••••••••</span>
+            <span id="pw-copy" data-copy="" title="Click to copy" style="cursor:pointer;opacity:0.5;font-size:12px;display:none;" onclick="copyPassword();">&#x2398;</span>
           </span>
         </div>
 
@@ -579,6 +579,56 @@
             closeConsole();
         }
     });
+})();
+</script>
+
+<script>
+(function() {
+    var vpsUuid = '{{ instance.uuid }}';
+    var fetchedPassword = null;
+
+    function getCookie(n) {
+        var m = document.cookie.match('(^| )' + n + '=([^;]+)');
+        return m ? m[2] : null;
+    }
+
+    window.revealPassword = function(el) {
+        if (fetchedPassword) {
+            el.textContent = fetchedPassword;
+            el.style.filter = 'none';
+            el.setAttribute('data-copy', fetchedPassword);
+            document.getElementById('pw-copy').style.display = '';
+            document.getElementById('pw-copy').setAttribute('data-copy', fetchedPassword);
+            return;
+        }
+        el.textContent = 'Loading...';
+        fetch('/vps/' + vpsUuid + '/password', {
+            headers: {'X-CSRFToken': getCookie('csrf_token') || ''}
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.password) {
+                fetchedPassword = data.password;
+                el.textContent = data.password;
+                el.style.filter = 'none';
+                el.setAttribute('data-copy', data.password);
+                document.getElementById('pw-copy').style.display = '';
+                document.getElementById('pw-copy').setAttribute('data-copy', data.password);
+            } else {
+                el.textContent = 'Failed to load';
+            }
+        })
+        .catch(function() {
+            el.textContent = 'Failed to load';
+        });
+    };
+
+    window.copyPassword = function() {
+        if (!fetchedPassword) return;
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(fetchedPassword);
+        }
+    };
 })();
 </script>
 
