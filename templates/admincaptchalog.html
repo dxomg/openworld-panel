@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}Captcha Log - {{ projectname }}{% endblock %}
+
+{% block content %}
+<style>
+    .log-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: var(--font-mono);
+        font-size: 12px;
+    }
+    .log-table th {
+        text-align: left;
+        padding: 10px 12px;
+        color: var(--text-dim);
+        border-bottom: 1px solid var(--border);
+        font-weight: 500;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .log-table td {
+        padding: 8px 12px;
+        color: var(--text);
+        border-bottom: 1px solid var(--border-soft);
+        vertical-align: top;
+    }
+    .log-table tr:hover td {
+        background: rgba(255,255,255,0.02);
+    }
+    .result-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        white-space: nowrap;
+    }
+    .result-passed {
+        background: rgba(79, 209, 197, 0.15);
+        color: var(--accent);
+        border: 1px solid var(--accent-dim);
+    }
+    .result-failed {
+        background: var(--danger-glow);
+        color: var(--danger);
+        border: 1px solid var(--danger);
+    }
+    .action-tag {
+        display: inline-block;
+        padding: 2px 7px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 500;
+        background: rgba(255,255,255,0.06);
+        color: var(--text-dim);
+        border: 1px solid var(--border);
+    }
+    .guest-label {
+        color: var(--text-dim);
+        font-style: italic;
+    }
+    .captcha-filters {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+    .captcha-filters .search-input,
+    .captcha-filters .filter-select {
+        width: 200px;
+    }
+</style>
+
+<section class="hero">
+    <div class="hero-eyebrow"><span class="pulse-dot"></span> Operator Console</div>
+    <h1>Captcha Log</h1>
+    <p>Track every captcha verification attempt — passes, failures, and the users or guests behind them.</p>
+
+    <div class="hero-stats">
+        <div class="hero-stat">
+            <div class="num accent">{{ logsData.totalCount }}</div>
+            <div class="label">Total Attempts</div>
+        </div>
+    </div>
+</section>
+
+<div class="section-head">
+    <h2>Verification History</h2>
+    <form method="GET" action="{{ url_for('admincaptchalog') }}" style="display: flex; gap: 8px; align-items: center;">
+        <input type="text" name="q" class="search-input" value="{{ search }}" placeholder="Search by user, action, IP...">
+        <select name="result" class="search-input" onchange="this.form.submit()">
+            <option value="">All Results</option>
+            <option value="passed" {% if resultFilter == 'passed' %}selected{% endif %}>Passed</option>
+            <option value="failed" {% if resultFilter == 'failed' %}selected{% endif %}>Failed</option>
+        </select>
+        <button type="submit" class="btn btn-small">Filter</button>
+        {% if search or resultFilter %}
+        <a href="{{ url_for('admincaptchalog') }}" class="btn btn-small">Clear</a>
+        {% endif %}
+    </form>
+</div>
+
+{% if logsData.logs %}
+<div style="overflow-x: auto;">
+    <table class="log-table">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>User</th>
+                <th>Action</th>
+                <th>Result</th>
+                <th>Endpoint</th>
+                <th>IP Address</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in logsData.logs %}
+            <tr>
+                <td style="white-space: nowrap; color: var(--text-dim);">{{ log.created }}</td>
+                <td>
+                    {% if log.userid %}
+                        <span>{{ log.username }}</span>
+                    {% else %}
+                        <span class="guest-label">guest</span>
+                    {% endif %}
+                </td>
+                <td><span class="action-tag">{{ log.action }}</span></td>
+                <td>
+                    {% if log.result == 'passed' %}
+                        <span class="result-badge result-passed">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            passed
+                        </span>
+                    {% else %}
+                        <span class="result-badge result-failed">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+                            failed
+                        </span>
+                    {% endif %}
+                </td>
+                <td style="color: var(--text-dim);">{{ log.endpoint or '—' }}</td>
+                <td style="color: var(--text-dim);">{{ log.ip or '—' }}</td>
+                <td style="color: var(--text-dim); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ log.details or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if logsData.totalPages > 1 %}
+<div class="pagination" style="display: flex; gap: 10px; align-items: center; justify-content: center; margin-top: 20px;">
+    {% if logsData.hasPrev %}
+    <a href="{{ url_for('admincaptchalog', page=logsData.currentPage - 1, q=search, result=resultFilter) }}" class="btn btn-small">&larr; Previous</a>
+    {% endif %}
+    <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); padding: 0 15px;">PAGE {{ logsData.currentPage }} / {{ logsData.totalPages }}</span>
+    {% if logsData.hasNext %}
+    <a href="{{ url_for('admincaptchalog', page=logsData.currentPage + 1, q=search, result=resultFilter) }}" class="btn btn-small">Next &rarr;</a>
+    {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div style="text-align: center; padding: 60px 20px; color: var(--text-dim);">
+    <div style="font-size: 14px; margin-bottom: 8px;">No captcha attempts logged yet.</div>
+    <div style="font-size: 12px;">Captcha verification attempts will appear here once users start interacting with captcha-protected forms.</div>
+</div>
+{% endif %}
+
+{% endblock %}
