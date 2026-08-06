@@ -147,7 +147,17 @@ def logcaptcha(action, result, endpoint=None, details=None):
 
 app = Flask(__name__)
 
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or secrets.token_hex(32)
+# Session signing key. In production (OPENWORLD_ENV=production) a stable
+# FLASK_SECRET_KEY MUST be provided — otherwise each gunicorn worker would
+# generate its own random key and sessions would break across workers (and
+# every restart would log everyone out). In dev a random key is fine.
+_secret = os.environ.get("FLASK_SECRET_KEY")
+if not _secret and os.environ.get("OPENWORLD_ENV", "").lower() == "production":
+    raise RuntimeError(
+        "FLASK_SECRET_KEY is required in production (OPENWORLD_ENV=production). "
+        "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+app.secret_key = _secret or secrets.token_hex(32)
 sock = Sock(app)
 
 # Server-side SSH session tokens: {token: {"vpsUuid", "userid", "hostname", "port", "username", "password", "created"}}

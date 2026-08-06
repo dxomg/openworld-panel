@@ -34,7 +34,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-change-me}
+      OPENWORLD_ENV: production
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:?FLASK_SECRET_KEY must be set in .env}
       WORKER_ENABLED_IN_WEB: "false"
       WORKER_HEARTBEAT_PATH: /data/worker.heartbeat
       DB_ENGINE: ${DB_ENGINE:-mysql}
@@ -51,7 +52,9 @@ services:
       - ${PANEL_CONFIG:-panel-config}:/app/config.json
       # SQLite storage + worker heartbeat (only used if DB_ENGINE=sqlite)
       - ${PANEL_DATA:-panel-data}:/data
-    command: ["gunicorn", "main:app", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "--graceful-timeout", "30"]
+    # --preload loads the app once before forking workers, so they share the
+    # secret key and import errors surface at startup.
+    command: ["gunicorn", "main:app", "--preload", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "--graceful-timeout", "30"]
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -70,6 +73,8 @@ services:
       web:
         condition: service_started
     environment:
+      OPENWORLD_ENV: production
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:?FLASK_SECRET_KEY must be set in .env}
       # worker.py sets OPENWORLD_WORKER=1 itself; this keeps the in-web loop off too.
       WORKER_ENABLED_IN_WEB: "false"
       WORKER_HEARTBEAT_PATH: /data/worker.heartbeat
