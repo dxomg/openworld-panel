@@ -2,6 +2,7 @@ services:
   db:
     image: mariadb:11
     restart: unless-stopped
+    networks: [ip6net]
     environment:
       MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme-root}
       MARIADB_DATABASE: ${MYSQL_DATABASE:-openworld}
@@ -35,6 +36,7 @@ services:
     build: .
     image: openworld-panel:latest
     restart: unless-stopped
+    networks: [ip6net]
     depends_on:
       db:
         condition: service_healthy
@@ -76,6 +78,7 @@ services:
       dockerfile: Dockerfile.worker
     image: openworld-worker:latest
     restart: unless-stopped
+    networks: [ip6net]
     depends_on:
       db:
         condition: service_healthy
@@ -103,6 +106,14 @@ services:
     cap_drop:
       - ALL
     mem_limit: 256m
+
+# IPv6-enabled network (per Docker's official docs). Docker auto-allocates a
+# ULA /64 subnet; ip6tables masquerade is enabled by default on Docker 26, so
+# containers get NAT'd outbound IPv6 through the host. The published "5000:5000"
+# port listens on both IPv4 and IPv6.
+networks:
+  ip6net:
+    enable_ipv6: true
 
 # Only used when the corresponding *_DATA env var is unset.
 volumes:
