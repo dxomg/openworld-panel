@@ -26,6 +26,7 @@ def load():
         "mysql": dict(DEFAULTS["mysql"]),
     }
     if not os.path.isfile(CONFIG_PATH):
+        save(cfg)
         return cfg
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:

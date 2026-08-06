@@ -59,6 +59,7 @@ def reloadconfig():
 
 
 db.ensurejobssuspendtype()
+db.ensurejobsupgradetype()
 db.ensurevpssuspensioncolumns()
 db.ensurevpspaiduntilcolumn()
 db.ensurecaptchalogtable()
@@ -235,6 +236,13 @@ def _processjob(job):
         vps = db.getvps(vpsUuid)
         if vps:
             services.enable_tun_for_lxc(vps['nodeid'], payload.get('vmid'))
+
+    elif jobtype == 'upgrade':
+        # Plan upgrade: VPS row already holds the new plan's resources.
+        # Apply them to the node container (cpu/ram/swap + disk grow + restart).
+        vps = db.getvps(vpsUuid)
+        if vps:
+            services.upgradevpsonnode(vpsUuid, old_disk_mb=int(payload.get("old_disk_mb") or 0))
 
     elif jobtype == 'create':
         services.provisiononnode(vpsUuid)
@@ -454,14 +462,79 @@ def _markvpsfreerenewal(vpsUuid, days=None):
         return None
 
 
+def _renewpaidvps(vps, amount, currency="USD", paymentprocessorid=None, transactionid=None, days=None):
+    """Extend a paid VPS by one billing period, record the transaction, and
+    restore it if it was auto-suspended for an overdue payment."""
+    paidUntil = _markvpspaid(vps["uuid"], days=days)
+    if vps.get("status") == "suspended":
+        sus = db.getsuspensionbyvpsid(vps["id"])
+        reason = (sus or {}).get("reason") or ""
+        if "payment" in reason.lower():
+            db.liftvpssuspension(vps["id"])
+            db.updatevps(vps["uuid"], status="stopped")
+    db.addtransaction(
+        uuid=str(uuid.uuid4()),
+        userid=vps["userid"],
+        transactionid=transactionid or f"manual-{uuid.uuid4().hex[:8]}",
+        amount=float(amount),
+        currency=currency,
+        status="completed",
+        paymentprocessorid=paymentprocessorid if paymentprocessorid else 1,
+        vpsid=vps["id"],
+        planid=vps["planid"],
+    )
+    return paidUntil
+
+
+def _upgradevpspaid(vps, newPlan, amount, currency="USD", paymentprocessorid=None, transactionid=None):
+    """Apply a paid plan upgrade: update the VPS row to the new plan's
+    resources, record the transaction, and enqueue an upgrade job to apply the
+    changes on the node. The billing period (paid_until) is unchanged."""
+    old_disk_mb = int(vps.get("disk") or 0)
+    db.updatevps(
+        vps["uuid"],
+        planid=newPlan["id"],
+        cpu=int(newPlan["cpu"]),
+        ram=int(newPlan["ram"]),
+        swap=int(newPlan["swap"]),
+        disk=int(newPlan["disk"]),
+    )
+    db.addtransaction(
+        uuid=str(uuid.uuid4()),
+        userid=vps["userid"],
+        transactionid=transactionid or f"manual-{uuid.uuid4().hex[:8]}",
+        amount=float(amount),
+        currency=currency,
+        status="completed",
+        paymentprocessorid=paymentprocessorid if paymentprocessorid else 1,
+        vpsid=vps["id"],
+        planid=newPlan["id"],
+    )
+    enqueuejob(
+        vps["id"], vps["uuid"], vps["userid"], "upgrade",
+        payload={"old_disk_mb": old_disk_mb},
+    )
+    return True
+
+
 def _worker_cfg():
     w = config.get("worker") or {}
+    enabled_in_web = bool(w.get("enabled_in_web", True))
+    # Env override: lets the production web container disable the in-process
+    # worker thread when a separate worker service is running, without editing
+    # config.json. WORKER_ENABLED_IN_WEB=false (or 0/no).
+    env_w = os.environ.get("WORKER_ENABLED_IN_WEB")
+    if env_w is not None and env_w != "":
+        enabled_in_web = env_w.strip().lower() in ("1", "true", "yes", "on")
     return {
-        "enabled_in_web": bool(w.get("enabled_in_web", True)),
+        "enabled_in_web": enabled_in_web,
         "poll_seconds": max(0.5, float(w.get("poll_seconds") or 2)),
         "maintenance_seconds": max(15, int(w.get("maintenance_seconds") or 60)),
         "stale_job_minutes": max(5, int(w.get("stale_job_minutes") or 45)),
-        "heartbeat_path": w.get("heartbeat_path") or "worker.heartbeat",
+        # Env override: in a multi-container setup the worker writes a heartbeat
+        # to a volume shared with the web container. WORKER_HEARTBEAT_PATH points
+        # both writer and reader at the same file.
+        "heartbeat_path": os.environ.get("WORKER_HEARTBEAT_PATH") or w.get("heartbeat_path") or "worker.heartbeat",
     }
 
 
@@ -1177,13 +1250,24 @@ def paypalipn():
         return "INVALID", 400
 
     # 2. Extract Data
-    vpsUuid = request.form.get("custom")
+    customRaw = request.form.get("custom") or ""
+    vpsUuid = customRaw
+    customKind = "create"
+    # Renewal payments ship a JSON payload in `custom` so the IPN can tell them
+    # apart from initial checkout payments (which send a bare VPS uuid).
+    if customRaw.startswith("{"):
+        try:
+            parsed = json.loads(customRaw)
+            vpsUuid = parsed.get("vps") or customRaw
+            customKind = parsed.get("kind") or "create"
+        except ValueError:
+            vpsUuid = customRaw
     paymentStatus = request.form.get("payment_status")
     amount = request.form.get("mc_gross")
     receiver = request.form.get("receiver_email")
     txnId = request.form.get("txn_id") or request.form.get("transaction_id")
 
-    app.logger.info(f"PayPal IPN: txn={txnId} status={paymentStatus} amount={amount} vps={vpsUuid}")
+    app.logger.info(f"PayPal IPN: txn={txnId} status={paymentStatus} amount={amount} vps={vpsUuid} kind={customKind}")
 
     # 3. Replay protection: reject if txn_id already processed
     if txnId and db.gettransactionbytxnid(txnId):
@@ -1229,11 +1313,81 @@ def paypalipn():
     if currency != plan_currency:
         app.logger.warning(f"PayPal IPN: currency mismatch: {currency} != {plan_currency}")
         return "Wrong currency", 400
-    if abs(paid_amount - plan_price) > 0.01:
-        app.logger.warning(f"PayPal IPN: amount mismatch: {paid_amount} != {plan_price} ({currency})")
+    # Expected amount depends on the payment kind:
+    #   - create/renew: the plan price
+    #   - upgrade: the difference between the target plan and the current plan
+    expected_amount = plan_price
+    upgrade_target_plan = None
+    if customKind == "upgrade":
+        target_plan_uuid = None
+        if isinstance(json.loads(customRaw) if customRaw.startswith("{") else {}, dict):
+            try:
+                target_plan_uuid = json.loads(customRaw).get("plan")
+            except ValueError:
+                target_plan_uuid = None
+        upgrade_target_plan = db.getplanbyuuid(target_plan_uuid) if target_plan_uuid else None
+        if not upgrade_target_plan or not upgrade_target_plan.get("active", 1):
+            app.logger.warning(f"PayPal IPN: upgrade target plan invalid for {vpsUuid}")
+            return "Invalid upgrade plan", 400
+        expected_amount = round(float(upgrade_target_plan["price"]) - plan_price, 2)
+        if expected_amount <= 0:
+            app.logger.warning(f"PayPal IPN: upgrade amount non-positive for {vpsUuid}")
+            return "Invalid upgrade amount", 400
+    if abs(paid_amount - expected_amount) > 0.01:
+        app.logger.warning(f"PayPal IPN: amount mismatch: {paid_amount} != {expected_amount} ({currency})")
         return "Amount mismatch", 400
 
     # 5. Success Action: Update Database
+    if customKind == "renew":
+        # Paid renewal: extend paid_until, record the transaction, and restore
+        # the VPS if it had been auto-suspended for an overdue payment.
+        if vps['status'] in ('pendingpayment', 'deleted'):
+            app.logger.info(f"PayPal IPN: renewal ignored for {vpsUuid} (status={vps['status']})")
+            return "OK", 200
+        paypalMethod = db.getpaymentmethodbyslug("paypal")
+        paidUntil = _renewpaidvps(
+            vps,
+            amount=amount,
+            currency=currency,
+            paymentprocessorid=paypalMethod['id'] if paypalMethod else 1,
+            transactionid=txnId,
+        )
+        auditlog(
+            "payment.paypal_renew",
+            "vps",
+            vpsUuid,
+            f"PayPal renewal payment of ${amount} (txn: {txnId})"
+            + (f" (paid until {paidUntil})" if paidUntil else ""),
+        )
+        app.logger.info(f"PayPal IPN: renewal processed for {vpsUuid}")
+        return "OK", 200
+
+    if customKind == "upgrade":
+        # Paid upgrade: apply the new plan's resources and enqueue an upgrade job.
+        if vps['status'] in ('pendingpayment', 'deleted', 'creating'):
+            app.logger.info(f"PayPal IPN: upgrade ignored for {vpsUuid} (status={vps['status']})")
+            return "OK", 200
+        if db.haspendingjobs(vpsUuid):
+            app.logger.info(f"PayPal IPN: upgrade ignored for {vpsUuid} (pending job)")
+            return "OK", 200
+        paypalMethod = db.getpaymentmethodbyslug("paypal")
+        _upgradevpspaid(
+            vps,
+            upgrade_target_plan,
+            amount=amount,
+            currency=currency,
+            paymentprocessorid=paypalMethod['id'] if paypalMethod else 1,
+            transactionid=txnId,
+        )
+        auditlog(
+            "payment.paypal_upgrade",
+            "vps",
+            vpsUuid,
+            f"PayPal upgrade to {upgrade_target_plan['name']} for ${amount} (txn: {txnId})",
+        )
+        app.logger.info(f"PayPal IPN: upgrade processed for {vpsUuid}")
+        return "OK", 200
+
     # Accept late IPN for soft-expired/cancelled unpaid checkouts (status deleted).
     if vps['status'] in ('pendingpayment', 'deleted'):
         if vps['status'] == 'deleted':
@@ -1314,6 +1468,26 @@ def vpspanel(vpsUuid):
         if net and net.get('dns'):
             networkDns = net['dns']
 
+    # Plans this paid VPS can upgrade to (active, paid, strictly more expensive,
+    # in stock). Used by the Upgrade plan modal.
+    curPrice = 0.0
+    curPlanRow = db.getplanbyid(vps['planid']) if vps.get('planid') else None
+    if curPlanRow:
+        try:
+            curPrice = float(curPlanRow.get('price') or 0)
+        except (TypeError, ValueError):
+            curPrice = 0.0
+    upgrade_plans = []
+    if curPrice > 0:
+        for p in db.listplans(active=1):
+            try:
+                pprice = float(p.get('price') or 0)
+            except (TypeError, ValueError):
+                pprice = 0.0
+            stock = int(p.get('stock') if p.get('stock') is not None else -1)
+            if pprice > curPrice and stock != 0:
+                upgrade_plans.append(p)
+
     return render_template(
         "vpspanel.html",
         **paneluserinfo(g.userinfo),
@@ -1324,6 +1498,9 @@ def vpspanel(vpsUuid):
         networkDns=networkDns,
         reinstallImages=db.getimagesfornode(vps['nodeid'], active=1),
         metrics_mode=config.get("console", {}).get("metrics", "dynamic"),
+        methods=db.listallpaymentmethods(),
+        billing_days=_billing_days("paid"),
+        upgrade_plans=upgrade_plans,
     )
 
 
@@ -1482,6 +1659,157 @@ def renewfreevps(vpsUuid):
         flash(f"Free period renewed until {until} ({days} days).", "success")
 
     auditlog("vps.free_renew", "vps", vpsUuid, f"User renewed free VPS until {until}")
+    return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+
+@app.route("/vps/<vpsUuid>/renewpaid", methods=["POST"])
+@loginrequired
+def renewpaidvps(vpsUuid):
+    """Pay to extend a paid VPS by one billing period."""
+    limited = checkratelimit("renew", "renew", "20/hour", identity=g.userinfo["id"])
+    if limited:
+        return limited
+    vps = db.getvps(vpsUuid)
+    if not vps or vps["userid"] != g.userinfo["id"]:
+        flash("VPS not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if vps.get("status") == "deleted":
+        flash("This VPS is deleted.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    plan = db.getplanbyid(vps["planid"])
+    if not plan or float(plan.get("price") or 0) <= 0:
+        flash("Only paid VPS can be extended this way.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    methodSlug = (request.form.get("methodSlug") or "").strip()
+    method = db.getpaymentmethodbyslug(methodSlug)
+    if not method:
+        flash("Invalid payment method.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    amount = float(plan["price"])
+
+    if methodSlug == "paypal":
+        base = request.host_url.rstrip("/")
+        custom = json.dumps({"vps": vpsUuid, "kind": "renew"})
+        params = {
+            "cmd": "_xclick",
+            "business": config["paypal"]["email"],
+            "item_name": f"VPS Renewal: {plan['name']} ({vps['hostname']})",
+            "amount": f"{amount:.2f}",
+            "currency_code": "USD",
+            "notify_url": f"{base}/paypal/ipn",
+            "return": f"{base}/vps/{vpsUuid}",
+            "cancel_return": f"{base}/vps/{vpsUuid}",
+            "custom": custom,
+        }
+        paypalRedirect = getpaypalurl() + "?" + urlencode(params)
+        app.logger.info(f"PayPal renewal redirect: base={base} return={params['return']} notify={params['notify_url']}")
+        return redirect(paypalRedirect)
+
+    paidUntil = _renewpaidvps(
+        vps,
+        amount=amount,
+        currency="USD",
+        paymentprocessorid=method.get("id") if method else 1,
+    )
+    auditlog(
+        "payment.renew_manual",
+        "vps",
+        vpsUuid,
+        f"Manual renewal payment of ${amount:.2f} via {methodSlug}"
+        + (f" (paid until {paidUntil})" if paidUntil else ""),
+    )
+    if vps.get("status") == "suspended":
+        flash(f"Payment confirmed. Time extended until {paidUntil}. VPS restored.", "success")
+    else:
+        flash(f"Payment confirmed. Time extended until {paidUntil}.", "success")
+    return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+
+@app.route("/vps/<vpsUuid>/upgradeplan", methods=["POST"])
+@loginrequired
+def upgradeplan(vpsUuid):
+    """Pay to upgrade a paid VPS to a higher-tier paid plan."""
+    limited = checkratelimit("renew", "renew", "20/hour", identity=g.userinfo["id"])
+    if limited:
+        return limited
+    vps = db.getvps(vpsUuid)
+    if not vps or vps["userid"] != g.userinfo["id"]:
+        flash("VPS not found.", "error")
+        return redirect(url_for("dashboard"))
+
+    if vps.get("status") in ("deleted", "pendingpayment", "creating"):
+        flash("This VPS cannot be upgraded right now.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    curPlan = db.getplanbyid(vps["planid"])
+    if not curPlan or float(curPlan.get("price") or 0) <= 0:
+        flash("Only paid VPS can be upgraded.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    newPlanUuid = (request.form.get("planUuid") or "").strip()
+    newPlan = db.getplanbyuuid(newPlanUuid)
+    if not newPlan or not newPlan.get("active", 1):
+        flash("Invalid plan selected.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    # Only allow upgrades to strictly more expensive paid plans (avoids refund
+    # / downgrade logic). Stock of -1 means unlimited.
+    curPrice = float(curPlan["price"])
+    newPrice = float(newPlan["price"])
+    if newPrice <= curPrice:
+        flash("You can only upgrade to a higher-tier plan.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+    stock = int(newPlan.get("stock") if newPlan.get("stock") is not None else -1)
+    if stock == 0:
+        flash("That plan is currently out of stock.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+    if db.haspendingjobs(vpsUuid):
+        flash("This VPS has a pending action. Wait for it to complete.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    amount = round(newPrice - curPrice, 2)
+    methodSlug = (request.form.get("methodSlug") or "").strip()
+    method = db.getpaymentmethodbyslug(methodSlug)
+    if not method:
+        flash("Invalid payment method.", "error")
+        return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
+
+    if methodSlug == "paypal":
+        base = request.host_url.rstrip("/")
+        custom = json.dumps({"vps": vpsUuid, "kind": "upgrade", "plan": newPlan["uuid"]})
+        params = {
+            "cmd": "_xclick",
+            "business": config["paypal"]["email"],
+            "item_name": f"VPS Upgrade: {curPlan['name']} → {newPlan['name']} ({vps['hostname']})",
+            "amount": f"{amount:.2f}",
+            "currency_code": "USD",
+            "notify_url": f"{base}/paypal/ipn",
+            "return": f"{base}/vps/{vpsUuid}",
+            "cancel_return": f"{base}/vps/{vpsUuid}",
+            "custom": custom,
+        }
+        paypalRedirect = getpaypalurl() + "?" + urlencode(params)
+        app.logger.info(f"PayPal upgrade redirect: base={base} return={params['return']} notify={params['notify_url']}")
+        return redirect(paypalRedirect)
+
+    _upgradevpspaid(
+        vps,
+        newPlan,
+        amount=amount,
+        currency="USD",
+        paymentprocessorid=method.get("id") if method else 1,
+    )
+    auditlog(
+        "payment.upgrade_manual",
+        "vps",
+        vpsUuid,
+        f"Manual upgrade {curPlan['name']} → {newPlan['name']} for ${amount:.2f} via {methodSlug}",
+    )
+    flash(f"Upgrade to {newPlan['name']} confirmed. Applying new resources…", "success")
     return redirect(url_for("vpspanel", vpsUuid=vpsUuid))
 
 
@@ -1735,9 +2063,10 @@ def ws_ssh(ws):
             pass
         return
 
-    # Validate the VPS still belongs to this user and is in good standing
+    # Validate the VPS still belongs to this user (or an admin) and is in good standing
     vps = db.getvps(session["vpsUuid"])
-    if not vps or vps.get("userid") != user["id"]:
+    isAdmin = user.get('role') == 'admin'
+    if not vps or (not isAdmin and vps.get("userid") != user["id"]):
         try:
             ws.close(1008, "VPS not found")
         except Exception:

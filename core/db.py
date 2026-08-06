@@ -452,6 +452,49 @@ def ensurejobssuspendtype():
         """)
 
 
+def ensurejobsupgradetype():
+    """Add 'upgrade' to jobs.type CHECK if missing (SQLite rebuild only)."""
+    with getconnection() as conn:
+        if conn.engine == "mysql":
+            return
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+        ).fetchone()
+        sqltext = (row or {}).get("sql") or (row or {}).get(0) if row else None
+        if isinstance(row, dict) and "sql" not in row and 0 in row:
+            sqltext = row[0]
+        if not row or not sqltext or "'upgrade'" in str(sqltext):
+            return
+        conn.executescript("""
+            CREATE TABLE jobs_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                uuid TEXT UNIQUE NOT NULL,
+                vpsid INTEGER,
+                vpsuuid TEXT NOT NULL,
+                userid INTEGER NOT NULL,
+                type TEXT NOT NULL
+                    CHECK(type IN ('create','delete','reinstall','start','stop','restart','provision','enable_tun','suspend','upgrade')),
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending','running','completed','failed')),
+                payload TEXT,
+                result TEXT,
+                created TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(vpsid) REFERENCES vps(id) ON DELETE CASCADE,
+                FOREIGN KEY(userid) REFERENCES users(id) ON DELETE CASCADE
+            );
+            INSERT INTO jobs_new (id, uuid, vpsid, vpsuuid, userid, type, status, payload, result, created, updated)
+            SELECT id, uuid, vpsid, vpsuuid, userid, type, status, payload, result, created,
+                   COALESCE(updated, created)
+            FROM jobs;
+            DROP TABLE jobs;
+            ALTER TABLE jobs_new RENAME TO jobs;
+            CREATE INDEX IF NOT EXISTS idxjobsuuid ON jobs(uuid);
+            CREATE INDEX IF NOT EXISTS idxjobsvps ON jobs(vpsuuid);
+            CREATE INDEX IF NOT EXISTS idxjobsstatus ON jobs(status);
+        """)
+
+
 def getplannodeids(planid):
     with getconnection() as conn:
         rows = conn.execute(

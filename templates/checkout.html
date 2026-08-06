@@ -93,7 +93,7 @@
                             <span class="method-meta">Automatic activation via IPN</span>
                         </div>
                         <span class="method-glyph">
-                            {% if method.slug == 'paypal' %}🅿️{% else %}💳{% endif %}
+                            {% if method.slug == 'paypal' %}<img src="https://www.paypalobjects.com/webstatic/icon/pp32.png" alt="PayPal" style="width: 28px; height: 28px; object-fit: contain;">{% else %}💳{% endif %}
                         </span>
                     </label>
                     {% endfor %}
@@ -221,6 +221,11 @@
         margin-top: 2px;
     }
     .method-glyph {
+        width: auto;
+        height: auto;
+        background: transparent;
+        border: none;
+        color: var(--accent);
         font-size: 1.4rem;
     }
 </style>

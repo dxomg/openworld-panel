@@ -185,7 +185,7 @@
             </div>
 
             <div style="display: flex; gap: 8px; margin-top: auto; padding-top: 9px; border-top: 1px solid var(--border-soft);">
-                <button class="btn btn-small" onclick="openEditModal('{{ img|tojson|forceescape }}')">Edit</button>
+                <button class="btn btn-small" onclick="openEditModal('{{ {"uuid": img.uuid, "name": img.name, "image": img.image, "description": img.description, "active": img.active, "node_type": img.node_type, "os_type": img.os_type}|tojson|forceescape }}')">Edit</button>
                 <form action="{{ url_for('adminosimagedelete', imageUuid=img.uuid) }}" method="POST" data-confirm="Delete image &quot;{{ img.name }}&quot;? This cannot be undone." data-confirm-title="Remove Image" data-confirm-label="Remove">
                     <button type="submit" class="btn btn-small btn-danger">Remove</button>
                 </form>

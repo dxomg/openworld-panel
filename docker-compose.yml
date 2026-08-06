@@ -1,0 +1,99 @@
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme-root}
+      MARIADB_DATABASE: ${MYSQL_DATABASE:-openworld}
+      MARIADB_USER: ${MYSQL_USER:-openworld}
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+    # Defaults to a named volume; set DB_DATA=./data/mysql in .env to use a
+    # host folder instead (Docker treats a path as a bind mount).
+    volumes:
+      - ${DB_DATA:-db-data}:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    mem_limit: 512m
+
+  web:
+    build: .
+    image: openworld-panel:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:-change-me}
+      WORKER_ENABLED_IN_WEB: "false"
+      WORKER_HEARTBEAT_PATH: /data/worker.heartbeat
+      DB_ENGINE: ${DB_ENGINE:-mysql}
+      MYSQL_HOST: ${MYSQL_HOST:-db}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_USER: ${MYSQL_USER:-openworld}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-openworld}
+    ports:
+      - "5000:5000"
+    # PANEL_CONFIG and PANEL_DATA default to named volumes; set them to host
+    # paths in .env (e.g. ./data/config.json, ./data) to use folders instead.
+    volumes:
+      - ${PANEL_CONFIG:-panel-config}:/app/config.json
+      # SQLite storage + worker heartbeat (only used if DB_ENGINE=sqlite)
+      - ${PANEL_DATA:-panel-data}:/data
+    command: ["gunicorn", "main:app", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "--graceful-timeout", "30"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    image: openworld-worker:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      web:
+        condition: service_started
+    environment:
+      # worker.py sets OPENWORLD_WORKER=1 itself; this keeps the in-web loop off too.
+      WORKER_ENABLED_IN_WEB: "false"
+      WORKER_HEARTBEAT_PATH: /data/worker.heartbeat
+      DB_ENGINE: ${DB_ENGINE:-mysql}
+      MYSQL_HOST: ${MYSQL_HOST:-db}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_USER: ${MYSQL_USER:-openworld}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-openworld}
+    volumes:
+      # config.json is shared with web (read-write so the worker can generate
+      # it if it starts before the web container).
+      - ${PANEL_CONFIG:-panel-config}:/app/config.json
+      # shared with web so the web container can read the worker heartbeat
+      - ${PANEL_DATA:-panel-data}:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+
+# Only used when the corresponding *_DATA / *_CONFIG env var is unset.
+volumes:
+  db-data:
+  panel-config:
+  panel-data:
+

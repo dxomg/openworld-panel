@@ -679,6 +679,80 @@ def provisiononproxmox(vpsUuid):
     db.updatevps(vpsUuid, status='running', container=str(vmid), vmid=vmid, ipv4=assignedIpv4, ipv6=assignedIpv6)
     return {"containerId": str(vmid), "vmid": vmid, "status": "created"}
 
+
+def upgradevpsonnode(vpsUuid, old_disk_mb=0):
+    """Apply a plan upgrade to an existing Proxmox LXC container.
+
+    The VPS row already reflects the new plan's cpu/ram/swap/disk. This applies
+    those to the container: cores/memory/swap via config.put, disk grown via
+    resize (grow only), then restarts so memory changes take effect.
+
+    `old_disk_mb` is the VPS's disk size (in MB) before the upgrade, passed via
+    the job payload. We only resize when the new disk is strictly larger, which
+    avoids relying on parsing Proxmox's rootfs string (which often omits the
+    size= token) and avoids a failed shrink attempt.
+    """
+    import re
+    vps = db.getvps(vpsUuid)
+    if not vps:
+        raise ValueError("VPS not found")
+    node, vmid = _vps_node_and_vmid(vps)
+    if not node or not vmid:
+        raise ValueError("Node or VMID not found for this VPS")
+
+    pve = getproxmoxclient(node)
+    node_name = node.get('proxmoxnode', 'pve')
+
+    cpu = int(vps['cpu'])
+    ram = int(vps['ram'])
+    swap = int(vps.get('swap') or 0)
+    new_disk_mb = int(vps.get('disk', 0) or 0)
+
+    # 1. Update cores / memory / swap
+    pveclient.updatelxcconfig(pve, node_name, vmid, {
+        "cores": cpu,
+        "memory": ram,
+        "swap": swap,
+    })
+
+    # 2. Grow disk only if the new plan actually has more disk than before.
+    #    Use Proxmox's relative resize form ("+NM" adds N MB to the existing
+    #    size) so we don't need to know the exact on-node size, and guard with a
+    #    strict comparison so a same/smaller disk never triggers a (failing) grow.
+    #    Plans store disk in MB, so we pass MB (M suffix) — no GB rounding loss.
+    #    On a successful grow, charge the extra MB to the VPS's storage pool so
+    #    pool.used reflects the larger disk.
+    old_disk_mb = int(old_disk_mb or 0)
+    if new_disk_mb > old_disk_mb:
+        grow_mb = new_disk_mb - old_disk_mb
+        try:
+            pveclient.resizelxc(pve, node_name, vmid, "rootfs", f"+{grow_mb}M")
+            if vps.get("storagepoolid"):
+                db.decreasestorageavailable(vps["storagepoolid"], grow_mb)
+        except Exception as e:
+            # Disk resize failure is non-fatal — cpu/ram still applied. The pool
+            # is NOT charged since the on-node disk didn't actually grow. Log so
+            # the operator can see why a disk didn't grow.
+            import logging
+            logging.getLogger("services").warning(
+                "upgradevpsonnode: disk grow +%sM failed for %s: %s",
+                grow_mb, vpsUuid, e,
+            )
+
+    # 3. Restart so memory changes apply (cores/swap are live-safe but restart
+    #    guarantees a clean state). If stopped, just leave it stopped — user
+    #    will start it and pick up the new config.
+    try:
+        st = pveclient.getlxcstatus(pve, node_name, vmid) or {}
+        if (st.get("status") or "").lower() == "running":
+            pveclient.restartlxc(pve, node_name, vmid)
+    except Exception:
+        pass
+
+    db.updatevps(vpsUuid, status="running")
+    return {"status": "upgraded"}
+
+
 # VMID mapping - stored in vps.vmid column
 
 def setvmidmapping(uuid, vmid):

@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+# Worker-only image: runs the standalone job loop (provision/suspend/upgrade…).
+# Slimmer than the web image — no templates/static/gunicorn/port. Shares the
+# same Python deps and app code so worker.py can import `main`.
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Worker imports `main`, so it needs the app code — but not templates/static.
+COPY core/ ./core/
+COPY utils/ ./utils/
+COPY main.py worker.py createdb.py ./
+COPY worker-entrypoint.sh ./
+RUN chmod +x /app/worker-entrypoint.sh
+
+RUN mkdir -p /data && chown -R 10001:10001 /app /data
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# non-root
+RUN useradd -r -u 10001 -g users openworld
+USER openworld
+
+# No port — this is not a web service. Liveness is the heartbeat file it writes.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD test -f "${WORKER_HEARTBEAT_PATH:-/data/worker.heartbeat}" \
+      && python -c "import os,time,datetime; \
+t=os.path.getmtime(os.environ.get('WORKER_HEARTBEAT_PATH','/data/worker.heartbeat')); \
+exit(0 if time.time()-t<120 else 1)" || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/worker-entrypoint.sh"]
+CMD ["python", "worker.py"]

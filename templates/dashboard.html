@@ -18,10 +18,10 @@
   <div>
     {% if overdue_n %}
     <strong>Renewal / payment overdue</strong> on {{ overdue_n }} instance{% if overdue_n != 1 %}s{% endif %}.
-    Free VPS can be renewed with one click; paid plans need a new payment.
+    Free VPS can be renewed with one click; paid plans can be extended with a renewal payment.
     {% else %}
     <strong>Renewal due soon</strong> for {{ billingDue|length }} instance{% if billingDue|length != 1 %}s{% endif %}.
-    Free VPS: open the instance and click <em>Renew free</em>. Paid: renew payment before the due date.
+    Open an instance to renew — free VPS renew instantly; paid VPS take a renewal payment.
     {% endif %}
     <div style="margin-top: 6px; font-size: 12px; color: var(--text-dim);">
       {% for v in billingDue[:5] %}
@@ -30,6 +30,8 @@
         — {{ v.billing_label }}{% if v.paid_until_display %} (until {{ v.paid_until_display }}){% elif v.paid_until %} (until {{ v.paid_until }}){% endif %}
         {% if v.can_renew_free %}
         <a href="{{ url_for('vpspanel', vpsUuid=v.uuid) }}" class="btn btn-primary btn-small" style="padding: 2px 8px; font-size: 11px; margin-left: 8px; text-decoration: none;">Renew free →</a>
+        {% elif v.plan_price and v.plan_price > 0 and v.status not in ['pendingpayment', 'deleted', 'creating'] %}
+        <a href="{{ url_for('vpspanel', vpsUuid=v.uuid) }}#renew" class="btn btn-primary btn-small" style="padding: 2px 8px; font-size: 11px; margin-left: 8px; text-decoration: none;">Renew →</a>
         {% endif %}
       </div>
       {% endfor %}

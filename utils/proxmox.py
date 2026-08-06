@@ -209,12 +209,20 @@ def getlxcconfig(pve, node_name, vmid):
     return pve.nodes(node_name).lxc(vmid).config.get()
 
 
+def updatelxcconfig(pve, node_name, vmid, params):
+    """Update LXC container config (cores/memory/swap/etc). Live-safe for
+    cores/swap; memory changes apply on next start/restart."""
+    return pve.nodes(node_name).lxc(vmid).config.put(**params)
+
+
 def listlxc(pve, node_name):
     return pve.nodes(node_name).lxc.get()
 
 
 def resizelxc(pve, node_name, vmid, disk, size):
-    return pve.nodes(node_name).lxc(vmid).resize.post(disk=disk, size=size)
+    # Proxmox API: PUT /nodes/{node}/lxc/{vmid}/resize
+    # `size` is absolute (e.g. "30G") or relative with a leading + (e.g. "+20G").
+    return pve.nodes(node_name).lxc(vmid).resize.put(disk=disk, size=size)
 
 
 def nextvmid(pve):

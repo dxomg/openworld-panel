@@ -66,6 +66,12 @@
     </div>
 
     {% if instance.plan_price and instance.plan_price > 0 %}
+    {% if instance.status not in ['pendingpayment', 'deleted', 'creating'] %}
+    <button type="button" class="btn btn-primary btn-small" onclick="openModal('renewPaidModal')">Renew / Extend</button>
+    {% endif %}
+    {% if upgrade_plans and instance.status not in ['pendingpayment', 'deleted', 'creating'] %}
+    <button type="button" class="btn btn-small" onclick="openModal('upgradePlanModal')">Upgrade plan</button>
+    {% endif %}
     <button type="button" class="btn btn-small" onclick="openModal('reinstallModal')">Reinstall</button>
     {% else %}
     {% if instance.is_free_plan and instance.status != 'deleted' %}
@@ -102,6 +108,8 @@
   </div>
   {% if instance.can_renew_free %}
   <button type="button" class="btn btn-primary btn-small" style="flex-shrink: 0;" onclick="openModal('renewFreeModal')">Renew free</button>
+  {% elif instance.plan_price and instance.plan_price > 0 and instance.status not in ['pendingpayment', 'deleted', 'creating'] %}
+  <button type="button" class="btn btn-primary btn-small" style="flex-shrink: 0;" onclick="openModal('renewPaidModal')">Renew now</button>
   {% endif %}
 </div>
 {% endif %}
@@ -126,6 +134,201 @@
   </div>
 </div>
 {% endif %}
+
+{% if instance.plan_price and instance.plan_price > 0 and instance.status not in ['pendingpayment', 'deleted', 'creating'] %}
+<div id="renewPaidModal" class="modal-backdrop">
+  <div class="modal-panel" style="max-width: 480px;">
+    <div class="modal-head">
+      <h3>Renew / Extend VPS</h3>
+      <button type="button" class="modal-close" onclick="closeModal('renewPaidModal')">&times;</button>
+    </div>
+    <div style="padding: 24px;">
+      <p style="color: var(--text-dim); font-size: 14px; line-height: 1.5; margin: 0 0 18px;">
+        Extend <strong style="color: var(--text);">{{ instance.hostname }}</strong> for another
+        <strong style="color: var(--text);">{{ billing_days }} day{{ 's' if billing_days != 1 }}</strong>
+        at <strong style="color: var(--text);">${{ "%.2f"|format(instance.plan_price) }}</strong>.
+        {% if instance.paid_until %}<br>Current period ends <strong>{{ instance.paid_until_display or instance.paid_until }}</strong>.{% endif %}
+      </p>
+      {% if methods %}
+      <form action="{{ url_for('renewpaidvps', vpsUuid=instance.uuid) }}" method="POST">
+        <div class="renew-methods" style="display: flex; flex-direction: column; gap: 14px;">
+          {% for method in methods %}
+          {% if method.active %}
+          <label class="method-card">
+            <input type="radio" name="methodSlug" value="{{ method.slug }}" required>
+            <div class="method-details">
+              <span class="method-name">{{ method.name }}</span>
+              <span class="method-meta">{{ 'Automatic activation via PayPal' if method.slug == 'paypal' else 'Manual confirmation' }}</span>
+            </div>
+            <span class="method-glyph">{% if method.slug == 'paypal' %}<img src="https://www.paypalobjects.com/webstatic/icon/pp32.png" alt="PayPal" style="width: 28px; height: 28px; object-fit: contain;">{% else %}💳{% endif %}</span>
+          </label>
+          {% endif %}
+          {% endfor %}
+        </div>
+        <div style="margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border-soft);">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 18px;">
+            <span style="color: var(--text-dim);">Total Due Today:</span>
+            <span style="font-weight: bold; color: var(--text);">${{ "%.2f"|format(instance.plan_price) }}</span>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%; padding: 14px;">Pay &amp; Extend</button>
+        </div>
+      </form>
+      {% else %}
+      <p style="color: var(--warn); font-size: 13px; margin: 0;">No payment methods are configured. Contact an administrator.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<style>
+  /* Scoped payment method cards for the renew modal — the global .method-*
+     rules force a space-between row layout that clashes with the checkout
+     column look, so override them inside .renew-methods only. */
+  .renew-methods .method-card {
+    display: flex;
+    align-items: center;
+    padding: 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .renew-methods .method-card:hover {
+    border-color: var(--accent-dim);
+    background: var(--panel-hover);
+  }
+  .renew-methods .method-card input[type="radio"] {
+    margin-right: 18px;
+    transform: scale(1.3);
+    accent-color: var(--accent);
+  }
+  .renew-methods .method-card:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+  }
+  .renew-methods .method-details {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+  .renew-methods .method-name {
+    font-weight: bold;
+    color: var(--text);
+    font-size: 1rem;
+  }
+  .renew-methods .method-meta {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+  .renew-methods .method-glyph {
+    width: auto;
+    height: auto;
+    background: transparent;
+    border: none;
+    color: var(--accent);
+    font-size: 1.4rem;
+  }
+</style>
+
+
+{% if upgrade_plans and instance.plan_price and instance.plan_price > 0 and instance.status not in ['pendingpayment', 'deleted', 'creating'] %}
+<div id="upgradePlanModal" class="modal-backdrop">
+  <div class="modal-panel" style="max-width: 520px;">
+    <div class="modal-head">
+      <h3>Upgrade Plan</h3>
+      <button type="button" class="modal-close" onclick="closeModal('upgradePlanModal')">&times;</button>
+    </div>
+    <div style="padding: 24px;">
+      <p style="color: var(--text-dim); font-size: 14px; line-height: 1.5; margin: 0 0 18px;">
+        Upgrade <strong style="color: var(--text);">{{ instance.hostname }}</strong> from
+        <strong style="color: var(--text);">{{ instance.plan_name }}</strong> to a higher-tier plan.
+        You pay only the price difference; your current billing period stays the same.
+      </p>
+      <form action="{{ url_for('upgradeplan', vpsUuid=instance.uuid) }}" method="POST" id="upgradePlanForm">
+        <label style="display:block; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint); margin-bottom: 10px;">Select plan</label>
+        <div class="upgrade-plan-list" style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 22px;">
+          {% for p in upgrade_plans %}
+          {% set diff = p.price - instance.plan_price %}
+          <label class="method-card upgrade-plan-card" data-diff="{{ diff }}">
+            <input type="radio" name="planUuid" value="{{ p.uuid }}" required class="upgrade-plan-radio">
+            <div class="method-details" style="flex-grow:1; display:flex; flex-direction:column; justify-content:flex-start;">
+              <span class="method-name">{{ p.name }}</span>
+              <span class="method-meta" style="display:block; font-size: 0.75rem; color: var(--text-dim); margin-top: 2px;">
+                {{ p.cpu }} vCPU · {{ p.ram }} MB RAM · {{ p.disk // 1024 if p.disk >= 1024 else p.disk }}{{ 'GB' if p.disk >= 1024 else 'MB' }} disk
+              </span>
+            </div>
+            <span style="text-align:right;">
+              <span style="font-weight: bold; color: var(--text);">${{ "%.2f"|format(p.price) }}</span>
+              <span style="display:block; font-size: 11px; color: var(--accent); margin-top: 2px;">+${{ "%.2f"|format(diff) }}</span>
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+
+        {% if methods %}
+        <label style="display:block; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint); margin-bottom: 10px;">Payment method</label>
+        <div class="renew-methods" style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 22px;">
+          {% for method in methods %}
+          {% if method.active %}
+          <label class="method-card">
+            <input type="radio" name="methodSlug" value="{{ method.slug }}" required>
+            <div class="method-details">
+              <span class="method-name">{{ method.name }}</span>
+              <span class="method-meta">{{ 'Automatic activation via PayPal' if method.slug == 'paypal' else 'Manual confirmation' }}</span>
+            </div>
+            <span class="method-glyph">{% if method.slug == 'paypal' %}<img src="https://www.paypalobjects.com/webstatic/icon/pp32.png" alt="PayPal" style="width: 28px; height: 28px; object-fit: contain;">{% else %}💳{% endif %}</span>
+          </label>
+          {% endif %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <p style="color: var(--warn); font-size: 13px; margin: 0 0 18px;">No payment methods are configured. Contact an administrator.</p>
+        {% endif %}
+
+        <div style="padding-top: 18px; border-top: 1px solid var(--border-soft);">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 18px;">
+            <span style="color: var(--text-dim);">Upgrade fee today:</span>
+            <span id="upgradeTotal" style="font-weight: bold; color: var(--text);">—</span>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%; padding: 14px;" {% if not methods %}disabled{% endif %}>Pay &amp; Upgrade</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+  (function() {
+    var form = document.getElementById('upgradePlanForm');
+    if (!form) return;
+    var radios = form.querySelectorAll('.upgrade-plan-radio');
+    var total = document.getElementById('upgradeTotal');
+    function refresh() {
+      var checked = form.querySelector('.upgrade-plan-radio:checked');
+      if (checked) {
+        var card = checked.closest('.upgrade-plan-card');
+        total.textContent = '+$' + (parseFloat(card.getAttribute('data-diff') || 0)).toFixed(2);
+      } else {
+        total.textContent = '—';
+      }
+    }
+    radios.forEach(function(r) { r.addEventListener('change', refresh); });
+    refresh();
+  })();
+</script>
+<style>
+  .upgrade-plan-list .upgrade-plan-card { cursor: pointer; }
+  .upgrade-plan-list .upgrade-plan-card:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+  }
+</style>
+{% endif %}
+
 
 {% if not (instance.plan_price and instance.plan_price > 0) and instance.status != 'suspended' %}
 <div id="deleteVpsModal" class="modal-backdrop">
