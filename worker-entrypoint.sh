@@ -4,8 +4,11 @@ set -e
 cd /app
 
 # --- Database config (db_config.json) from environment (mirrors the web entrypoint) ---
+# Written into the mounted PANEL_DATA folder so it persists alongside config.json.
+DB_CFG="${DB_CONFIG_PATH:-/data/db_config.json}"
 ENGINE="${DB_ENGINE:-mysql}"
-cat > /app/db_config.json <<EOF
+mkdir -p "$(dirname "$DB_CFG")" 2>/dev/null || true
+cat > "$DB_CFG" <<EOF
 {
   "engine": "$ENGINE",
   "sqlite": {"path": "${SQLITE_PATH:-/data/database.db}"},
@@ -19,11 +22,18 @@ cat > /app/db_config.json <<EOF
   }
 }
 EOF
-echo "[worker-entrypoint] wrote db_config.json (engine=$ENGINE)"
+echo "[worker-entrypoint] wrote $DB_CFG (engine=$ENGINE)"
 
-# --- config.json: shared with web via the panel-config volume ---
-if [ ! -f /app/config.json ]; then
-  echo "[worker-entrypoint] no config.json — generating one with defaults"
+# --- config.json: shared with web via the PANEL_DATA volume ---
+if [ ! -f "${CONFIG_PATH:-/data/config.json}" ]; then
+  echo "[worker-entrypoint] no config.json at ${CONFIG_PATH:-/data/config.json} — generating one with defaults"
+fi
+
+# --- Writable check ---
+if ! [ -w "$(dirname "${CONFIG_PATH:-/data/config.json}")" ]; then
+  echo "[worker-entrypoint] FATAL: $(dirname "${CONFIG_PATH:-/data/config.json}") is not writable by uid $(id -u)." >&2
+  echo "[worker-entrypoint] On the host, run: chown -R 10001:10001 <your PANEL_DATA folder>" >&2
+  exit 1
 fi
 
 # --- Wait for MySQL before starting the job loop (we don't create the schema

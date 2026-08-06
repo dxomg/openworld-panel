@@ -3,7 +3,9 @@ import json
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(BASE_DIR, "db_config.json")
+# Env override so Docker can place db_config.json in a mounted folder alongside
+# config.json. Falls back to the repo-root db_config.json for dev.
+CONFIG_PATH = os.environ.get("DB_CONFIG_PATH") or os.path.join(BASE_DIR, "db_config.json")
 
 DEFAULTS = {
     "engine": "sqlite",

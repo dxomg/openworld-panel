@@ -46,6 +46,7 @@ services:
       # config.json lives inside the PANEL_DATA folder (single-file bind mounts
       # are fragile — Docker turns a missing host file into a directory).
       CONFIG_PATH: /data/config.json
+      DB_CONFIG_PATH: /data/db_config.json
       DB_ENGINE: ${DB_ENGINE:-mysql}
       MYSQL_HOST: ${MYSQL_HOST:-db}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
@@ -87,6 +88,7 @@ services:
       WORKER_ENABLED_IN_WEB: "false"
       WORKER_HEARTBEAT_PATH: /data/worker.heartbeat
       CONFIG_PATH: /data/config.json
+      DB_CONFIG_PATH: /data/db_config.json
       DB_ENGINE: ${DB_ENGINE:-mysql}
       MYSQL_HOST: ${MYSQL_HOST:-db}
       MYSQL_PORT: ${MYSQL_PORT:-3306}

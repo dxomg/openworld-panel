@@ -5,10 +5,12 @@ set -e
 cd /app
 
 # --- Database config (db_config.json) from environment ---
-# Supports MySQL (default in docker-compose) or SQLite. The file is written
-# from env vars so no secrets are baked into the image.
+# Written into the mounted PANEL_DATA folder so it persists alongside
+# config.json when using host folders. Set DB_CONFIG_PATH to override.
+DB_CFG="${DB_CONFIG_PATH:-/data/db_config.json}"
 ENGINE="${DB_ENGINE:-mysql}"
-cat > /app/db_config.json <<EOF
+mkdir -p "$(dirname "$DB_CFG")" 2>/dev/null || true
+cat > "$DB_CFG" <<EOF
 {
   "engine": "$ENGINE",
   "sqlite": {"path": "${SQLITE_PATH:-/data/database.db}"},
@@ -22,14 +24,25 @@ cat > /app/db_config.json <<EOF
   }
 }
 EOF
-echo "[entrypoint] wrote db_config.json (engine=$ENGINE)"
+echo "[entrypoint] wrote $DB_CFG (engine=$ENGINE)"
 
 # --- panel config.json ---
 # The app reads/writes config.json at CONFIG_PATH (env), which in Docker points
 # at /data/config.json inside the mounted PANEL_DATA folder. It's auto-generated
 # with defaults on first run if missing — no pre-creation needed.
-if [ ! -f "${CONFIG_PATH:-/data/config.json}" ]; then
-  echo "[entrypoint] no config.json at ${CONFIG_PATH:-/data/config.json} — app will generate one with defaults"
+PANEL_CFG="${CONFIG_PATH:-/data/config.json}"
+if [ ! -f "$PANEL_CFG" ]; then
+  echo "[entrypoint] no config.json at $PANEL_CFG — app will generate one with defaults"
+fi
+
+# --- Writable check ---
+# If using a host-folder bind mount for /data, the folder must be writable by
+# the container user (uid 10001). Give a clear error instead of a confusing
+# write failure later.
+if ! [ -w "$(dirname "$PANEL_CFG")" ]; then
+  echo "[entrypoint] FATAL: $(dirname "$PANEL_CFG") is not writable by uid $(id -u)." >&2
+  echo "[entrypoint] On the host, run: chown -R 10001:10001 <your PANEL_DATA folder>" >&2
+  exit 1
 fi
 
 # --- Schema init (idempotent: CREATE TABLE IF NOT EXISTS) ---
