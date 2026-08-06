@@ -4,7 +4,10 @@ import json
 import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+# Env override so Docker can place config.json in a mounted folder (single-file
+# bind mounts are fragile — Docker turns a missing file into a directory). Falls
+# back to the repo-root config.json for dev.
+CONFIG_PATH = os.environ.get("CONFIG_PATH") or os.path.join(BASE_DIR, "config.json")
 
 DEFAULTS = {
     "general": {

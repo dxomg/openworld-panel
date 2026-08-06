@@ -43,6 +43,9 @@ services:
       FLASK_SECRET_KEY: ${FLASK_SECRET_KEY:?FLASK_SECRET_KEY must be set in .env}
       WORKER_ENABLED_IN_WEB: "false"
       WORKER_HEARTBEAT_PATH: /data/worker.heartbeat
+      # config.json lives inside the PANEL_DATA folder (single-file bind mounts
+      # are fragile — Docker turns a missing host file into a directory).
+      CONFIG_PATH: /data/config.json
       DB_ENGINE: ${DB_ENGINE:-mysql}
       MYSQL_HOST: ${MYSQL_HOST:-db}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
@@ -51,11 +54,10 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-openworld}
     ports:
       - "5000:5000"
-    # PANEL_CONFIG and PANEL_DATA default to named volumes; set them to host
-    # paths in .env (e.g. ./data/config.json, ./data) to use folders instead.
+    # PANEL_DATA defaults to a named volume; set it to a host path in .env
+    # (e.g. /root/prod/panel) to use a folder instead. config.json is written
+    # inside it at /data/config.json.
     volumes:
-      - ${PANEL_CONFIG:-panel-config}:/app/config.json
-      # SQLite storage + worker heartbeat (only used if DB_ENGINE=sqlite)
       - ${PANEL_DATA:-panel-data}:/data
     # --preload loads the app once before forking workers, so they share the
     # secret key and import errors surface at startup. Worker count is tunable
@@ -84,6 +86,7 @@ services:
       # worker.py sets OPENWORLD_WORKER=1 itself; this keeps the in-web loop off too.
       WORKER_ENABLED_IN_WEB: "false"
       WORKER_HEARTBEAT_PATH: /data/worker.heartbeat
+      CONFIG_PATH: /data/config.json
       DB_ENGINE: ${DB_ENGINE:-mysql}
       MYSQL_HOST: ${MYSQL_HOST:-db}
       MYSQL_PORT: ${MYSQL_PORT:-3306}
@@ -91,10 +94,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-openworld}
     volumes:
-      # config.json is shared with web (read-write so the worker can generate
-      # it if it starts before the web container).
-      - ${PANEL_CONFIG:-panel-config}:/app/config.json
-      # shared with web so the web container can read the worker heartbeat
+      # shared with web: config.json + worker heartbeat
       - ${PANEL_DATA:-panel-data}:/data
     security_opt:
       - no-new-privileges:true
@@ -102,9 +102,8 @@ services:
       - ALL
     mem_limit: 256m
 
-# Only used when the corresponding *_DATA / *_CONFIG env var is unset.
+# Only used when the corresponding *_DATA env var is unset.
 volumes:
   db-data:
-  panel-config:
   panel-data:
 

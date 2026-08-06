@@ -152,28 +152,30 @@ Edit `.env`:
 ### 2.1.1 Use host folders (bind mounts) instead of named volumes
 
 By default the stack persists data in Docker named volumes (`db-data`,
-`panel-config`, `panel-data`). To keep everything on the host filesystem
-(e.g. for easy backups or inspection), set these in `.env` to local paths
-and `mkdir -p` them first:
+`panel-data`). To keep everything on the host filesystem (e.g. for easy
+backups or inspection), set these in `.env` to local paths and `mkdir -p`
+them first:
 
 ```bash
-mkdir -p ./data/mysql ./data
-touch ./data/config.json          # PANEL_CONFIG is a FILE, not a folder
+mkdir -p /root/prod/db /root/prod/panel
 # then in .env:
-#   DB_DATA=./data/mysql
-#   PANEL_DATA=./data
-#   PANEL_CONFIG=./data/config.json
+#   DB_DATA=/root/prod/db
+#   PANEL_DATA=/root/prod/panel
 ```
 
 Docker treats a relative/absolute path as a **bind mount** (vs. a bare
 identifier → named volume). The folders must be writable by uid 10001 (the
-container user). The three mount points are:
+container user). The two mount points are:
 
-| variable        | default (volume) | bind example          | what it holds |
-|-----------------|------------------|-----------------------|---------------|
-| `DB_DATA`       | `db-data`        | `./data/mysql`        | MariaDB data dir |
-| `PANEL_DATA`    | `panel-data`     | `./data`              | SQLite db (if used) + worker heartbeat |
-| `PANEL_CONFIG`  | `panel-config`   | `./data/config.json`  | `config.json` — **a file**, not a folder |
+| variable        | default (volume) | bind example        | what it holds |
+|-----------------|------------------|---------------------|---------------|
+| `DB_DATA`       | `db-data`        | `/root/prod/db`     | MariaDB data dir |
+| `PANEL_DATA`    | `panel-data`     | `/root/prod/panel`  | SQLite db (if used) + worker heartbeat + `config.json` |
+
+`config.json` is written **inside** `PANEL_DATA` at `/data/config.json`
+(configured via the `CONFIG_PATH` env var) — it's auto-generated on first
+run, so no need to pre-create it. This avoids the fragile single-file bind
+mount (where Docker turns a missing host file into a directory).
 
 ### 2.2 Build & launch
 

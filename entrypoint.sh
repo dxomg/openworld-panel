@@ -24,13 +24,12 @@ cat > /app/db_config.json <<EOF
 EOF
 echo "[entrypoint] wrote db_config.json (engine=$ENGINE)"
 
-# --- panel config.json (auto-generated on first run if missing) ---
-# config.json is created by the app on first run with defaults. To persist
-# settings across restarts, mount a config.json at /app/config.json.
-# Optional: seed a couple of prod-friendly defaults from env if the file is
-# being generated fresh (no-op if a config.json already exists).
-if [ ! -f /app/config.json ]; then
-  echo "[entrypoint] no config.json — app will generate one with defaults"
+# --- panel config.json ---
+# The app reads/writes config.json at CONFIG_PATH (env), which in Docker points
+# at /data/config.json inside the mounted PANEL_DATA folder. It's auto-generated
+# with defaults on first run if missing — no pre-creation needed.
+if [ ! -f "${CONFIG_PATH:-/data/config.json}" ]; then
+  echo "[entrypoint] no config.json at ${CONFIG_PATH:-/data/config.json} — app will generate one with defaults"
 fi
 
 # --- Schema init (idempotent: CREATE TABLE IF NOT EXISTS) ---
