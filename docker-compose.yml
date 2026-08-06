@@ -13,14 +13,19 @@ services:
       - ${DB_DATA:-db-data}:/var/lib/mysql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      # First-run MariaDB init (system tables, InnoDB setup) can take ~30-60s.
+      # start_period means failures during that window don't count, so compose
+      # doesn't mark the db unhealthy before it's finished booting.
+      start_period: 60s
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 12
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     cap_add:
+      - CHOWN
       - DAC_OVERRIDE
       - SETUID
       - SETGID
