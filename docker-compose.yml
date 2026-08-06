@@ -53,8 +53,9 @@ services:
       # SQLite storage + worker heartbeat (only used if DB_ENGINE=sqlite)
       - ${PANEL_DATA:-panel-data}:/data
     # --preload loads the app once before forking workers, so they share the
-    # secret key and import errors surface at startup.
-    command: ["gunicorn", "main:app", "--preload", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "--graceful-timeout", "30"]
+    # secret key and import errors surface at startup. Worker count is tunable
+    # via WEB_WORKERS (default 2) in .env.
+    command: ["gunicorn", "main:app", "--preload", "-w", "${WEB_WORKERS:-2}", "-b", "0.0.0.0:5000", "--timeout", "120", "--graceful-timeout", "30"]
     security_opt:
       - no-new-privileges:true
     cap_drop:
